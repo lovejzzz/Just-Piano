@@ -37,7 +37,11 @@ pass10新增可执行JS激励谱和耦合极点模块：实际8/8复系数double
 
 pass11/12把真实制音全局能量补偿、8263个有效衰减与R、16526个A/B系数接到JS，所有已记录分量逐位同，系数捕获PCM与原版一致。系统4-lane exp/logf准确依赖已恢复并经独立库oracle检验，原谱权重和尾部R的末位差消除。内部8-lane exp另有1024个真实值逐位同，但该补充捕获PCM不一致，失败边界保留。完整声源生成、全部模型/预设、网页实际声音匹配仍未完成。
 
+pass12资源存档进一步落地：1105成员MD5全部验证；D4完整50份A预设解码，扩展K2/Kawai后当前91份。NY基础B+de8曲线插值生成的5节点与pass6真实值逐位同。B大量suffix、22个version66 bank和fx特殊状态仍未解，不能将91份A和局部B当完整800预设及声音。
+
 详细报告：
+
+- [资源目录、完整工厂预设与基础B](pianoteq-builtin-resources-pass12.md)
 
 - [制音位置、能量全局补偿与递推系数](pianoteq-energy-damper-pass11.md)
 - [原生指数/对数的浏览器数值实现](pianoteq-native-math-pass12.md)
