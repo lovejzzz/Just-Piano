@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Just Piano</title>
+  <meta name="description" content="A modeled acoustic piano in your browser, with MIDI keyboard support.">
+  <meta name="theme-color" content="#14110f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <h1 class="brand">Just Piano</h1>
+      <div class="midi">
+        <span class="dot" id="midiDot" aria-hidden="true"></span>
+        <label for="midiIn" class="visually-hidden">MIDI input</label>
+        <select id="midiIn" disabled>
+          <option value="">MIDI: not connected</option>
+        </select>
+      </div>
+    </header>
+
+    <section class="controls" aria-label="Sound controls">
+      <label class="ctl">
+        <span>Volume</span>
+        <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8">
+      </label>
+      <label class="ctl">
+        <span>Brightness</span>
+        <input type="range" id="hardness" min="0" max="1" step="0.01" value="0.5">
+      </label>
+      <label class="ctl">
+        <span>Unison</span>
+        <input type="range" id="unison" min="0" max="1" step="0.01" value="0.5">
+      </label>
+      <label class="ctl">
+        <span>Touch</span>
+        <input type="range" id="curve" min="0.5" max="2" step="0.01" value="1">
+      </label>
+      <label class="ctl">
+        <span>Reverb</span>
+        <input type="range" id="reverb" min="0" max="1" step="0.01" value="0.3">
+      </label>
+      <div class="ctl buttons">
+        <button type="button" id="sustain" aria-pressed="false">Sustain</button>
+        <div class="transpose" role="group" aria-label="Transpose">
+          <button type="button" id="tDown" aria-label="Transpose down">−</button>
+          <output id="tVal" aria-live="polite">0</output>
+          <button type="button" id="tUp" aria-label="Transpose up">+</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="kbd-wrap" id="kbdWrap" aria-label="Piano keyboard">
+      <div class="kbd" id="kbd"></div>
+    </section>
+
+    <p class="hint">
+      Play with a MIDI keyboard, the mouse or touch, or your computer keys
+      <kbd>A</kbd>–<kbd>'</kbd> (<kbd>Z</kbd>/<kbd>X</kbd> shift octave, hold <kbd>Space</kbd> for sustain).
+    </p>
+  </main>
+
+  <div class="start" id="start">
+    <button type="button" id="startBtn">
+      <span class="start-title">Just Piano</span>
+      <span class="start-sub">Tap to start</span>
+    </button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
