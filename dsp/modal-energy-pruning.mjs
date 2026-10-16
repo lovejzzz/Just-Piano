@@ -38,14 +38,15 @@ export function updateModalEnergyAndPrune(states, layout, { threshold, energyLay
       const last = start + --row[3], tail = states.get(last);
       removed.push({ lane, last, keptSlot: false });
       if (last !== lane) {
-        // Native swaps source/coefficient auxiliaries, copies last P/Q and
-        // A/B into the hole, then clears only the vacated state/coefficient.
-        const old = { ...state };
+        // Native swaps source auxiliaries and copies last P/Q and A/B into
+        // the hole. The vacated A/B stay intact; O+30 input weights are the
+        // coefficients cleared along with P/Q, not O+8 recurrence A/B.
+        const old = { ...state }, tailA = tail.A, tailB = tail.B;
         Object.assign(state, tail);
-        Object.assign(tail, old, { energy: 0 });
+        Object.assign(tail, old, { energy: 0, A: tailA, B: tailB });
       }
       const vacated = states.get(last);
-      vacated.P = 0; vacated.Q = 0; vacated.A = 0; vacated.B = 0;
+      vacated.P = 0; vacated.Q = 0;
       // Removing the last slot does not itself clear its cached energy.
     }
   }

@@ -1,9 +1,10 @@
+import {writeWorkerStems} from './pianoteq_write_worker_stems.mjs';
 import {modalOnsetDuration,ModalOnsetEnvelope} from '../dsp/modal-onset-envelope.mjs';
 import {renderModalVoiceBlock} from '../dsp/modal-voice-block.mjs';
 import {updateModalEnergyAndPrune} from '../dsp/modal-energy-pruning.mjs';
 import {modalAngleGroup,projectModalHistory} from '../dsp/modal-initial.mjs';
 import {transportModalBlock,bypassPostModalProcessor,redistributeModalGroups} from '../dsp/post-modal-transport.mjs';
-import {modalPositionWeights} from '../dsp/modal-position-weights.mjs';
+import {modalPositionWeights,positionWeightWarmupBlocks} from '../dsp/modal-position-weights.mjs';
 import {refreshDampedModes} from '../dsp/damped-modal-refresh.mjs';
 import {initialModalGroup} from '../dsp/modal-initial.mjs';
 import {advanceVoiceInitializationRandom} from '../dsp/voice-initial-random.mjs';
@@ -19,11 +20,13 @@ import {repeatedStrikeControl} from '../dsp/repeated-strike-control.mjs';
 import {DynamicReleaseVoice} from '../dsp/dynamic-release-voice.mjs';
 const [capture,output,option,...extra]=process.argv.slice(2);
 let randomWordChecks=0,doubleChecks=0;const initializationRandom=[];const weightDiagnostics=[];const initialStates=new Map(),initialSnapshots=[];let initialGroups=0;let refreshes=0,renderedBlocks=0,comparedOutputBlocks=0,tailTwelveGroups=0;const modalOutputs=new Map(),continuousOutputs=[],removals=[];let transportTails;
-if(!capture||!output||option!=='--pow-candidate'||extra.length)throw new Error('Usage: capture.json report.json --pow-candidate');
+const stemsDirectory=extra[0]?.startsWith('--worker-stems=')?extra[0].slice('--worker-stems='.length):undefined;
+if(!capture||!output||option!=='--pow-candidate'||extra.length>1||extra.length&&!stemsDirectory)throw new Error('Usage: capture.json report.json --pow-candidate [--worker-stems=new-directory]');
 const d=JSON.parse(fs.readFileSync(capture,'utf8'));
+const workerOutputs=d.workerOutputs===true,dispatchAgesByVoice=new Map(),pendingRefreshByVoice=new Map(),transportTailsByVoice=new Map();let outputSamples=0,postStateBlocks=0,emptyVoiceBypassBlocks=0;
 const dispatchControls=d.dispatchControls===true,dispatchAges=[],skippedRefreshAges=[];let pendingRefreshAge;
-const windowBlocks=d.windowBlocks??8;if(!Number.isInteger(windowBlocks)||windowBlocks<1||windowBlocks>512)throw new Error('Supported explicit window length required');const windowEnd=64*windowBlocks;
-if(d.schema!==1||d.fixedSites!==true||d.siteCount!==6||!d.complete||d.pending||d.activeSites!==0||d.errors.length||d.starts!==5||d.spectrumCount!==10||d.finalCount!==5||(!dispatchControls&&d.refreshCount!==windowBlocks)||d.renderCount!==windowBlocks||!d.copyCount||d.initializations!==0||!d.envelopeBlocks||d.envelopePending||!d.coefficientCount)throw new Error('Complete dynamic Rattle capture required');
+const windowBlocks=d.windowBlocks??8;if(!Number.isInteger(windowBlocks)||windowBlocks<1||windowBlocks>512)throw new Error('Supported explicit window length required');const windowEnd=64*windowBlocks;const expectedBlocks=workerOutputs?d.envelopeBlocks:windowBlocks;if(workerOutputs&&!dispatchControls)throw new Error('Worker output mode requires dispatch controls');
+if(d.schema!==1||d.fixedSites!==true||d.siteCount!==6||!d.complete||d.pending||d.activeSites!==0||d.errors.length||d.starts!==5||d.spectrumCount!==10||d.finalCount!==5||(!dispatchControls&&d.refreshCount!==windowBlocks)||d.renderCount!==expectedBlocks||!d.copyCount||d.initializations!==0||!d.envelopeBlocks||d.envelopePending||!d.coefficientCount)throw new Error('Complete dynamic Rattle capture required');
 const f=Math.fround,view=new DataView(new ArrayBuffer(4)),bits=x=>{if(!Number.isFinite(x))throw new Error('Nonfinite x/control');view.setFloat32(0,x);return view.getUint32(0);};
 const owners=new Map(),voices=new Map(),pending=new Map(),epochs=new Set(),failures=[],byStage={},mismatchesByName={};const modes=new Map();let spectrumCalls=0,finalCalls=0;const histories=new Map(),mathCalls=[];const math={exp2f:x=>{const y=nativeScalarExp2f(x);mathCalls.push({function:'exp2f',input:x,output:y});return y;},log10f:x=>{const y=nativeScalarLog10f(x);mathCalls.push({function:'log10f',input:x,output:y});return y;}};const powCalls=[];const postMath={pow:(x,y)=>{const output=Math.pow(x,y);powCalls.push({input:x,exponent:y,output});return output;}};let historyUpdates=0,randomDraws=0,phaseRandomDraws=0,modeSeedBridges=0;const sourceModels=new Map(),copied=new Map(),predictions=new Map(),producerChecks=new Set();let copies=0,oldReleasesComputed=0;const runtimes=new Map(),envelopes=new Map(),envelopePending=new Map(),envelopeCompleted=new Map(),coeffState=new Map();let blocks=0,duplicates=0;let checks=0,mismatches=0,starts=0,updates=0,coefficients=0,active=0,xChanges=0;
 let comparisonContext;
@@ -83,13 +86,14 @@ for(const r of d.records){
  }else if(r.stage==='copy'){
   voice(r);if([...envelopePending.values()].some(p=>p.epoch===r.epoch))throw new Error('Copy during unfinished envelope');
   if(r.render){
+   if(workerOutputs)throw new Error('Worker output targets must come from worker');
    if(r.epoch!==0||r.counter!==64*comparedOutputBlocks||r.render.samples!==64||r.counter>=windowEnd)throw new Error('Noncontiguous completed output window');
    const raw=modalOutputs.get(r.counter);if(!raw||raw.length!==r.render.channels.length)throw new Error('Missing computed complete modal block');
    if(!transportTails)transportTails=raw.map(()=>new Float32Array(Math.floor(r.render.delay/4)*4));
    const transported=transportModalBlock(raw,r.render.delay,transportTails);transportTails=transported.tails;
    const output=redistributeModalGroups(bypassPostModalProcessor(transported.output,r.render.processor),r.render.spread);
    for(let group=0;group<output.length;group++){if(r.render.channels[group].length!==64)throw new Error('Incomplete completed output channel');for(let i=0;i<64;i++)check('continuous:output',output[group][i],r.render.channels[group][i]);}
-   continuousOutputs.push({counter:r.counter,channels:output.map(x=>Array.from(x))});comparedOutputBlocks++;
+   continuousOutputs.push({counter:r.counter,channels:output.map(x=>Array.from(x))});comparedOutputBlocks++;outputSamples+=output.length*64;
   }
   const value=runtimes.get(r.epoch).copyRelease();check('copy:modal',value,r.modalPosition);check('copy:voice',value,r.release);copied.set(r.voice,{value,epoch:r.epoch,counter:r.counter});copies++;
   if(!producerChecks.has(r.epoch)){
@@ -169,16 +173,19 @@ for(const r of d.records){
   // the four-lane coefficient tail as well. These extra lanes are real input
   // to the eight-lane tail kernel, even when only four lanes remain.
   for(const [start,padded] of selection.layout)for(let lane=start;lane<padded;lane++)if(!states.has(lane))states.set(lane,{P:0,Q:0,A:0,B:0});
-  initialStates.set(r.epoch,{normalization:refreshed.normalization,layout:selection.layout,controls,states,renderAge:0,readyAge:0,referenceFrequency,cutoffIndex:lower,onset,onsetParameters});
+  initialStates.set(r.epoch,{positionWarmupBlocks:positionWeightWarmupBlocks(first.onsetInputs.noteIndex),positionWeightsReady:owned.gain!==0||c['0x7e0']!==0,normalization:refreshed.normalization,layout:selection.layout,controls,states,renderAge:0,readyAge:0,coefficientAge:0,referenceFrequency,cutoffIndex:lower,onset,onsetParameters});
   initialSnapshots.push({epoch:r.epoch,layout:selection.layout.map(x=>[...x]),controls:{...controls},lanes:[...states].map(([lane,state])=>({lane,...state}))});
   histories.set(r.voice,[...first.supported.history]);phaseRandomDraws+=built.phaseRandomDraws;
   pending.delete(r.epoch);finalCalls++;
  }else if(r.stage==='refresh'){
   voice(r);const st=initialStates.get(r.epoch),t=r.target,c=t.controls,age=t.sample_counter;
-  if(r.epoch!==0||!st||age!==st.renderAge||(dispatchControls?age!==pendingRefreshAge:age!==64*(refreshes+1))||age>windowEnd||t.initial_flag!==0||t.input_mode!==0||t.layout_flag!==0||t.energy_layout!==2)throw new Error('Noncontiguous complete refresh window required');
+  if((!workerOutputs&&r.epoch!==0)||!st||age!==st.renderAge||(dispatchControls?age!==(workerOutputs?pendingRefreshByVoice.get(r.epoch):pendingRefreshAge):age!==64*(refreshes+1))||(!workerOutputs&&age>windowEnd)||t.initial_flag!==0||t.input_mode!==0||t.layout_flag!==0||t.energy_layout!==2)throw new Error('Noncontiguous complete refresh window required');
   compareOnset(st.onset,t.onset);
+  if(workerOutputs){if(st.postPrunedAge!==age)throw new Error('Missing own completed-block pruning');}
+  else{
   const pruned=updateModalEnergyAndPrune(st.states,st.layout,{threshold:t.prune_threshold,energyLayout:t.energy_layout,keepSlots:(t.keep_slots&1)!==0,freezeLayout:false});
   st.layout=pruned.layout;removals.push(...pruned.removed.map(row=>({age,...row})));
+  }
   if(JSON.stringify(st.layout)!==JSON.stringify(t.groups))throw new Error('Computed continuous pruning layout differs');
   const controls={timestep:st.controls.timestep,pitch:c['0x780'],adjustmentRatio:c['0x784'],inputMode:0};
   check('refresh:timestep',controls.timestep,c['0xc']);
@@ -197,7 +204,9 @@ for(const r of d.records){
   check('refresh:referenceFrequency',st.referenceFrequency,r.positionInputs.referenceFrequency);
   if(st.cutoffIndex!==r.positionInputs.cutoffIndex)throw new Error('Carried source cutoff differs');
   const owned=coeffState.get(r.epoch);check('refresh:release-rate',owned.rate,c['0x7e4']);check('refresh:position-gain',owned.gain,c['0x7b0']);
-  const weights=owned.gain===0&&c['0x7e0']===0?undefined:modalPositionWeights({...r.positionInputs,referenceFrequency:st.referenceFrequency,cutoffIndex:st.cutoffIndex,frequency,indexStorage,layout:st.layout});
+  const positionWarmupDue=!st.positionWeightsReady&&age>=64*st.positionWarmupBlocks;
+  const weights=owned.gain===0&&c['0x7e0']===0&&!positionWarmupDue?undefined:modalPositionWeights({...r.positionInputs,referenceFrequency:st.referenceFrequency,cutoffIndex:st.cutoffIndex,frequency,indexStorage,layout:st.layout});
+  if(weights)st.positionWeightsReady=true;
   if(weights)for(const [start,,,count] of st.layout)for(let lane=start;lane<Math.ceil((start+count)/4)*4;lane++)st.states.get(lane).weight=weights[lane];
   const groups=st.layout.map(([start,,,count])=>Array.from({length:Math.ceil(count/4)*4},(_,i)=>{const row=st.states.get(start+i);return {modalDecay:row.modalDecay,energy:row.energy,cosine:row.K,weight:row.weight,frequency:row.frequency,active:i<count};}));
   const damped=refreshDampedModes(groups,{timestep:controls.timestep,pitch:controls.pitch,scale:c['0x7f8'],release:owned.rate,gain:owned.gain,extraGain:c['0x7e0'],releaseShape:c['0x7ec'],releaseLow:c['0x7f0'],releaseHigh:c['0x7f4'],blockLength:t.block_length_V768,blockFactor:t.block_factor_V810});
@@ -210,7 +219,7 @@ for(const r of d.records){
    for(const name of ['P','Q','energy','S','K','A','B'])check('refresh:'+name,row[name],a[name]);
    for(const [name,target] of [['frequency','frequency'],['J','J'],['modalDecay','modal_decay'],['weight','position_weight'],['sinInverse','sin_inverse'],['radius','R'],['decay','effective_decay']])check('refresh:'+name,row[name],a[target]);
   }
-  if(n!==t.lanes.length)throw new Error('Extra refresh targets');st.controls=controls;st.readyAge=age;refreshes++;if(dispatchControls)pendingRefreshAge=undefined;
+  if(n!==t.lanes.length)throw new Error('Extra refresh targets');st.controls=controls;st.readyAge=age;st.coefficientAge=age;refreshes++;if(dispatchControls){if(workerOutputs)pendingRefreshByVoice.delete(r.epoch);else pendingRefreshAge=undefined;}
  }else if(r.stage==='coefficients'){
   const s=voice(r);if(r.owner!==s.owner||!Number.isFinite(r.sourceX)||r.sourceX<0||r.sourceX>1)throw new Error('Invalid global Rattle source');
   const x=f(r.sourceX);if(bits(x)!==bits(s.current))xChanges++;s.current=x;runtimes.get(r.epoch).updateRattle(x);check('coefficient:voice-x',x,r.currentX);
@@ -223,7 +232,22 @@ for(const r of d.records){
   if(dispatchControls){
    if(!r.dispatch||typeof r.dispatch.required!=='boolean'||![0,1].includes(r.dispatch.flag)||r.dispatch.required!==(r.dispatch.flag===1)||r.dispatch.factor!==1||r.dispatch.phase!==0||![0,1].includes(r.dispatch.initial)||r.counter!==runtimes.get(r.epoch).envelope.samplesProcessed)throw new Error('Complete dispatch decision required');
    check('dispatch:committed-u',r.u,r.dispatch.committedU);
-   if(r.epoch===0&&r.counter<=windowEnd){
+   if(workerOutputs){
+    const age=r.counter,ages=dispatchAgesByVoice.get(r.epoch)??[];
+    if(age!==ages.length*64||pendingRefreshByVoice.has(r.epoch))throw new Error('Missing all-voice dispatch or refresh');ages.push(age);dispatchAgesByVoice.set(r.epoch,ages);
+    if(age===0){if(r.dispatch.initial!==1||!r.dispatch.required)throw new Error('Initial all-voice dispatch required');}
+    else if(r.dispatch.required){if(r.dispatch.initial!==0||r.skippedState)throw new Error('Invalid all-voice refresh decision');pendingRefreshByVoice.set(r.epoch,age);}
+    else{
+     const st=initialStates.get(r.epoch),t=r.skippedState;
+     if(!st||st.renderAge!==age||st.postPrunedAge!==age||!t||r.dispatch.initial!==0||JSON.stringify(st.layout)!==JSON.stringify(t.groups))throw new Error('Missing own pruned state at skipped refresh');
+     let n=0;
+     for(const [g,[start,,,count]] of st.layout.entries())for(let i=0;i<Math.ceil(count/4)*4;i++){
+      const lane=start+i,row=st.states.get(lane),a=t.lanes[n++];if(!a||a.lane!==lane||a.group!==g)throw new Error('Incomplete all-voice skipped lanes');
+      comparisonContext={...comparisonContext,lane};for(const key of ['P','Q','A','B','frequency','modalDecay','J','K','S','sinInverse','radius','energy','weight'])check('skipped:'+key,row[key],a[key]);
+     }
+     if(n!==t.lanes.length)throw new Error('Extra all-voice skipped lanes');st.readyAge=age;skippedRefreshAges.push({epoch:r.epoch,age});
+    }
+   }else if(r.epoch===0&&r.counter<=windowEnd){
     const age=r.counter;if(age!==dispatchAges.length*64||pendingRefreshAge!==undefined)throw new Error('Missing dispatch or required refresh');dispatchAges.push(age);
     if(age===0){if(r.dispatch.initial!==1||!r.dispatch.required)throw new Error('Initial dispatch required');}
     else if(r.dispatch.required){if(r.dispatch.initial!==0||r.skippedState)throw new Error('Invalid refresh dispatch');pendingRefreshAge=age;}
@@ -246,12 +270,30 @@ for(const r of d.records){
   voice(r);const runtime=runtimes.get(r.epoch),env=runtime.envelope,c=coeffState.get(r.epoch);
   check('envelope:duration',c.duration,r.duration);
   if(((env.samplesProcessed+r.samples)>>>0)!==r.counter)throw new Error('Envelope counter discontinuity');
-  if(r.epoch===0&&r.counter<=windowEnd){
+  if(workerOutputs||r.epoch===0&&r.counter<=windowEnd){
    const st=initialStates.get(r.epoch);if(!st||st.renderAge+r.samples!==r.counter||st.readyAge!==st.renderAge||r.samples!==64)throw new Error('Missing own initial state or refresh before render');
    tailTwelveGroups+=st.layout.filter(([,,,count])=>(Math.ceil(count/4)*4)%16===12).length;
-   const output=renderModalVoiceBlock(st.states,st.layout,r.samples),onset=st.onset.process(r.samples);
-   for(const channel of output)for(let i=0;i<channel.length;i++)channel[i]=f(channel[i]*onset[i]);
-   modalOutputs.set(st.renderAge,output);st.renderAge=r.counter;renderedBlocks++;
+   const output=renderModalVoiceBlock(st.states,st.layout,r.samples),onset=workerOutputs&&st.layout.every(([,,,count])=>count===0)?null:st.onset.process(r.samples);
+   if(onset)for(const channel of output)for(let i=0;i<channel.length;i++)channel[i]=f(channel[i]*onset[i]);
+   if(workerOutputs){
+    const target=r.render,t=r.postState;if(!target||target.samples!==64||!t||target.channels.length!==output.length)throw new Error('Complete worker output and post-state targets required');
+    const tails=transportTailsByVoice.get(r.epoch)??output.map(()=>new Float32Array(Math.floor(target.delay/4)*4));
+    const empty=st.layout.every(([,,,count])=>count===0);if(empty)emptyVoiceBypassBlocks++;
+    const transported=empty?{output,tails}:transportModalBlock(output,target.delay,tails);transportTailsByVoice.set(r.epoch,transported.tails);
+    const completed=bypassPostModalProcessor(transported.output,target.processor);
+    for(let group=0;group<completed.length;group++){if(target.channels[group].length!==64)throw new Error('Incomplete worker channel');for(let i=0;i<64;i++)check('continuous:output',completed[group][i],target.channels[group][i]);}
+    continuousOutputs.push({epoch:r.epoch,counter:st.renderAge,channels:completed.map(x=>Array.from(x))});comparedOutputBlocks++;outputSamples+=completed.length*64;
+    const pruned=updateModalEnergyAndPrune(st.states,st.layout,{threshold:t.threshold,energyLayout:t.energyLayout,keepSlots:(t.keepSlots&1)!==0,freezeLayout:false});
+    st.layout=pruned.layout;removals.push(...pruned.removed.map(row=>({epoch:r.epoch,age:r.counter,...row})));
+    if(JSON.stringify(st.layout)!==JSON.stringify(t.groups))throw new Error('Worker post-block pruning layout differs');
+    let n=0;
+    for(const [g,[start,,,count]] of st.layout.entries())for(let i=0;i<Math.ceil(count/4)*4;i++){
+     const lane=start+i,row=st.states.get(lane),a=t.lanes[n++];if(!a||a.lane!==lane||a.group!==g)throw new Error('Incomplete post-block lane targets');comparisonContext={...comparisonContext,lane};
+     for(const key of ['P','Q','energy'])check('post:'+key,row[key],a[key]);
+    }
+    if(n!==t.lanes.length)throw new Error('Extra post-block lanes');st.postPrunedAge=r.counter;postStateBlocks++;
+   }else{if(r.render||r.postState)throw new Error('Unexpected worker targets');modalOutputs.set(st.renderAge,output);}
+   st.renderAge=r.counter;renderedBlocks++;
   }
   const value=runtime.process({samples:r.samples,baseDuration:r.baseDuration,timestep:r.timestep});
   check('envelope:after',value,r.position);envelopeCompleted.set(r.thread,r);blocks++;
@@ -261,8 +303,9 @@ for(const r of d.records){
   duplicates++;
  }else throw new Error('Unknown update stage');
 }
-if(renderedBlocks!==windowBlocks||comparedOutputBlocks!==windowBlocks||refreshes!==(dispatchControls?d.refreshCount:windowBlocks)||initialStates.size!==5||!initialGroups||modeSeedBridges!==5||powCalls.length!==5||histories.size!==5||historyUpdates!==4||!randomDraws||sourceModels.size!==0||finalCalls!==5||oldReleasesComputed!==4||producerChecks.size!==5||copies!==d.copyCount||starts!==5||voices.size!==5||epochs.size!==5||spectrumCalls!==10||modes.size!==5||[...modes.values()].some(m=>m.size!==2)||duplicates!==(d.duplicateEnvelopeReturns??0)||blocks!==d.envelopeBlocks||envelopePending.size||coefficients!==d.coefficientCount||!active||!xChanges||pending.size)throw new Error('Incomplete dynamic update chain');
-if(dispatchControls&&(dispatchAges.length!==windowBlocks+1||refreshes+skippedRefreshAges.length!==windowBlocks||pendingRefreshAge!==undefined))throw new Error('Incomplete conditional refresh decisions');
+if(renderedBlocks!==expectedBlocks||comparedOutputBlocks!==expectedBlocks||refreshes!==(dispatchControls?d.refreshCount:windowBlocks)||initialStates.size!==5||!initialGroups||modeSeedBridges!==5||powCalls.length!==5||histories.size!==5||historyUpdates!==4||!randomDraws||sourceModels.size!==0||finalCalls!==5||oldReleasesComputed!==4||producerChecks.size!==5||copies!==d.copyCount||starts!==5||voices.size!==5||epochs.size!==5||spectrumCalls!==10||modes.size!==5||[...modes.values()].some(m=>m.size!==2)||duplicates!==(d.duplicateEnvelopeReturns??0)||blocks!==d.envelopeBlocks||envelopePending.size||coefficients!==d.coefficientCount||!active||!xChanges||pending.size)throw new Error('Incomplete dynamic update chain');
+if(!workerOutputs&&dispatchControls&&(dispatchAges.length!==windowBlocks+1||refreshes+skippedRefreshAges.length!==windowBlocks||pendingRefreshAge!==undefined))throw new Error('Incomplete conditional refresh decisions');
+if(workerOutputs&&(pendingRefreshByVoice.size||dispatchAgesByVoice.size!==5||[...dispatchAgesByVoice].some(([epoch,ages])=>initialStates.get(epoch).renderAge!==ages.length*64)||refreshes+skippedRefreshAges.length!==expectedBlocks-5||postStateBlocks!==expectedBlocks))throw new Error('Incomplete all-voice worker chain');
 const initialPredictions=initialSnapshots;
-const finalVoiceStates=[...initialStates].map(([epoch,s])=>({epoch,sampleAge:s.renderAge,coefficientAge:s.readyAge,layout:s.layout,controls:s.controls,onsetParameters:s.onsetParameters,lanes:[...s.states].map(([lane,state])=>({lane,...state}))}));
-const report={passed:!mismatches,dispatchGateObserved:dispatchControls,dispatchGateIndependentlyComputed:false,dispatchControls,dispatchAges,skippedRefreshAges,tailTwelveGroups,windowBlocks,windowEnd,finalVoiceStates,continuousOutputs,renderedBlocks,comparedOutputBlocks,continuousOutputSamples:comparedOutputBlocks*3*64,refreshes,removals,onsetDurationComputedFromSource:true,onsetStatesCarried:true,onsetDoubleStepAndFilterCoefficientsObserved:true,continuousInitialStatesComputed:true,continuousModalStatesCarried:true,workerAndConsumerClocksKeptSeparate:true,lateCopyPQNotUsed:true,weightDiagnostics,initialPredictions,checks,comparedFloatValues:checks-randomWordChecks-doubleChecks,comparedDoubleValues:doubleChecks,comparedRandomWords:randomWordChecks,initializationRandom,initializationRandomControlsObserved:initializationRandom.length===starts,initializationRandomOutputsNotDirectlyCompared:true,randomStateAtInitialVerified:!mismatchesByName['initial-random-state'],mismatches,modelInitializations:sourceModels.size,starts,spectrumCalls,finalCalls,spectrumRows:d.records.filter(r=>r.stage==='weights').reduce((n,r)=>n+r.count,0),copyCount:copies,oldReleasesComputed,envelopeBlocks:blocks,duplicateEnvelopeReturns:duplicates,coefficients,active,xChanges,byStage,sourceControlObserved:true,globalXAtCoefficientObserved:true,dynamicUpdateSiteNotObservedThisWindow:true,setterSiteNotObservedThisWindow:true,envelopeStatesCarried:true,envelopeDurationComputed:true,baseDurationAndTimestepObserved:true,modelInitializationSiteNotObservedThisWindow:true,coefficientModelFieldsObserved:true,coefficientTargetsComparisonOnly:true,activeCubeSiteNotObservedThisWindow:true,releaseFlagAndUObserved:true,oldReleaseInputComputed:true,browserCompatibleRuntimeModuleUsed:true,browserCompatibleSpectrumModuleUsed:true,hardnessRepeatInputsComputed:true,spectrumHardnessComputed:true,logSpectrumComputed:true,logSpectrumSiteNotObservedThisWindow:true,hardnessScalarSiteNotObservedThisWindow:true,spectrumModelTablesAndOtherControlsObserved:true,expWeightsComputedAndCompared:true,weightedSourceComputedAsIntermediate:true,mergedExcitationSourceCompared:false,mergedSourceIntermediateComputed:true,modeSelectionComputed:true,nativeScalarLog2Implemented:true,selectionControlsObserved:true,mappedArraysComputed:true,nativeIndexAndLayoutComparisonOnly:true,rawInitialPQComputed:true,initialRadiiComputed:true,initialDampedQComputed:true,initialPositionWeightsObserved:false,initialPositionWeightsComputed:true,positionAndRolloffControlsObserved:true,positionReferenceAndCutoffComputed:true,nativeVectorCosImplemented:true,nativeIndexNotObservedThisWindow:true,energyNormalizationComputedFromOwnEnergy:true,initialReleaseRateAndGainComputed:true,pitchAndAdjustmentRatioObserved:true,timestepComputedFromSampleRate:true,initialGroups,perModeFinalSiteNotObservedThisWindow:true,postAndMergeComputed:true,phaseVariationComputed:true,weightedSiteNotObservedThisWindow:true,preWeightSourceStillObserved:true,nativeCosfFiniteRangeLimit:2**26,historyUpdates,randomDraws,supportHistoryVoices:histories.size,historyBetweenStrikesComputed:true,initialRandomStatePerVoiceObserved:true,primaryToSecondarySeedComputed:true,modeSeedBridges,phaseRandomDraws,secondFamilyGateObserved:true,nativeExp2fLog10fImplemented:true,historyMathCandidatesUsed:false,mathCalls,powCalls,doublePowCandidateUsed:true,powCandidateExplicit:true,browserCosfCandidateUsed:false,hardnessSourceAndCurvesObserved:true,oldVoiceSelectionCountVelocityAndHistoryObserved:true,continuousEnvelopeAndVoiceOrBrowserEquivalence:false,mismatchesByName,failures};fs.writeFileSync(output,JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({...report,mathCalls:undefined,powCalls:undefined,initialPredictions:undefined,finalVoiceStates:undefined,continuousOutputs:undefined}));if(!report.passed)process.exitCode=1;
+const finalVoiceStates=[...initialStates].map(([epoch,s])=>({epoch,sampleAge:s.renderAge,readyAge:s.readyAge,coefficientAge:s.coefficientAge,positionWeightWarmupBlocks:s.positionWarmupBlocks,positionWeightsReady:s.positionWeightsReady,layout:s.layout,controls:s.controls,onsetParameters:s.onsetParameters,lanes:[...s.states].map(([lane,state])=>({lane,...state}))}));
+const report={passed:!mismatches,workerOutputs,postStateBlocks,emptyVoiceBypassBlocks,voiceBlockCounts:[...dispatchAgesByVoice].map(([epoch,ages])=>({epoch,blocks:ages.length})),dispatchGateObserved:dispatchControls,dispatchGateIndependentlyComputed:false,dispatchControls,dispatchAges,skippedRefreshAges,tailTwelveGroups,boundedWindow:!workerOutputs,windowBlocks:workerOutputs?undefined:windowBlocks,windowEnd:workerOutputs?undefined:windowEnd,finalVoiceStates,continuousOutputs,renderedBlocks,comparedOutputBlocks,continuousOutputSamples:outputSamples,refreshes,removals,onsetDurationComputedFromSource:true,onsetStatesCarried:true,onsetDoubleStepAndFilterCoefficientsObserved:true,continuousInitialStatesComputed:true,continuousModalStatesCarried:true,workerAndConsumerClocksKeptSeparate:true,lateCopyPQNotUsed:true,weightDiagnostics,initialPredictions,checks,comparedFloatValues:checks-randomWordChecks-doubleChecks,comparedDoubleValues:doubleChecks,comparedRandomWords:randomWordChecks,initializationRandom,initializationRandomControlsObserved:initializationRandom.length===starts,initializationRandomOutputsNotDirectlyCompared:true,randomStateAtInitialVerified:!mismatchesByName['initial-random-state'],mismatches,modelInitializations:sourceModels.size,starts,spectrumCalls,finalCalls,spectrumRows:d.records.filter(r=>r.stage==='weights').reduce((n,r)=>n+r.count,0),copyCount:copies,oldReleasesComputed,envelopeBlocks:blocks,duplicateEnvelopeReturns:duplicates,coefficients,active,xChanges,byStage,sourceControlObserved:true,globalXAtCoefficientObserved:true,dynamicUpdateSiteNotObservedThisWindow:true,setterSiteNotObservedThisWindow:true,envelopeStatesCarried:true,envelopeDurationComputed:true,baseDurationAndTimestepObserved:true,modelInitializationSiteNotObservedThisWindow:true,coefficientModelFieldsObserved:true,coefficientTargetsComparisonOnly:true,activeCubeSiteNotObservedThisWindow:true,releaseFlagAndUObserved:true,oldReleaseInputComputed:true,browserCompatibleRuntimeModuleUsed:true,browserCompatibleSpectrumModuleUsed:true,hardnessRepeatInputsComputed:true,spectrumHardnessComputed:true,logSpectrumComputed:true,logSpectrumSiteNotObservedThisWindow:true,hardnessScalarSiteNotObservedThisWindow:true,spectrumModelTablesAndOtherControlsObserved:true,expWeightsComputedAndCompared:true,weightedSourceComputedAsIntermediate:true,mergedExcitationSourceCompared:false,mergedSourceIntermediateComputed:true,modeSelectionComputed:true,nativeScalarLog2Implemented:true,selectionControlsObserved:true,mappedArraysComputed:true,nativeIndexAndLayoutComparisonOnly:true,rawInitialPQComputed:true,initialRadiiComputed:true,initialDampedQComputed:true,initialPositionWeightsObserved:false,initialPositionWeightsComputed:true,positionAndRolloffControlsObserved:true,positionReferenceAndCutoffComputed:true,nativeVectorCosImplemented:true,nativeIndexNotObservedThisWindow:true,energyNormalizationComputedFromOwnEnergy:true,initialReleaseRateAndGainComputed:true,pitchAndAdjustmentRatioObserved:true,timestepComputedFromSampleRate:true,initialGroups,perModeFinalSiteNotObservedThisWindow:true,postAndMergeComputed:true,phaseVariationComputed:true,weightedSiteNotObservedThisWindow:true,preWeightSourceStillObserved:true,nativeCosfFiniteRangeLimit:2**26,historyUpdates,randomDraws,supportHistoryVoices:histories.size,historyBetweenStrikesComputed:true,initialRandomStatePerVoiceObserved:true,primaryToSecondarySeedComputed:true,modeSeedBridges,phaseRandomDraws,secondFamilyGateObserved:true,nativeExp2fLog10fImplemented:true,historyMathCandidatesUsed:false,mathCalls,powCalls,doublePowCandidateUsed:true,powCandidateExplicit:true,browserCosfCandidateUsed:false,hardnessSourceAndCurvesObserved:true,oldVoiceSelectionCountVelocityAndHistoryObserved:true,continuousEnvelopeAndVoiceOrBrowserEquivalence:false,mismatchesByName,failures};if(stemsDirectory)report.workerStems=writeWorkerStems(report,stemsDirectory,d.records.find(r=>r.stage==='weights').selectionSource.sampleRate);fs.writeFileSync(output,JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify({...report,mathCalls:undefined,powCalls:undefined,initialPredictions:undefined,finalVoiceStates:undefined,continuousOutputs:undefined}));if(!report.passed)process.exitCode=1;

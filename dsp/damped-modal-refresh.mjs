@@ -8,8 +8,8 @@ const f32 = Math.fround;
 
 export function refreshDampedModes(groups, controls) {
   const { timestep, pitch, scale, release, gain, extraGain, releaseShape, releaseLow, releaseHigh, blockLength, blockFactor } = controls;
-  if (extraGain !== 0 || !Number.isFinite(releaseShape) || !groups.length ||
-      groups.some(g => !g.length || g.length % 4)) {
+  if (extraGain !== 0 || !Number.isFinite(releaseShape) || !groups.some(g => g.length) ||
+      groups.some(g => g.length % 4)) {
     throw new RangeError(`Padded normal damping branch required: extraGain=${extraGain}, releaseShape=${releaseShape}, groupLengths=${groups.map(g => g.length).join(',')}`);
   }
   if (releaseShape !== 1 && (!Number.isFinite(releaseLow) || !Number.isFinite(releaseHigh) ||

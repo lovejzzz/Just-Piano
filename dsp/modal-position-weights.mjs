@@ -2,6 +2,11 @@
 import {nativeVectorCos} from './native-vector-cos.mjs';
 import {nativeVectorExpLane} from './native-vector-exp.mjs';
 const f=Math.fround;
+// 43dcb0 initializes V+92c from the model note index, not from audio fitting.
+export function positionWeightWarmupBlocks(noteIndex){
+ if(!Number.isInteger(noteIndex)||noteIndex<0||noteIndex>127)throw new RangeError('MIDI-range model note index required');
+ return ((noteIndex^0x3a9)%40)+8;
+}
 export function modalPositionWeights({frequency,indexStorage,layout,position,referenceFrequency,rolloff,cutoffIndex}){
  if(!frequency?.length||!Array.from(frequency).every(Number.isFinite)||![position,referenceFrequency,rolloff].every(Number.isFinite)||referenceFrequency<=0||rolloff<=0||position<.125||!Number.isInteger(cutoffIndex)||cutoffIndex<0||cutoffIndex>0xffffffff)throw new RangeError('Finite numerical position branch without extra curve required');
  const scale=f((f(position)*(2*Math.PI))/f(referenceFrequency)),decay=f(-1/f(rolloff)),limit=f(f(cutoffIndex)-1);

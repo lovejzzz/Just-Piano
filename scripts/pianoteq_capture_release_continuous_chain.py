@@ -12,13 +12,14 @@ from pianoteq_capture_coefficients import capture_record
 ROOT=Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
 WINDOW_BLOCKS=int(os.environ.get('PIANOTEQ_CONTINUOUS_BLOCKS','8'));assert 1<=WINDOW_BLOCKS<=512
 WINDOW_END=64*WINDOW_BLOCKS
-DISPATCH=os.environ.get('PIANOTEQ_CAPTURE_DISPATCH','0')=='1'
+ALL_VOICES=os.environ.get('PIANOTEQ_ALL_VOICES','0')=='1'
+DISPATCH=ALL_VOICES or os.environ.get('PIANOTEQ_CAPTURE_DISPATCH','0')=='1'
 POINTS={'before':0x10035ef10,'weights':0x100695108,'final':0x100864d28,'envelopeResult':0x100472fd0,'copy':0x1004604d4,'coefficients':0x1006e5360}
 if DISPATCH:POINTS['coefficients']=0x100472f50
 records=[];errors=[];hooks={};voices={};owners={};initialized=set();pending={};envelope_pending={};envelope_completed={};sample_counters={};blocks=0;duplicates=0;last_seen={};starts=0;updates=0;final_calls=0;spectrum_calls=0;copies=0;coefficients=0;complete=False
 
 def save():
- (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'windowBlocks':WINDOW_BLOCKS,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='copy' and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+ (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'workerOutputs':ALL_VOICES,'windowBlocks':None if ALL_VOICES else WINDOW_BLOCKS,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']==('envelopeResult' if ALL_VOICES else 'copy') and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
 def skipped_state(frame,v):
  o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
  layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
@@ -94,7 +95,7 @@ def observed(frame,location,_):
    records.append({'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'counter':scalar(frame,voice+0x6c,'I'),
     'release':scalar(frame,voice+0x2f24),'modalPosition':scalar(frame,voice+0xab0),
     'producerActual':{'repeatFlag':scalar(frame,voice+0x2ff0,'B'),'age':scalar(frame,voice+0x2ffc),'oldVelocity':scalar(frame,voice+0x3000),'attenuation':scalar(frame,voice+0x2ff8),'history':list(unpack(frame,voice+0x3010,'f'*n)) if n else []}})
-   if voices[voice]==0 and 0<=records[-1]['counter']<WINDOW_END:
+   if not ALL_VOICES and voices[voice]==0 and 0<=records[-1]['counter']<WINDOW_END:
     v=voice+0x168;o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
     layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
     samples=scalar(frame,v+0x768,'I');delay=scalar(frame,v+0x76c,'I');assert samples==64
@@ -112,7 +113,7 @@ def observed(frame,location,_):
    if voice not in voices:return False
    if scalar(frame,v+0x18,'B')!=1:
     counter=scalar(frame,v+0x10,'I')
-    if voices[voice]==0 and 0<counter<=WINDOW_END:
+    if counter>0 and (ALL_VOICES or voices[voice]==0 and counter<=WINDOW_END):
      records.append({'stage':'refresh','thread':thread,'epoch':voices[voice],'voice':hex(voice),'modal':hex(v),'target':continuous_record(frame),
       'positionInputs':{'position':scalar(frame,v+0x8d4),'referenceFrequency':scalar(frame,v+0x918),'rolloff':scalar(frame,v+0x908),'cutoffIndex':scalar(frame,v+0x928,'I')}})
     return False
@@ -135,18 +136,30 @@ def observed(frame,location,_):
     flag=scalar(frame,v+0x80c,'B');phase=scalar(frame,v+0x814,'I');factor=scalar(frame,v+0x810,'I')
     assert flag in (0,1) and factor==1 and phase==0
     r=records[-1];r['dispatch']={'required':flag==1,'flag':flag,'phase':phase,'factor':factor,'initial':scalar(frame,v+0x18,'B'),'committedU':scalar(frame,v+0x8c8)}
-    if r['epoch']==0 and 0<r['counter']<=WINDOW_END and not r['dispatch']['required']:r['skippedState']=skipped_state(frame,v)
+    if r['counter']>0 and (ALL_VOICES or r['epoch']==0 and r['counter']<=WINDOW_END) and not r['dispatch']['required']:r['skippedState']=skipped_state(frame,v)
   else:
    v=register(frame,'x19');voice=v-0x168
    if voice not in voices:return False
    assert blocks<20000
    result={'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'modal':hex(v),'counter':scalar(frame,v+0x10,'I'),'position':scalar(frame,v+0x948),'timestep':scalar(frame,v+0x8fc),'duration':scalar(frame,v+0x944),'baseDuration':scalar(frame,v+0x914),'samples':scalar(frame,register(frame,'x20')+0x10,'I')}
-   if envelope_completed.get(thread)==result:
+   if {k:value for k,value in envelope_completed.get(thread,{}).items() if k not in ('render','postState')}==result:
     records.append({**result,'stage':'duplicateEnvelopeResult'});duplicates+=1
    else:
     expected=(sample_counters.get(voices[voice],0)+result['samples']) & 0xffffffff
     assert result['counter']==expected, ('Envelope counter gap',voices[voice],expected,result['counter'])
     sample_counters[voices[voice]]=expected
+    if ALL_VOICES:
+     matrix=register(frame,'x20');count=scalar(frame,matrix,'Q');assert 0<count<=3 and result['samples']==64
+     channels=[]
+     for i in range(count):
+      descriptor=matrix+8+56*i;rows,stride,n,sample_stride=unpack(frame,descriptor,'IIII');assert rows==1 and n==64
+      channels.append(list(unpack(frame,scalar(frame,descriptor+16,'Q'),'f'*n)))
+     o=scalar(frame,v,'Q');e=v+0x840
+     result['render']={'samples':64,'delay':scalar(frame,v+0x76c,'I'),'channels':channels,'processor':{'smooth':{hex(off):scalar(frame,e+off) for off in (0x5c,0x60)},'enabled':scalar(frame,e+0x6c,'B')}}
+     result['postState']={'groups':[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(count)],'threshold':scalar(frame,v+0x774),'keepSlots':scalar(frame,v+0x718,'B'),'energyLayout':scalar(frame,o+0xe4,'I'),'lanes':[]}
+     pointers={'P':scalar(frame,o+0x58,'Q'),'Q':scalar(frame,o+0x80,'Q'),'energy':scalar(frame,v+0x188,'Q')}
+     for group,(start,_,_,logical) in enumerate(result['postState']['groups']):
+      for lane in range(start,(start+logical+3)//4*4):result['postState']['lanes'].append({'lane':lane,'group':group,**{k:scalar(frame,p+lane*4) for k,p in pointers.items()}})
     records.append(result);envelope_completed[thread]=result;blocks+=1
   assert len(records)<50000 and all(h.IsEnabled() for h in hooks.values())
   if len(records)%128==0:save()
@@ -159,6 +172,16 @@ def observed(frame,location,_):
 def finish():
  global complete
  assert starts==5 and spectrum_calls==10 and final_calls==5 and coefficients>0 and blocks>0 and copies>0 and not envelope_pending and not pending and not errors
+ if ALL_VOICES:
+  for epoch in range(5):
+   decisions=[r for r in records if r['stage']=='coefficients' and r['epoch']==epoch]
+   rendered=[r for r in records if r['stage']=='envelopeResult' and r['epoch']==epoch]
+   assert decisions and len(decisions)==len(rendered)
+   assert [r['counter'] for r in decisions]==list(range(0,len(decisions)*64,64))
+   assert [r['counter'] for r in rendered]==list(range(64,(len(rendered)+1)*64,64)) and all('render' in r and 'postState' in r for r in rendered)
+   assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh' and r['epoch']==epoch]==[r['counter'] for r in decisions if r['counter']>0 and r['dispatch']['required']]
+  for h in hooks.values():h.SetEnabled(False)
+  complete=True;save();return
  assert [r['counter'] for r in records if r['stage']=='copy' and 'render' in r]==list(range(0,WINDOW_END,64))
  expected=list(range(64,WINDOW_END+1,64))
  if DISPATCH:
