@@ -1,10 +1,14 @@
 // Verified global output boundary -> observed post-processing -> calculated stereo routing.
 import fs from 'node:fs';
 import {createRoutedDelayCache,routeConstantBlock,readRoutedBlock} from '../dsp/routed-delay-cache.mjs';
-const [capturePath,reportPath,option,upstreamPath,...extra]=process.argv.slice(2);
-if(!capturePath||!reportPath||option!=='--global-report'||!upstreamPath||extra.length)throw new Error('Usage: capture.json report.json --global-report calculated-global-output.json');
+const [capturePath,reportPath,...args]=process.argv.slice(2),options={};
+for(let i=0;i<args.length;i+=2){if(!['--global-report','--processing-report'].includes(args[i])||!args[i+1]||options[args[i]])throw new Error('Invalid routing options');options[args[i]]=args[i+1];}
+const upstreamPath=options['--global-report'];
+if(!capturePath||!reportPath||!upstreamPath)throw new Error('Usage: capture.json report.json --global-report calculated-global-output.json [--processing-report calculated-room-output.json]');
 const data=JSON.parse(fs.readFileSync(capturePath,'utf8')),upstream=JSON.parse(fs.readFileSync(upstreamPath,'utf8'));
 if(!data.windowComplete||data.errors.length||data.records.length!==data.ordinalLimit*4||!upstream.passed||upstream.mismatches||upstream.blocks!==data.ordinalLimit)throw new Error('Complete verified captures required');
+const processing=options['--processing-report']?JSON.parse(fs.readFileSync(options['--processing-report'],'utf8')):null;
+if(processing&&(!processing.passed||processing.mismatches||processing.blocks!==data.ordinalLimit))throw new Error('Verified room output required');
 const view=new DataView(new ArrayBuffer(4));
 const bits=x=>{view.setFloat32(0,x);return view.getUint32(0);};
 const from=x=>{view.setUint32(0,x);return view.getFloat32(0);};
@@ -45,7 +49,10 @@ for(let ordinal=0;ordinal<data.ordinalLimit;ordinal++){
   })}));
  }
  if(route.gain!==1||JSON.stringify(route.entries)!==table||route.wrap!==wrap)throw new Error('Unverified variable output routing');
- const source=[...route.output.values,...Array.from({length:5},()=>new Float32Array(64))];
+ const room=processing?.predictions[ordinal];
+ if(room&&room.ordinal!==ordinal)throw new Error('Room output chronology differs');
+ if(room)check(`${ordinal}:calculatedRoom`,room.output,route.output.values);
+ const source=[...(room?room.output:route.output.values),...Array.from({length:5},()=>new Float32Array(64))];
  check(`${ordinal}:source`,source,route.source.values);
  metadata(route.cache);routeConstantBlock(cache,source,entries,route.gain,!!wrap);
  const stereo=readRoutedBlock(cache);metadata(returned.cache);
@@ -54,7 +61,7 @@ for(let ordinal=0;ordinal<data.ordinalLimit;ordinal++){
  predictions.push({ordinal,stereo:stereo.map(row=>[...row])});
 }
 const report={passed:!mismatches,count,matched:count-mismatches,mismatches,windowComplete:true,blocks:data.ordinalLimit,
- computedGlobalBoundary:true,postProcessingInputStillObserved:true,routingTablesStillObserved:true,cacheStateCarried:true,
+ computedGlobalBoundary:true,postProcessingInputStillObserved:!processing,roomProcessingComputed:!!processing,earlierCabinetMixStillObserved:!!processing,routingTablesStillObserved:true,cacheStateCarried:true,
  stereoRoutingNumericallyVerified:true,finalWavGenerated:false,completeVoiceOrBrowserEquivalence:false,predictions,failures};
 fs.writeFileSync(reportPath,JSON.stringify(report,null,2)+'\n');
 console.log(JSON.stringify({...report,predictions:undefined,failures:undefined}));

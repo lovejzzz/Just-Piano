@@ -40,7 +40,7 @@ for(let i=0;i<pcm.length;i+=3)if(pcm.readIntLE(i,3)!==audio.readIntLE(i,3)){pcmD
 const report={passed:!mismatches&&!pcmDifferences,count,matched:count-mismatches,mismatches,windowComplete:true,blocks:data.ordinalLimit,
  pcmPrefixFrames:pcm.length/6,pcmPrefixComparedInterleavedSamples:pcm.length/3,pcmPrefixDifferences:pcmDifferences,firstPcmDifference,
  pcmPrefixSha256:crypto.createHash('sha256').update(pcm).digest('hex'),settledLevel:state[0],calculatedStereoInput:true,
- postProcessingBeforeStereoStillObserved:true,floatToSigned32InstructionIdentityRecovered:true,packed24InstructionIdentityRecovered:false,completeVoiceOrBrowserEquivalence:false,predictions,failures};
+ postProcessingBeforeStereoStillObserved:true,roomProcessingComputed:!!source.roomProcessingComputed,earlierCabinetMixStillObserved:!!source.earlierCabinetMixStillObserved,floatToSigned32InstructionIdentityRecovered:true,packed24InstructionIdentityRecovered:false,completeVoiceOrBrowserEquivalence:false,predictions,failures};
 if(options['--output-wav']){
  const header=Buffer.alloc(44);header.write('RIFF');header.writeUInt32LE(pcm.length+36,4);header.write('WAVEfmt ',8);header.writeUInt32LE(16,16);header.writeUInt16LE(1,20);header.writeUInt16LE(2,22);header.writeUInt32LE(48000,24);header.writeUInt32LE(288000,28);header.writeUInt16LE(6,32);header.writeUInt16LE(24,34);header.write('data',36);header.writeUInt32LE(pcm.length,40);fs.writeFileSync(options['--output-wav'],Buffer.concat([header,pcm]));
 }
