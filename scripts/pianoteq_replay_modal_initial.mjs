@@ -1,17 +1,19 @@
 // node SCRIPT initial.json final.json coefficients.json recurrence.json report.json
 //   [--tail-capture tail.json]
 //   [--pitch-report computed-pitch.json]
+//   [--source-mapping-report computed-source-mapping.json]
 import fs from 'node:fs';
 import { initialModalGroup, initialModalRadii, dampInitialQ, modalAngleGroup, projectModalHistory } from '../dsp/modal-initial.mjs';
 import { recurrenceCoefficients } from '../dsp/modal-coefficients.mjs';
 import { renderSixteen, renderEight } from '../dsp/modal-kernel.mjs';
 const [initialPath, finalPath, coefficientPath, recurrencePath, reportPath, ...options] = process.argv.slice(2);
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
-let tailCapturePath, pitchReportPath;
+let tailCapturePath, pitchReportPath, sourceMappingPath;
 for (let i = 0; i < options.length; i++) {
   if (options[i] === '--tail-capture') tailCapturePath = options[++i];
   else if (options[i] === '--pitch-report') pitchReportPath = options[++i];
-  else throw new Error('Expected --tail-capture or --pitch-report');
+  else if (options[i] === '--source-mapping-report') sourceMappingPath = options[++i];
+  else throw new Error('Expected --tail-capture, --pitch-report or --source-mapping-report');
 }
 const calculatedPitches = new Map();
 if (pitchReportPath) {
@@ -55,6 +57,36 @@ function compare(name, prediction, actual) {
   }
   checks.push({ name, count: prediction.length, mismatches });
 }
+const mappedSources = new Map();
+if (sourceMappingPath) {
+  const report = read(sourceMappingPath);
+  if (report.schema !== 'pianoteq-voice-source-mapping-pass22' || report.passed !== true || report.mismatches !== 0 ||
+      report.predictions?.length !== 1 || JSON.stringify(report.predictions[0].layout) !== JSON.stringify(layout))
+    throw new Error('Verified source mapping with matching layout required');
+  for (const row of report.predictions[0].lanes) {
+    if (!Number.isInteger(row.lane) || mappedSources.has(row.lane) ||
+        !['frequency', 'decay', 'amplitude', 'phase', 'J'].every(key => Number.isFinite(row[key])))
+      throw new Error('Invalid mapped source lane');
+    mappedSources.set(row.lane, row);
+  }
+  for (const record of initial.records) for (const [key, sourceKey] of Object.entries({
+    frequency: 'frequency', amplitude_or_R: 'amplitude', phase: 'phase', J: 'J' })) {
+    const calculated = Array.from({ length: 4 }, (_, i) => {
+      const row = mappedSources.get(record.lane + i);
+      if (!row) throw new Error('Incomplete mapped source');
+      return row[sourceKey];
+    });
+    compare(`mapped-${record.lane}-${sourceKey}`, calculated, record[key]);
+    record[key] = calculated;
+  }
+}
+const sourceDecay = row => {
+  if (!sourceMappingPath) return row.modal_decay;
+  const mapped = mappedSources.get(row.lane);
+  if (!mapped) throw new Error('Missing mapped decay');
+  compare(`mapped-decay-${row.lane}`, [mapped.decay], [row.modal_decay]);
+  return mapped.decay;
+};
 const expected = layout.flatMap(([start, , , count]) =>
   Array.from({ length: Math.ceil((start + count) / 4) - Math.floor(start / 4) }, (_, i) => 4 * (Math.floor(start / 4) + i)));
 if (initial.records.length !== expected.length || new Set(initial.records.map(r => r.V)).size !== 1 ||
@@ -77,7 +109,7 @@ for (const record of initial.records) {
 }
 const decayGroups = layout.map((_, group) => c.lanes.filter(row => row.group === group));
 const control = { ...c.controls, '0x780': calculatedPitchAt(0, c.controls['0x780']) };
-const radii = initialModalRadii(decayGroups.map(group => group.map(row => row.modal_decay)), {
+const radii = initialModalRadii(decayGroups.map(group => group.map(sourceDecay)), {
   timestep: control['0xc'], pitch: control['0x780'], scale: control['0x7f8'], release: control['0x7e4'],
   positionGain: control['0x7b0'], extraGain: control['0x7e0'], releaseShape: control['0x7ec'] });
 for (const [group, rows] of decayGroups.entries()) {
@@ -192,7 +224,7 @@ if (tailCapturePath) {
       }
       frequencyRefreshCount += refresh;
       const groups = layout.map((_, group) => snapshot.lanes.filter(row => row.group === group));
-      const nextRadii = initialModalRadii(groups.map(rows => rows.map(row => row.modal_decay)), {
+      const nextRadii = initialModalRadii(groups.map(rows => rows.map(sourceDecay)), {
         timestep: nextControls['0xc'], pitch: nextControls['0x780'], scale: nextControls['0x7f8'], release: nextControls['0x7e4'],
         positionGain: nextControls['0x7b0'], extraGain: nextControls['0x7e0'], releaseShape: nextControls['0x7ec'] });
       for (const [group, rows] of groups.entries()) for (const [i, row] of rows.entries()) {
@@ -245,7 +277,9 @@ const report = { schema: 'pianoteq-modal-initial-pass20', passed: checks.every(x
   initialGroups: initial.records.length, initialLanes: predicted.size, recurrenceGroups: firstBlock.length,
   recurrenceOutputSamples, comparedFloatValues: checks.reduce((n, x) => n + x.count, 0),
   mismatches: checks.reduce((n, x) => n + x.mismatches, 0), checks, failures,
-  initialAmplitudePhaseFrequencyAndDecayStillCaptured: true, radiusCalculated: true,
+  initialAmplitudePhaseFrequencyAndDecayStillCaptured: !sourceMappingPath,
+  postExcitationSourceStillCaptured: true, sourceIndexMapStillCaptured: true,
+  sourceToVoiceMappingComputed: Boolean(sourceMappingPath), radiusCalculated: true,
   nativeMathOracleRequired: false, eightLaneTailGroups: tailGroups, completeFirstGroupBuffers: completeGroupBuffers,
   completeFirstGroupBufferSamples: completeGroupBuffers * 64,
   tailsVerified: Boolean(completeGroupBuffers), continuousBlocks, continuousCompleteBufferSamples: continuousBlocks * layout.length * 64,
