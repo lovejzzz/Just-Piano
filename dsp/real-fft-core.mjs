@@ -47,6 +47,13 @@ export function forwardRealCore32(input,twiddle){
  a=stage(a,4,2,4,twiddle,16);
  return stage(a,16,1,2,twiddle,0);
 }
+export function forwardRealCore256(input,twiddle){
+ if(input.length!==1024||twiddle.length!==256)throw new Error('Unverified FFT256 core size');
+ let a=stage(input,1,64,4,twiddle,252);
+ a=stage(a,4,16,4,twiddle,240);
+ a=stage(a,16,4,4,twiddle,192);
+ return stage(a,64,1,4,twiddle,0);
+}
 
 // Fixed-plan coefficients numerically checked against native setup; setup call path remains open.
 export function buildRealCoreTwiddles32(){

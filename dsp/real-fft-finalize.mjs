@@ -2,10 +2,10 @@
 import {fma32} from './modal-kernel.mjs';
 import {forwardRealCore32,buildRealCoreTwiddles32} from './real-fft-core.mjs';
 const f=Math.fround,halfRoot=f(Math.SQRT1_2);
-export function finalizeReal128(input,e){
- if(input.length!==128||e.length!==96)throw new Error('Unverified real FFT finalization size');
- const out=new Float32Array(128);
- for(let block=0;block<4;block++){
+function finalizeReal(input,e){
+ if(![128,1024].includes(input.length)||e.length!==input.length*3/4)throw new Error('Unverified real FFT finalization size');
+ const out=new Float32Array(input.length);
+ for(let block=0;block<input.length/32;block++){
   const base=block*32;
   for(let lane=0;lane<4;lane++){
    const re=[],im=[];
@@ -24,10 +24,12 @@ export function finalizeReal128(input,e){
   }
  }
  const a=f(input[0]+input[2]),b=f(input[1]+input[3]);out[0]=f(a+b);out[4]=f(a-b);out[16]=f(input[0]-input[2]);out[20]=f(input[3]-input[1]);
- const c=f(f(input[125]-input[127])*halfRoot),d=f(f(input[125]+input[127])*halfRoot);
- out[8]=f(input[124]+c);out[12]=f(-input[126]-d);out[24]=f(input[124]-c);out[28]=f(input[126]-d);
+ const n=input.length,c=f(f(input[n-3]-input[n-1])*halfRoot),d=f(f(input[n-3]+input[n-1])*halfRoot);
+ out[8]=f(input[n-4]+c);out[12]=f(-input[n-2]-d);out[24]=f(input[n-4]-c);out[28]=f(input[n-2]-d);
  return out;
 }
+export function finalizeReal128(input,e){if(input.length!==128)throw new Error('128-point input required');return finalizeReal(input,e);}
+export function finalizeReal1024(input,e){if(input.length!==1024)throw new Error('1024-point input required');return finalizeReal(input,e);}
 export function forwardReal128(input,e=buildRealFinalizeCoefficients128()){return finalizeReal128(forwardRealCore32(input,buildRealCoreTwiddles32()),e);}
 
 // Fixed-size coefficient values verified against native plans; setup call path remains open.

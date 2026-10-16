@@ -5,13 +5,15 @@ import {inverseReal128} from './real-fft-inverse.mjs';
 import {accumulatePackedRealSpectrum} from './packed-convolution-product.mjs';
 import {normalizedOverlap128} from './convolution-overlap.mjs';
 const f=Math.fround;
-export function isSilentBlock64(input){
- if(input.length!==64)throw new Error('Unverified input block size');
- if(input[0]!==0||input[63]!==0)return false;
+function isSilentBlock(input,size){
+ if(input.length!==size)throw new Error('Unverified input block size');
+ if(input[0]!==0||input[size-1]!==0)return false;
  const energy=new Float32Array(4);
- for(let i=0;i<64;i+=4)for(let lane=0;lane<4;lane++)energy[lane]=fma32(input[i+lane],input[i+lane],energy[lane]);
+ for(let i=0;i<size;i+=4)for(let lane=0;lane<4;lane++)energy[lane]=fma32(input[i+lane],input[i+lane],energy[lane]);
  return f(f(energy[0]+energy[2])+f(energy[1]+energy[3]))===0;
 }
+export function isSilentBlock64(input){return isSilentBlock(input,64);}
+export function isSilentBlock512(input){return isSilentBlock(input,512);}
 export function partitionSlot(count,cursor,lag){
  if(!Number.isInteger(count)||count<1||!Number.isInteger(cursor)||cursor<0||cursor>=count||!Number.isInteger(lag)||lag<0||lag>=count)throw new Error('Invalid partition ring index');
  const index=count+cursor-1-lag;return index>=count?index-count:index;
