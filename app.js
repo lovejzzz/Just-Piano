@@ -173,7 +173,7 @@
     if (!el) return;
     e.preventDefault();
     startAudio();
-    kbd.setPointerCapture(e.pointerId);
+    try { kbd.setPointerCapture(e.pointerId); } catch (_) {}
     pointerStrike(e.pointerId, el, e.clientY);
   });
   kbd.addEventListener('pointermove', (e) => {

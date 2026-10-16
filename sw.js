@@ -1,5 +1,5 @@
 // Network-first cache so Just Piano also works offline after the first visit.
-const CACHE = 'just-piano-v1';
+const CACHE = 'just-piano-v2';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'piano-worklet.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
