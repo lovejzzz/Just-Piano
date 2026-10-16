@@ -85,3 +85,41 @@ export function renderSixteen(P, Q, A, B, output) {
   }
   return output;
 }
+
+function reduceTwoGroups(values) {
+  const lanes = [0, 0, 0, 0];
+  for (let lane = 0; lane < 4; lane++) {
+    lanes[lane] = add(values[lane], values[4 + lane]);
+  }
+  return add(add(lanes[0], lanes[2]), add(lanes[1], lanes[3]));
+}
+
+// 0x1007c0e14: the native tail always reads eight lanes, even when only one
+// four-lane group remains. Callers must supply the actual extra lanes; this
+// function neither assumes zero padding nor silently synthesizes it.
+// A/B are separate eight-lane arrays. P/Q are updated in place, and output
+// already containing earlier groups is accumulated in float32.
+export function renderEight(P, Q, A, B, output) {
+  if ([P, Q, A, B].some((array) => array.length !== 8) || output.length % 4) {
+    throw new RangeError('Expected eight lanes and a multiple of four output samples');
+  }
+  const first = new Float32Array(8);
+  const second = new Float32Array(8);
+  const third = new Float32Array(8);
+  const fourth = new Float32Array(8);
+  for (let sample = 0; sample < output.length; sample += 4) {
+    for (let lane = 0; lane < 8; lane++) {
+      first[lane] = fma32(B[lane], Q[lane], f32(A[lane] * P[lane]));
+      second[lane] = fma32(A[lane], Q[lane], f32(B[lane] * first[lane]));
+      third[lane] = fma32(A[lane], first[lane], f32(B[lane] * second[lane]));
+      fourth[lane] = fma32(A[lane], second[lane], f32(B[lane] * third[lane]));
+    }
+    output[sample] = add(output[sample], reduceTwoGroups(P));
+    output[sample + 1] = add(output[sample + 1], reduceTwoGroups(Q));
+    output[sample + 2] = add(output[sample + 2], reduceTwoGroups(first));
+    output[sample + 3] = add(output[sample + 3], reduceTwoGroups(second));
+    P.set(third);
+    Q.set(fourth);
+  }
+  return output;
+}
