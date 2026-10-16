@@ -1,5 +1,6 @@
-// macOS arm64 libsystem_m sinf/cosf fast finite range, inspected on build 25F80.
-// Arguments at |x| >= 120 and nonfinite inputs are deliberately unsupported.
+// macOS arm64 libsystem_m finite sinf/cosf paths, inspected on build 25F80.
+// sinf supports |x| < 120; cosf includes the two-part reduction for |x| < 2**26.
+// Larger and nonfinite inputs remain deliberately unsupported.
 import { fma64 } from './modal-poles.mjs';
 import { fma32 } from './modal-kernel.mjs';
 const f = Math.fround;
@@ -7,6 +8,7 @@ const view = new DataView(new ArrayBuffer(8));
 const from64 = bits => { view.setBigUint64(0,bits); return view.getFloat64(0); };
 const scale = from64(0x3fe45f306dc9c883n);
 const halfPi = from64(0x3ff921fb54442d18n);
+const halfPiTail = from64(0x3c91a62633145c07n);
 const cosine = [0x3ef99169fc938f4an,0xbf56c07f16945df4n,0x3fa55553c7899699n,0xbfdffffffcb82e97n].map(from64);
 const sine = [0xbf29943e0fc4818fn,0x3f811073afd145ebn,0xbfc555545268a02an].map(from64);
 function roundEven(value) {
@@ -35,10 +37,12 @@ export function nativeScalarSin(value) {
 }
 export function nativeScalarCos(value) {
  value=Math.abs(f(value));
- if(!Number.isFinite(value)||value>=120)throw new RangeError('Outside inspected scalar cosf fast range');
+ if(!Number.isFinite(value)||value>=2**26)throw new RangeError('Outside inspected scalar cosf finite reduction range');
  if(value<2**-12)return f(f(2**26-value)*2**-26);
  if(value<f(Math.PI/4))return f(cosinePolynomial(value));
- const n=roundEven(value*scale),reduced=fma64(-n,halfPi,value);
+ const n=roundEven(value*scale);
+ let reduced=fma64(-n,halfPi,value);
+ if(value>=120)reduced=fma64(-n,halfPiTail,reduced);
  const result=(n&1)?sinePolynomial(reduced):cosinePolynomial(reduced);
  return f(((n+1)>>1)&1?-result:result);
 }
