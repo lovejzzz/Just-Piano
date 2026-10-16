@@ -31,7 +31,7 @@ export function releaseCoefficients({ x, u, cubicScale, polynomial, rateScale, g
 }
 
 // The normal u=0, mode=0 interpolation branch; this function deliberately
-// rejects other modes and extrapolation until their execution is verified.
+// rejects other modes. Endpoints clamp to the first/last value.
 export function interpolateHardness({ knots, values, velocity, u = 0, mode = 0 }) {
   if (u !== 0 || mode !== 0) throw new RangeError('Unverified interpolation mode');
   if (knots.length !== 5 || values.length !== 5 ||
@@ -42,6 +42,8 @@ export function interpolateHardness({ knots, values, velocity, u = 0, mode = 0 }
     if (!(knots[i] > knots[i - 1])) throw new RangeError('Knots must increase');
   }
   const v = fl(velocity);
+  if (v <= fl(knots[0])) return fl(values[0]);
+  if (v >= fl(knots[4])) return fl(values[4]);
   const i = knots.findIndex((k, index) => index < 4 && k <= v && v <= knots[index + 1]);
   if (i < 0) throw new RangeError('Extrapolation is outside the verified branch');
   const t = fl(fl(v - fl(knots[i])) / fl(fl(knots[i + 1]) - fl(knots[i])));
