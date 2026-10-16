@@ -12,11 +12,23 @@ from pianoteq_capture_coefficients import capture_record
 ROOT=Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
 WINDOW_BLOCKS=int(os.environ.get('PIANOTEQ_CONTINUOUS_BLOCKS','8'));assert 1<=WINDOW_BLOCKS<=512
 WINDOW_END=64*WINDOW_BLOCKS
+DISPATCH=os.environ.get('PIANOTEQ_CAPTURE_DISPATCH','0')=='1'
 POINTS={'before':0x10035ef10,'weights':0x100695108,'final':0x100864d28,'envelopeResult':0x100472fd0,'copy':0x1004604d4,'coefficients':0x1006e5360}
+if DISPATCH:POINTS['coefficients']=0x100472f50
 records=[];errors=[];hooks={};voices={};owners={};initialized=set();pending={};envelope_pending={};envelope_completed={};sample_counters={};blocks=0;duplicates=0;last_seen={};starts=0;updates=0;final_calls=0;spectrum_calls=0;copies=0;coefficients=0;complete=False
 
 def save():
- (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'windowBlocks':WINDOW_BLOCKS,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='copy' and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+ (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'windowBlocks':WINDOW_BLOCKS,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='copy' and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+def skipped_state(frame,v):
+ o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
+ layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
+ pointers={k:scalar(frame,v+off,'Q') for k,off in {'frequency':0x20,'modalDecay':0x48,'J':0x1b0,'K':0xe8,'S':0x110,'sinInverse':0x138,'radius':0x160,'energy':0x188,'weight':0x788}.items()}
+ pointers.update(P=scalar(frame,o+0x58,'Q'),Q=scalar(frame,o+0x80,'Q'));coeff=scalar(frame,o+8,'Q');lanes=[]
+ for group,(start,_,_,count) in enumerate(layout):
+  for lane in range(start,(start+count+3)//4*4):
+   index=lane//4*8+lane%4
+   lanes.append({'lane':lane,'group':group,**{k:scalar(frame,p+lane*4) for k,p in pointers.items()},'A':scalar(frame,coeff+index*4),'B':scalar(frame,coeff+(index+4)*4)})
+ return {'groups':layout,'lanes':lanes,'threshold':scalar(frame,v+0x774),'keepSlots':scalar(frame,v+0x718,'B'),'energyLayout':scalar(frame,o+0xe4,'I')}
 def continuous_record(frame):
  # 7fc is not used by the reconstructed arithmetic. Preserve its raw word;
  # the legacy generic reader's float view may be NaN in this live window.
@@ -116,9 +128,14 @@ def observed(frame,location,_):
   elif stage=='coefficients':
    v=register(frame,'x19');voice=v-0x168
    if voice not in voices:return False
-   records.append({'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'modal':hex(v),'counter':scalar(frame,v+0x10,'I'),'owner':hex(owners[voice]),'sourceX':scalar(frame,owners[voice]+0xe4),'currentX':scalar(frame,voice+0x2f38),'u':regfloat(frame,'s1','f'),'modalX':scalar(frame,v+0x8c4),'releaseFlag':scalar(frame,v+0x924,'B'),
+   records.append({'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'modal':hex(v),'counter':scalar(frame,v+0x10,'I'),'owner':hex(owners[voice]),'sourceX':scalar(frame,owners[voice]+0xe4),'currentX':scalar(frame,voice+0x2f38),'u':scalar(frame,v+0x8cc) if DISPATCH else regfloat(frame,'s1','f'),'modalX':scalar(frame,v+0x8c4),'releaseFlag':scalar(frame,v+0x924,'B'),
     'inputs':{'polynomial':list(unpack(frame,v+0x914,'f'))+list(unpack(frame,v+0x94c,'ffff')),'cubicScale':scalar(frame,v+0x91c),'rateScale':scalar(frame,v+0x910),'gainScale':scalar(frame,v+0x90c),'cubicGainScale':scalar(frame,v+0x920)},
     'actual':{'duration':scalar(frame,v+0x944),'rate':scalar(frame,v+0x7e4),'gain':scalar(frame,v+0x7b0)}});coefficients+=1
+   if DISPATCH:
+    flag=scalar(frame,v+0x80c,'B');phase=scalar(frame,v+0x814,'I');factor=scalar(frame,v+0x810,'I')
+    assert flag in (0,1) and factor==1 and phase==0
+    r=records[-1];r['dispatch']={'required':flag==1,'flag':flag,'phase':phase,'factor':factor,'initial':scalar(frame,v+0x18,'B'),'committedU':scalar(frame,v+0x8c8)}
+    if r['epoch']==0 and 0<r['counter']<=WINDOW_END and not r['dispatch']['required']:r['skippedState']=skipped_state(frame,v)
   else:
    v=register(frame,'x19');voice=v-0x168
    if voice not in voices:return False
@@ -143,7 +160,12 @@ def finish():
  global complete
  assert starts==5 and spectrum_calls==10 and final_calls==5 and coefficients>0 and blocks>0 and copies>0 and not envelope_pending and not pending and not errors
  assert [r['counter'] for r in records if r['stage']=='copy' and 'render' in r]==list(range(0,WINDOW_END,64))
- assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh']==list(range(64,WINDOW_END+1,64))
+ expected=list(range(64,WINDOW_END+1,64))
+ if DISPATCH:
+  decisions=[r for r in records if r['stage']=='coefficients' and r['epoch']==0 and r['counter']<=WINDOW_END]
+  assert [r['counter'] for r in decisions]==list(range(0,WINDOW_END+1,64))
+  expected=[r['counter'] for r in decisions if r['counter']>0 and r['dispatch']['required']]
+ assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh']==expected
  for h in hooks.values():h.SetEnabled(False)
  complete=True;save()
 def __lldb_init_module(debugger,_):
