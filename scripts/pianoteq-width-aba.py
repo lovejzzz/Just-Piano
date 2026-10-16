@@ -61,30 +61,32 @@ def main():
     parser.add_argument('--pid',type=int,required=True);parser.add_argument('--port',type=int,required=True)
     parser.add_argument('--out',type=Path,required=True);parser.add_argument('--midi',type=Path,required=True)
     parser.add_argument('--cwd',type=Path,required=True)
+    parser.add_argument('--parameter',default='stereo_width',help='Normal API parameter with initial value .5')
     args=parser.parse_args();owned(args.port,args.pid)
     with socket.socket() as probe:probe.bind(('127.0.0.1',args.port+1))
     out=args.out;out.mkdir(exist_ok=False,parents=True)
     bank='Codex Analysis '+str(uuid.uuid4())
     bankpath=Path.home()/'Library/Application Support/Modartt/Pianoteq/Presets'/bank
-    report={'bank':bank,'guiPid':args.pid,'cases':{},'comparisons':{},'complete':False}
+    report={'bank':bank,'guiPid':args.pid,'cases':{},'comparisons':{},'complete':False,'parameter':args.parameter}
     def save(): (out/'report.json').write_text(json.dumps(report,indent=2))
     try:
         report['audioDevice']=rpc(args.port,'getAudioDeviceInfo')
         assert report['audioDevice']['status']=='running'
         report['initialParameters']=rpc(args.port,'getParameters')
         initial={p['id']:p['normalized_value'] for p in report['initialParameters']}
-        assert abs(initial['stereo_width']-.5)<1e-6
+        assert abs(initial[args.parameter]-.5)<1e-6
         # No preset reload between saves: A/B/A from the same initial state.
-        for name,value in [('baseline50_a',.5),('width25',.25),('baseline50_b',.5)]:
+        treatmentName='width25' if args.parameter=='stereo_width' else args.parameter+'25'
+        for name,value in [('baseline50_a',.5),(treatmentName,.25),('baseline50_b',.5)]:
             owned(args.port,args.pid)
-            rpc(args.port,'setParameters',{'list':[{'id':'stereo_width','normalized_value':value}]})
+            rpc(args.port,'setParameters',{'list':[{'id':args.parameter,'normalized_value':value}]})
             case={'requested':value,'committedInfo':settle(args.port),'parameters':rpc(args.port,'getParameters')}
             report['cases'][name]=case;save()
             expected={p['id']:p['normalized_value'] for p in case['parameters']}
             assert expected.keys()==initial.keys()
             case['changedFromInitial']=[k for k in initial if abs(initial[k]-expected[k])>1e-6]
-            assert all(k=='stereo_width' for k in case['changedFromInitial'])
-            assert abs(expected['stereo_width']-value)<1e-6
+            assert all(k==args.parameter for k in case['changedFromInitial'])
+            assert abs(expected[args.parameter]-value)<1e-6
             rpc(args.port,'savePreset',{'name':name,'bank':bank,'preset_type':'full'})
             source=bankpath/(name+'.fxp');dest=out/(name+'.fxp')
             shutil.copy2(source,dest);source.unlink();case['presetSha256']=hashlib.sha256(dest.read_bytes()).hexdigest();save()
@@ -118,11 +120,13 @@ def main():
                 run=subprocess.run(command,cwd=args.cwd,stdout=log,stderr=subprocess.STDOUT,timeout=120)
             case['renderExit']=run.returncode;save();assert run.returncode==0
             case['pcm']=pcm(out/(name+'.wav'))[0];save();print(name,'saved, restored, rendered',flush=True)
-        for name,left,right in [('baselineRepeat','baseline50_a','baseline50_b'),('treatment','baseline50_a','width25')]:
+        for name,left,right in [('baselineRepeat','baseline50_a','baseline50_b'),('treatment','baseline50_a',treatmentName)]:
             report['comparisons'][name]=compare(out/(left+'.wav'),out/(right+'.wav'))
         report['complete']=True
         report['causalControlPassed']=report['comparisons']['baselineRepeat']['equal']
         save();print(json.dumps({'complete':True,'comparisons':report['comparisons']}),flush=True)
+        if not report['causalControlPassed']:
+            raise RuntimeError('A/A PCM did not repeat; causal control failed')
     finally:
         save()
         if bankpath.exists() and not any(bankpath.iterdir()):bankpath.rmdir()

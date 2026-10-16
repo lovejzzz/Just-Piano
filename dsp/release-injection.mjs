@@ -2,6 +2,7 @@
  * These operations are distinct from the modal string/damper solver.
  */
 import { fma32 } from './modal-kernel.mjs';
+import { nativeScalarExp } from './native-scalar-exp.mjs';
 const f = Math.fround;
 
 export function generateReleaseInjection(input, target, state) {
@@ -59,4 +60,18 @@ export function modulateReleaseInjection(filtered, state) {
 export function addReleaseInjection(primary, injection) {
   if (primary.length !== injection.length) throw new Error('Mismatched release injection shape');
   return Float32Array.from(primary, (sample, i) => f(sample + injection[i]));
+}
+
+/** 84141c standard-piano, constant per-key curve setup.
+ * Global model controls are supplied by the caller; live GUI-to-global scaling
+ * and the instrument-specific correction branch are not reconstructed here.
+ */
+export function initializeReleaseSource({ amplitude, shape, sampleRate, timeScale, frequency, decibels }) {
+  if (![amplitude, shape, sampleRate, timeScale, frequency, decibels].every(Number.isFinite) ||
+      sampleRate <= 0 || timeScale <= 0) throw new Error('Invalid release-source setup');
+  decibels = Math.max(-100, Math.min(f(decibels), 24));
+  const angle = f(f(frequency / sampleRate) * f(2 * Math.PI));
+  return { amplitude: decibels === 0 ? f(amplitude) : f(nativeScalarExp(f(decibels * f(.115129255))) * f(amplitude)),
+    shape: f(shape), position: 1, maxStep: f(1 / f(timeScale * sampleRate)), real: 1, imaginary: 0,
+    cosine: f(Math.cos(angle)), sine: f(Math.sin(angle)), lastMagnitude: 0 };
 }

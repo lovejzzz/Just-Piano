@@ -1,14 +1,21 @@
 // Calculated voice-delay output -> release source -> designed filter -> oscillator -> primary.
 import fs from 'node:fs';
-import { generateReleaseInjection, modulateReleaseInjection, addReleaseInjection } from '../dsp/release-injection.mjs';
+import { generateReleaseInjection, modulateReleaseInjection, addReleaseInjection, initializeReleaseSource } from '../dsp/release-injection.mjs';
 import { initializeReleaseFilters } from '../dsp/release-filter-design.mjs';
 import { renderVectorFilter } from '../dsp/vector-filter.mjs';
 import { scaleVoiceGroups } from '../dsp/voice-output-delay.mjs';
 const [capturePath, reportPath, option, sourcePath, ...extra] = process.argv.slice(2);
-if (!capturePath || !reportPath || option !== '--source-report' || !sourcePath || (extra.length && (extra.length !== 2 || extra[0] !== '--consumer-capture'))) {
+const optional = new Map();
+if (extra.length % 2) throw new Error('Optional inputs must be name/path pairs');
+for (let i=0; i<extra.length; i+=2) {
+  if (!['--consumer-capture','--setup-capture'].includes(extra[i]) || optional.has(extra[i])) throw new Error('Invalid optional input');
+  optional.set(extra[i], extra[i+1]);
+}
+if (!capturePath || !reportPath || option !== '--source-report' || !sourcePath) {
   throw new Error('Usage: capture.json report.json --source-report calculated-consumer-delay.json');
 }
-const consumerPath = extra[1];
+const consumerPath = optional.get('--consumer-capture');
+const setupPath = optional.get('--setup-capture');
 const data = JSON.parse(fs.readFileSync(capturePath, 'utf8'));
 const source = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
 if (data.schema !== 1 || !data.windowComplete || data.errors.length ||
@@ -48,8 +55,22 @@ for (const r of source.predictions) if (r.group === 0) {
 const initial = blocks.get(0)?.get('entry');
 if (!initial) throw new Error('Missing initial injection entry');
 const c = initial.state;
-const state = { amplitude: c['0x0'], shape: c['0x4'], position: c['0x8'], maxStep: c['0xc'],
+let state = { amplitude: c['0x0'], shape: c['0x4'], position: c['0x8'], maxStep: c['0xc'],
   real: c['0x38'], imaginary: c['0x3c'], cosine: c['0x40'], sine: c['0x44'], lastMagnitude: c['0x48'] };
+if (setupPath) {
+  const setup = JSON.parse(fs.readFileSync(setupPath,'utf8'));
+  if (!setup.windowComplete || setup.errors.length || setup.records.length !== 3 ||
+      setup.records.some((r,i) => r.stage !== ['entry','decibels','oscillator'][i])) throw new Error('Incomplete source setup');
+  const seed = setup.records[0], result = setup.records[2], g = seed.global;
+  if (seed.curveMode !== 0 || seed.flags['0x18'] === 1 || seed.flags['0x1a'] & 1 ||
+      seed.flags['0x1d'] & 1 || seed.flags['0x1e'] & 1 || seed.modelMode === 2) throw new Error('Unverified source-setup correction branch');
+  const decibels = Math.max(-100,Math.min(seed.curveValue,24));
+  check('setupConstantCurve',[decibels],[setup.records[1].decibels]);
+  state = initializeReleaseSource({amplitude:g['0xfc4'],shape:g['0xfc8'],sampleRate:g['0x98'],
+    timeScale:g['0xe48'],frequency:g['0x78'],decibels});
+  check('sourceSetup',[state.amplitude,state.shape,state.position,state.maxStep,state.real,state.imaginary,state.lastMagnitude,state.cosine,state.sine],
+    [result.state['0x0'],result.state['0x4'],result.state['0x8'],result.state['0xc'],result.state['0x38'],result.state['0x3c'],result.state['0x48'],result.cosine,result.sine]);
+}
 if (initial.filterChannels.length !== 1 || initial.filterFast !== 1) throw new Error('Unverified filter configuration');
 const filterControl = initial.filterChannels[0];
 const controls = [];
@@ -143,7 +164,7 @@ if (consumerPath) {
 const count = checks.reduce((n,c) => n+c.count, 0), mismatches = checks.reduce((n,c) => n+c.mismatches, 0);
 const report = { passed: mismatches === 0, count, matched: count-mismatches, mismatches, windowComplete:true,
   blocks:blocks.size, generatedBlocks, skippedBlocks, changedPrimarySamples,
-  calculatedDelayInput:true, initialInjectionStateReadOnce:true, filterHistoryStartsAtZero:true,
+  calculatedDelayInput:true, initialInjectionStateReadOnce:!setupPath, sourceSetupComputed:!!setupPath, globalSourceControlsStillCaptured:true, filterHistoryStartsAtZero:true,
   filterCoefficientsComputed:true, filterTableComputed:true, filterControlsReadOnce:true,
   releaseTargetsStillObserved:true, upstreamFromSeparateVerifiedRun:true,
   observedConsumerWindowChainVerified:consumerChainVerified,
