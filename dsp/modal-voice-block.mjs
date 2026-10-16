@@ -6,9 +6,10 @@ export function renderModalVoiceBlock(states,layout,samples){
  return layout.map(([start,padded,capacity,count])=>{
   if(![start,padded,capacity,count].every(Number.isInteger)||start<0||start%4||count<0||count>capacity||padded<start+count)throw new RangeError('Normal modal group layout required');
   const length=Math.ceil(count/4)*4,prefix=Math.floor(length/16)*16,remainder=length-prefix;
-  if(remainder>8)throw new RangeError('Twelve-lane remainder not recovered');
   const chunks=Array.from({length:prefix/16},(_,i)=>[start+i*16,16]);
-  if(remainder)chunks.push([start+prefix,8]);
+  // 7c0edc..ee4 subtracts two four-lane vectors per tail iteration.
+  // A twelve-lane remainder therefore runs two eight-lane kernels.
+  for(let offset=0;offset<remainder;offset+=8)chunks.push([start+prefix+offset,8]);
   const output=new Float32Array(samples);
   for(const [lane,width] of chunks){
    if(lane+width>padded)throw new RangeError('Kernel tail exceeds padded group');

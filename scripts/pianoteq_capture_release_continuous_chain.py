@@ -10,11 +10,13 @@ from pianoteq_capture_final_excitation import table
 from pianoteq_capture_source_weights import curve
 from pianoteq_capture_coefficients import capture_record
 ROOT=Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
+WINDOW_BLOCKS=int(os.environ.get('PIANOTEQ_CONTINUOUS_BLOCKS','8'));assert 1<=WINDOW_BLOCKS<=512
+WINDOW_END=64*WINDOW_BLOCKS
 POINTS={'before':0x10035ef10,'weights':0x100695108,'final':0x100864d28,'envelopeResult':0x100472fd0,'copy':0x1004604d4,'coefficients':0x1006e5360}
 records=[];errors=[];hooks={};voices={};owners={};initialized=set();pending={};envelope_pending={};envelope_completed={};sample_counters={};blocks=0;duplicates=0;last_seen={};starts=0;updates=0;final_calls=0;spectrum_calls=0;copies=0;coefficients=0;complete=False
 
 def save():
- (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='copy' and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+ (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'windowBlocks':WINDOW_BLOCKS,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='copy' and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
 def continuous_record(frame):
  # 7fc is not used by the reconstructed arithmetic. Preserve its raw word;
  # the legacy generic reader's float view may be NaN in this live window.
@@ -80,7 +82,7 @@ def observed(frame,location,_):
    records.append({'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'counter':scalar(frame,voice+0x6c,'I'),
     'release':scalar(frame,voice+0x2f24),'modalPosition':scalar(frame,voice+0xab0),
     'producerActual':{'repeatFlag':scalar(frame,voice+0x2ff0,'B'),'age':scalar(frame,voice+0x2ffc),'oldVelocity':scalar(frame,voice+0x3000),'attenuation':scalar(frame,voice+0x2ff8),'history':list(unpack(frame,voice+0x3010,'f'*n)) if n else []}})
-   if voices[voice]==0 and 0<=records[-1]['counter']<=448:
+   if voices[voice]==0 and 0<=records[-1]['counter']<WINDOW_END:
     v=voice+0x168;o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
     layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
     samples=scalar(frame,v+0x768,'I');delay=scalar(frame,v+0x76c,'I');assert samples==64
@@ -98,7 +100,7 @@ def observed(frame,location,_):
    if voice not in voices:return False
    if scalar(frame,v+0x18,'B')!=1:
     counter=scalar(frame,v+0x10,'I')
-    if voices[voice]==0 and 0<counter<=512:
+    if voices[voice]==0 and 0<counter<=WINDOW_END:
      records.append({'stage':'refresh','thread':thread,'epoch':voices[voice],'voice':hex(voice),'modal':hex(v),'target':continuous_record(frame),
       'positionInputs':{'position':scalar(frame,v+0x8d4),'referenceFrequency':scalar(frame,v+0x918),'rolloff':scalar(frame,v+0x908),'cutoffIndex':scalar(frame,v+0x928,'I')}})
     return False
@@ -140,8 +142,8 @@ def observed(frame,location,_):
 def finish():
  global complete
  assert starts==5 and spectrum_calls==10 and final_calls==5 and coefficients>0 and blocks>0 and copies>0 and not envelope_pending and not pending and not errors
- assert [r['counter'] for r in records if r['stage']=='copy' and 'render' in r]==list(range(0,449,64))
- assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh']==list(range(64,513,64))
+ assert [r['counter'] for r in records if r['stage']=='copy' and 'render' in r]==list(range(0,WINDOW_END,64))
+ assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh']==list(range(64,WINDOW_END+1,64))
  for h in hooks.values():h.SetEnabled(False)
  complete=True;save()
 def __lldb_init_module(debugger,_):
