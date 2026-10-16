@@ -1,4 +1,4 @@
-"""Six fixed sites: continuous release -> both excitations -> final initialization -> continuous modal blocks."""
+"""Six active hardware sites: initialization and continuous modal/consumer processing."""
 import json,os,traceback
 from pathlib import Path
 from pianoteq_damper_runtime_capture import scalar,unpack,verify_text
@@ -12,16 +12,18 @@ from pianoteq_capture_coefficients import capture_record
 ROOT=Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
 WINDOW_BLOCKS=int(os.environ.get('PIANOTEQ_CONTINUOUS_BLOCKS','8'));assert 1<=WINDOW_BLOCKS<=512
 WINDOW_END=64*WINDOW_BLOCKS
-CONSUMER_DELAY=os.environ.get('PIANOTEQ_CONSUMER_DELAY','0')=='1'
+CONSUMER_INJECTION=os.environ.get('PIANOTEQ_CONSUMER_INJECTION','0')=='1'
+CONSUMER_DELAY=CONSUMER_INJECTION or os.environ.get('PIANOTEQ_CONSUMER_DELAY','0')=='1'
 ALL_VOICES=CONSUMER_DELAY or os.environ.get('PIANOTEQ_ALL_VOICES','0')=='1'
 DISPATCH=ALL_VOICES or os.environ.get('PIANOTEQ_CAPTURE_DISPATCH','0')=='1'
 POINTS={'before':0x10035ef10,'weights':0x100695108,'final':0x100864d28,'envelopeResult':0x100472fd0,'copy':0x1004604d4,'coefficients':0x1006e5360}
 if DISPATCH:POINTS['coefficients']=0x100472f50
 records=[];errors=[];hooks={};voices={};owners={};initialized=set();pending={};envelope_pending={};envelope_completed={};sample_counters={};blocks=0;duplicates=0;last_seen={};starts=0;updates=0;final_calls=0;spectrum_calls=0;copies=0;coefficients=0;complete=False
 transitions=[]
+release_sources={}
 
 def save():
- (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'workerOutputs':ALL_VOICES,'windowBlocks':None if ALL_VOICES else WINDOW_BLOCKS,'fixedSites':not CONSUMER_DELAY,'consumerDelay':CONSUMER_DELAY,'transitions':transitions,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']==('envelopeResult' if ALL_VOICES else 'copy') and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+ (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'workerOutputs':ALL_VOICES,'windowBlocks':None if ALL_VOICES else WINDOW_BLOCKS,'fixedSites':not CONSUMER_DELAY,'consumerDelay':CONSUMER_DELAY,'consumerInjection':CONSUMER_INJECTION,'injectionEntryObserved':False,'transitions':transitions,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']==('envelopeResult' if ALL_VOICES else 'copy') and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
 def delay_states(frame,h,include_ring):
  count=scalar(frame,h+0x2b40,'Q');assert 0<=count<=3
  result=[]
@@ -42,6 +44,34 @@ def activate_consumer(frame):
  h=t.GetBreakpointAtIndex(t.GetNumBreakpoints()-1);h.SetScriptCallbackFunction(__name__+'.observed');h.SetAutoContinue(True);hooks['consumer']=h;POINTS['consumer']=address
  assert t.GetNumBreakpoints()==len(hooks)==6 and all(b.IsEnabled() and b.IsHardware() for b in hooks.values())
  transitions.append({'afterInitializations':final_calls,'weightsSeen':spectrum_calls,'removedWeightId':old_id,'consumerId':h.GetID(),'consumerAddress':hex(address),'activeSites':6})
+ if CONSUMER_INJECTION:
+  for removed,name,address in [('before','injectionMixed',0x1000fbe50)]:
+   old=hooks.pop(removed);old_id=old.GetID();assert t.BreakpointDelete(old_id);del POINTS[removed]
+   result=__import__('lldb').SBCommandReturnObject();debugger.GetCommandInterpreter().HandleCommand(f'breakpoint set --hardware --address {address:#x} --shlib "Pianoteq 9"',result);assert result.Succeeded(),result.GetError()
+   h=t.GetBreakpointAtIndex(t.GetNumBreakpoints()-1);h.SetScriptCallbackFunction(__name__+'.observed');h.SetAutoContinue(True);hooks[name]=h;POINTS[name]=address
+   assert t.GetNumBreakpoints()==len(hooks)==6 and all(b.IsEnabled() and b.IsHardware() for b in hooks.values())
+   transitions.append({'afterInitializations':final_calls,'weightsSeen':spectrum_calls,'removedStage':removed,'removedId':old_id,'addedStage':name,'addedId':h.GetID(),'address':hex(address),'activeSites':6})
+
+
+def release_state(frame,e):
+ return {name:scalar(frame,e+off) for name,off in {'amplitude':0,'shape':4,'position':8,'maxStep':12,'real':0x38,'imaginary':0x3c,'cosine':0x40,'sine':0x44,'lastMagnitude':0x48}.items()}
+
+def release_filter(frame,e):
+ channels=scalar(frame,e+0x14,'I');assert channels==1
+ c=scalar(frame,e+0x18,'Q');begin,end=unpack(frame,c+0x30,'QQ');assert end>=begin and (end-begin)%16==0
+ n=(end-begin)//16;assert 0<n<=8
+ return {'sampleRate':scalar(frame,e+0x10),'fast':scalar(frame,e+0x34,'B'),'sections':n,'updating':scalar(frame,c+0x14,'B'),'coefficients':list(unpack(frame,begin,'f'*(n*4))),'table':list(unpack(frame,scalar(frame,c+0x88,'Q'),'f'*(n*32))),'history':list(unpack(frame,scalar(frame,c+0x60,'Q'),'f'*(n*4))),'controls':list(unpack(frame,scalar(frame,c+0x48,'Q'),'I'*(n*15))),'channelGainWords':list(unpack(frame,c,'I'*6))}
+
+def release_controls(frame,h):
+ parent=scalar(frame,register(frame,'x29')-0x80,'Q')
+ return {'voiceFlags':scalar(frame,h+0x2f4c,'B'),'mode':scalar(frame,parent+0x3d5,'B'),'modeSwitch':scalar(frame,parent+0x449,'B'),'overrideMode':scalar(frame,parent+0x3c6,'B'),'overrideSwitch':scalar(frame,parent+0x448,'B'),'position':scalar(frame,h+0x2ec8),'skip':scalar(frame,register(frame,'sp')+0x94,'I'),'voiceSkip':scalar(frame,h+0x160,'B')}
+
+def release_global(frame,g):
+ model=scalar(frame,g+0x1240,'Q')
+ return {'global':{hex(o):scalar(frame,g+o) for o in (0xfc4,0xfc8,0xe48,0x98,0x78)},'curveValue':scalar(frame,model+0x2d4),'curveMode':scalar(frame,model+0x2d8,'I'),'flags':{hex(o):scalar(frame,model+o,'B') for o in (0x18,0x1a,0x1d,0x1e)},'modelMode':scalar(frame,model+0x20,'I')}
+
+def release_seed(frame,h):
+ return {'state':release_state(frame,h+0xd08),'filter':release_filter(frame,h+0xd08),**release_sources[voices[h]]}
 
 def skipped_state(frame,v):
  o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
@@ -82,6 +112,7 @@ def observed(frame,location,_):
    scratch=register(frame,'x19');params=scalar(frame,scratch+0x118,'Q');voice=params-0x2fb8
    assert voice in voices and spectrum_calls<10
    g=scalar(frame,params,'Q');shared=scalar(frame,g+0x1240,'Q');count=scalar(frame,scratch+0xf8,'I');assert 0<count<=4096
+   if CONSUMER_INJECTION:release_sources[voices[voice]]=release_global(frame,g)
    read_array=lambda address:list(unpack(frame,address,'f'*count))
    records.append({'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'input':capture_inputs(frame,scratch),
     'controls':{'scale':scalar(frame,g+0xf0),'slopeBlend':scalar(frame,shared+0x274),'referenceTable':list(unpack(frame,scalar(frame,g+0x190,'Q'),'fff')),'referenceBlend':scalar(frame,scratch+0x70),'repeatFlag':scalar(frame,params+0x38,'B'),'u':scalar(frame,params+0x2c),'lowerBase':scalar(frame,g+0x1014),'lowerControl':scalar(frame,params+0x34),'lowerScale':scalar(frame,g+0xe7c),'lowerUSupport':scalar(frame,shared+0x4f8)},
@@ -120,6 +151,9 @@ def observed(frame,location,_):
     'producerActual':{'repeatFlag':scalar(frame,voice+0x2ff0,'B'),'age':scalar(frame,voice+0x2ffc),'oldVelocity':scalar(frame,voice+0x3000),'attenuation':scalar(frame,voice+0x2ff8),'history':list(unpack(frame,voice+0x3010,'f'*n)) if n else []}})
    if CONSUMER_DELAY:
     r=records[-1];r['consumerPre']={'controls':consumer_controls(frame,voice),'delays':delay_states(frame,voice,r['counter']==0 or r['counter']%(128*64)==0)}
+    if CONSUMER_INJECTION:
+     r['releaseControls']=release_controls(frame,voice)
+     if r['counter']==0:r['releaseSeed']=release_seed(frame,voice)
    if not ALL_VOICES and voices[voice]==0 and 0<=records[-1]['counter']<WINDOW_END:
     v=voice+0x168;o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
     layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
@@ -163,6 +197,12 @@ def observed(frame,location,_):
     assert flag in (0,1) and factor==1 and phase==0
     r=records[-1];r['dispatch']={'required':flag==1,'flag':flag,'phase':phase,'factor':factor,'initial':scalar(frame,v+0x18,'B'),'committedU':scalar(frame,v+0x8c8)}
     if r['counter']>0 and (ALL_VOICES or r['epoch']==0 and r['counter']<=WINDOW_END) and not r['dispatch']['required']:r['skippedState']=skipped_state(frame,v)
+  elif stage in ('injectionEntry','injectionMixed'):
+   e=register(frame,'x0' if stage=='injectionEntry' else 'x19');h=e-0xd08;assert h in voices
+   matrix=register(frame,'x1' if stage=='injectionEntry' else 'x20');rows,stride,n,sample_stride=unpack(frame,matrix,'IIII');assert rows==1 and n==64
+   r={'stage':stage,'epoch':voices[h],'voice':hex(h),'counter':scalar(frame,h+0x6c,'I'),'state':release_state(frame,e),'primary':list(unpack(frame,scalar(frame,matrix+16,'Q'),'f'*n)),'filter':release_filter(frame,e)}
+   if stage=='injectionEntry':r['target']=regfloat(frame,'s0','f')
+   records.append(r)
   elif stage=='consumer':
    h=register(frame,'x19');assert h in voices;counter=scalar(frame,h+0x6c,'I');matrix=register(frame,'x23');count=scalar(frame,matrix,'Q');assert count==3
    channels=[]
@@ -170,6 +210,7 @@ def observed(frame,location,_):
     descriptor=matrix+8+56*i;rows,stride,n,sample_stride=unpack(frame,descriptor,'IIII');assert rows==1 and n==64
     channels.append(list(unpack(frame,scalar(frame,descriptor+16,'Q'),'f'*n)))
    records.append({'stage':stage,'epoch':voices[h],'voice':hex(h),'counter':counter,'channels':channels,'controls':consumer_controls(frame,h),'delays':delay_states(frame,h,counter%(128*64)==0)})
+   if CONSUMER_INJECTION:records[-1]['injectionPre']={'state':release_state(frame,h+0xd08),'filter':release_filter(frame,h+0xd08),'controls':release_controls(frame,h)}
   else:
    v=register(frame,'x19');voice=v-0x168
    if voice not in voices:return False
@@ -214,7 +255,7 @@ def finish():
    assert [r['counter'] for r in rendered]==list(range(64,(len(rendered)+1)*64,64)) and all('render' in r and 'postState' in r for r in rendered)
    assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh' and r['epoch']==epoch]==[r['counter'] for r in decisions if r['counter']>0 and r['dispatch']['required']]
   if CONSUMER_DELAY:
-   assert len(transitions)==1 and transitions[0]['activeSites']==6
+   assert len(transitions)==(2 if CONSUMER_INJECTION else 1) and all(t['activeSites']==6 for t in transitions)
    for epoch in range(5):
     copies_for_voice=[r['counter'] for r in records if r['stage']=='copy' and r['epoch']==epoch]
     observed=[r['counter'] for r in records if r['stage']=='consumer' and r['epoch']==epoch]
@@ -248,6 +289,7 @@ def resume_owned_stops(debugger):
  for _ in range(8192):
   if process.GetState()!=lldb.eStateStopped:break
   assert not errors
+  owned={h.GetID() for h in hooks.values()}
   details=[];matched=False
   for thread in process:
    reason=thread.GetStopReason()
