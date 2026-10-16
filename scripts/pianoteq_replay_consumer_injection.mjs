@@ -1,3 +1,4 @@
+import {renderVoiceGroupEnvelope} from '../dsp/voice-group-envelope.mjs';
 // Same-run calculated delay groups -> release source -> filter -> primary add.
 import {initializeReleaseSource,generateReleaseInjection,modulateReleaseInjection,addReleaseInjection} from '../dsp/release-injection.mjs';
 import {initializeReleaseFilters} from '../dsp/release-filter-design.mjs';
@@ -8,9 +9,9 @@ export function verifyConsumerInjection(data,calculated,check){
  const fromBits=x=>{view.setUint32(0,x);return view.getFloat32(0);};
  const array=(name,a,b)=>{if(a.length!==b?.length)throw new Error(`Incomplete ${name}`);a.forEach((v,i)=>check(name,v,b[i]));};
  const sources=new Map(calculated.map(r=>[`${r.epoch}:${r.counter}`,r.channels]));
- const entryObserved=data.injectionEntryObserved===true;
+ const entryObserved=data.injectionEntryObserved===true,postMode=data.consumerPost===true;
  const observed=new Map();
- for(const r of data.records.filter(r=>['injectionEntry','injectionMixed'].includes(r.stage))){
+ for(const r of data.records.filter(r=>['injectionEntry','injectionMixed','consumerPost'].includes(r.stage))){
   const key=`${r.epoch}:${r.counter}`;
   if(!observed.has(key))observed.set(key,{});
   const stages=observed.get(key);if(stages[r.stage])throw new Error('Duplicate release injection observation');stages[r.stage]=r;
@@ -21,7 +22,7 @@ export function verifyConsumerInjection(data,calculated,check){
   if(observed.get(key).injectionEntry)throw new Error('Ambiguous pre-injection observation');
   observed.get(key).injectionEntry={...r.injectionPre,primary:r.channels[0]};
  }
- const outputs=[],coverage=[];let generatedBlocks=0,skippedBlocks=0,inferredControlBlocks=0,entryBlocks=0,mixedBlocks=0;
+ const outputs=[],coverage=[];let generatedBlocks=0,skippedBlocks=0,inferredControlBlocks=0,entryBlocks=0,mixedBlocks=0,postComparedBlocks=0;const groupEnvelopeInitialStates=[];
  const releasePositionBridges=[];
  const compareState=(state,target,after)=>{
   for(const key of Object.keys(state))if(!after||key!=='lastMagnitude')check('injection:state:'+key,state[key],target[key]);
@@ -60,6 +61,25 @@ export function verifyConsumerInjection(data,calculated,check){
    array('injection:history',Array.from(filter.history),t.history);
   };
   compareFilter(setup);
+  let groupEnvelope;
+  const comparePost=(channels,actual,age,begin)=>{
+   if(!postMode||age<begin)return;
+   const pre=actual.injectionEntry,post=actual.consumerPost;
+   if(!pre||!post||pre.preGain?.currentGain!==1||pre.preGain.active!==0||!pre.envelope||!post.envelope)throw new Error('Verified unit pre-gain and group-envelope observations required');
+   if(!groupEnvelope){groupEnvelope={...pre.envelope};groupEnvelopeInitialStates.push({epoch,age,...groupEnvelope});}
+   else{
+    check('group-envelope:pre-gain',groupEnvelope.gain,pre.envelope.gain);
+    check('group-envelope:pre-step',groupEnvelope.step,pre.envelope.step);
+    for(const key of ['active','elapsed','duration'])if(groupEnvelope[key]!==pre.envelope[key])throw new Error('Unobserved group-envelope control transition');
+   }
+   const scaled=renderVoiceGroupEnvelope(channels,groupEnvelope);
+   for(const key of ['gain','step'])check('group-envelope:post-'+key,groupEnvelope[key],post.envelope[key]);
+   for(const key of ['active','elapsed','duration'])if(groupEnvelope[key]!==post.envelope[key])throw new Error('Group-envelope post state differs');
+   if(post.channels.length!==3)throw new Error('Three complete post-release groups required');
+   scaled.forEach((group,i)=>array('consumer-post:output',Array.from(group),post.channels[i]));
+   compareState(state,post.state,false);compareFilter(post.filter);postComparedBlocks++;return scaled;
+  };
+
   const targets=data.records.filter(r=>r.stage==='consumer'&&r.epoch===epoch);
   if(!targets.length)throw new Error('Missing release observation interval');
   const begin=targets[0].counter,end=targets.at(-1).counter;
@@ -99,7 +119,7 @@ export function verifyConsumerInjection(data,calculated,check){
    if(!enabled){
     if(entryObserved&&actual.injectionEntry||actual.injectionMixed)throw new Error('Unexpected disabled injection observation');
     if(age>=begin&&!entryObserved){compareState(state,actual.injectionEntry.state,false);compareFilter(actual.injectionEntry.filter);entryBlocks++;voiceEntries++;}
-    outputs.push({epoch,counter:age,channels:input,enabled:false});continue;
+    const scaled=comparePost(input,actual,age,begin);outputs.push({epoch,counter:age,channels:scaled?scaled.map(x=>Array.from(x)):input,enabled:false});continue;
    }
    let target=c.mode===1?(c.modeSwitch?0:1):c.position;
    if(c.overrideMode===1&&c.overrideSwitch)target=1;
@@ -116,16 +136,17 @@ export function verifyConsumerInjection(data,calculated,check){
     filterReady=true;
     const filtered=renderVectorFilter(result.generated,filter.table,filter.history);
     const injection=modulateReleaseInjection(filtered,state);primary=Array.from(addReleaseInjection(input[0],injection));
-    if(age>=begin){
+    if(age>=begin&&!postMode){
      const mixed=actual.injectionMixed;if(!mixed)throw new Error('Missing active injection mixed target');
      compareState(state,mixed.state,true);compareFilter(mixed.filter);array('injection:primary',primary,mixed.primary);mixedBlocks++;voiceMixed++;
     }
     state.lastMagnitude=Math.max(0,...injection.map(x=>Math.abs(x)));generatedBlocks++;
    }
-   outputs.push({epoch,counter:age,channels:[Array.from(primary),input[1],input[2]],enabled:true});
+   const channels=[Array.from(primary),input[1],input[2]],scaled=comparePost(channels,actual,age,begin);outputs.push({epoch,counter:age,channels:scaled?scaled.map(x=>Array.from(x)):channels,enabled:true});
   }
   coverage.push({epoch,firstComparedAge:begin,lastComparedAge:end,entryBlocks:voiceEntries,mixedBlocks:voiceMixed});
  }
+ if(postMode&&(postComparedBlocks!==entryBlocks||postComparedBlocks!==data.records.filter(r=>r.stage==='consumerPost').length))throw new Error('Incomplete post-release observations');
  if(entryBlocks!==data.records.filter(r=>r.stage===(entryObserved?'injectionEntry':'consumer')).length||mixedBlocks!==data.records.filter(r=>r.stage==='injectionMixed').length)throw new Error('Unconsumed release injection observations');
- return {outputs,coverage,releasePositionBridges,releasePositionProducerComputed:false,entryBlocks,mixedBlocks,preStateObservations:entryBlocks,mixedPrimarySamples:mixedBlocks*64,generatedBlocks,skippedBlocks,inferredControlBlocks,initialSourceComputed:true,initialFilterComputed:true,globalSourceControlsObserved:true,entryObserved,preConsumerSkipWordNotConsumed:true,fullDispatchGateVerified:false,completePhysicsVerified:false};
+ return {outputs,coverage,postMode,postComparedBlocks,postOutputSamples:postComparedBlocks*3*64,unitPreGainBypassOnly:postMode,groupEnvelopeSeedObservedOnce:postMode,groupEnvelopeControlsObservedOnce:postMode,groupEnvelopeGainCarried:postMode,groupEnvelopeInitialStates,releasePositionBridges,releasePositionProducerComputed:false,entryBlocks,mixedBlocks,preStateObservations:entryBlocks,mixedPrimarySamples:mixedBlocks*64,generatedBlocks,skippedBlocks,inferredControlBlocks,initialSourceComputed:true,initialFilterComputed:true,globalSourceControlsObserved:true,entryObserved,preConsumerSkipWordNotConsumed:true,fullDispatchGateVerified:false,completePhysicsVerified:false};
 }
