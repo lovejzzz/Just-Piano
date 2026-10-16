@@ -41,6 +41,7 @@ pass12资源存档进一步落地：1105成员MD5全部验证；D4完整50份A�
 
 详细报告：
 
+- [模态筛选和分组索引](pianoteq-mode-selection-pass23.md)：五例949个有效索引独立计算；筛选与映射合计5849项逐位同，接回8块连续渲染35907float全同。多音序列首次原版与后续一致运行有1个24-bit单位差异，异常完整保留。
 - [激励表到声部初值与连续输出](pianoteq-voice-source-mapping-pass22.md)：源表重排、J 与参考衰减共921float逐位同；接入后8块连续渲染35907float全同，最终激励表和筛选索引仍外置。
 - [动态频率轨迹到连续输出](pianoteq-dynamic-pitch-pass21.md)：64个按住/释放记录、384float逐位同；替换捕获pitch后8块连续渲染33699float仍全同。
 - [模型曲线到动态音高控制源](pianoteq-pitch-source-controls-pass21.md)：68项真实曲线、力度缩放和初始化输出逐位同；共享控制及host78仍外置。

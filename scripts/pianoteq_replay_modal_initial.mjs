@@ -58,11 +58,14 @@ function compare(name, prediction, actual) {
   checks.push({ name, count: prediction.length, mismatches });
 }
 const mappedSources = new Map();
+let sourceIndexMapStillCaptured = true, sourceModeSelectionComputed = false;
 if (sourceMappingPath) {
   const report = read(sourceMappingPath);
   if (report.schema !== 'pianoteq-voice-source-mapping-pass22' || report.passed !== true || report.mismatches !== 0 ||
       report.predictions?.length !== 1 || JSON.stringify(report.predictions[0].layout) !== JSON.stringify(layout))
     throw new Error('Verified source mapping with matching layout required');
+  sourceIndexMapStillCaptured = report.indexMapStillCaptured !== false;
+  sourceModeSelectionComputed = report.modeSelectionComputed === true;
   for (const row of report.predictions[0].lanes) {
     if (!Number.isInteger(row.lane) || mappedSources.has(row.lane) ||
         !['frequency', 'decay', 'amplitude', 'phase', 'J'].every(key => Number.isFinite(row[key])))
@@ -278,7 +281,7 @@ const report = { schema: 'pianoteq-modal-initial-pass20', passed: checks.every(x
   recurrenceOutputSamples, comparedFloatValues: checks.reduce((n, x) => n + x.count, 0),
   mismatches: checks.reduce((n, x) => n + x.mismatches, 0), checks, failures,
   initialAmplitudePhaseFrequencyAndDecayStillCaptured: !sourceMappingPath,
-  postExcitationSourceStillCaptured: true, sourceIndexMapStillCaptured: true,
+  postExcitationSourceStillCaptured: true, sourceIndexMapStillCaptured, sourceModeSelectionComputed,
   sourceToVoiceMappingComputed: Boolean(sourceMappingPath), radiusCalculated: true,
   nativeMathOracleRequired: false, eightLaneTailGroups: tailGroups, completeFirstGroupBuffers: completeGroupBuffers,
   completeFirstGroupBufferSamples: completeGroupBuffers * 64,

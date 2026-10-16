@@ -13,7 +13,7 @@ export function mapVoiceSource({ source, columns, zeroAdjustmentRows, referenceR
     throw new RangeError('Invalid source row boundaries');
   let end = 0;
   for (const [start, padded, capacity, count] of layout) {
-    if (![start, padded, capacity, count].every(Number.isInteger) || start < end || count < 1 ||
+    if (![start, padded, capacity, count].every(Number.isInteger) || start < end || count < 0 ||
         capacity < count || padded < start + count || start % 4 || padded > 8192)
       throw new RangeError('Invalid or overlapping voice groups');
     end = padded;

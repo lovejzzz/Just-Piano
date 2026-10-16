@@ -37,7 +37,16 @@ def observed(frame, bp, _):
         header = list(unpack(frame, k, 'IIIIIIII'))
         size = scalar(frame, k + 0x28, 'Q')
         assert 0 < size <= 4096
+        config = frame.FindRegister('x26').GetValueAsUnsigned()
         record = {'V': hex(v), 'K': hex(k), 'header': header, 'layout': layout,
+                  'selection_controls': {
+                      'sampleRate': scalar(frame, config),
+                      'groupCount': scalar(frame, config + 8, 'I'),
+                      'splitFrequency': scalar(frame, config + 12),
+                      'alignment': scalar(frame, o + 0xe8, 'I'),
+                      'bypassAmplitudeFilter': scalar(frame, v + 0x718, 'B') & 1,
+                      'amplitudeThreshold': scalar(frame, v + 0x774),
+                      'projectedThreshold': scalar(frame, v + 0x778)},
                   'source_size': size,
                   'source': {name: floats(frame, scalar(frame, k + off, 'Q'), size)
                              for name, off in {'frequency': 0x20, 'decay': 0x48,

@@ -1,0 +1,51 @@
+"""Observe the scalar log2f return used in modal selection, read-only."""
+import json
+import os
+from pathlib import Path
+import traceback
+from pianoteq_damper_runtime_capture import scalar, verify_text
+from pianoteq_capture_source_amplitude import regfloat
+
+ROOT = Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
+POINT = 0x100839c50
+records, errors = [], []
+hook = None
+
+
+def save():
+    ROOT.mkdir(parents=True, exist_ok=True)
+    (ROOT / 'runtime.json').write_text(json.dumps({
+        'schema': 1, 'point': hex(POINT), 'records': records, 'errors': errors,
+        'hits': hook.GetHitCount() if hook else 0,
+    }, indent=2))
+
+
+def observed(frame, bp, _):
+    try:
+        assert len(records) < 16
+        v = frame.FindRegister('x20').GetValueAsUnsigned()
+        records.append({'threshold': scalar(frame, v + 0x778),
+                        'log2': regfloat(frame, 's0', 'f')})
+        save()
+        return False
+    except Exception:
+        errors.append(traceback.format_exc())
+        save()
+        return True
+
+
+def __lldb_init_module(debugger, _):
+    import lldb
+    global hook
+    assert not (ROOT / 'runtime.json').exists(), 'Use a fresh output directory'
+    target = debugger.GetSelectedTarget()
+    spec = target.GetModuleAtIndex(0).GetFileSpec()
+    verify_text(Path(spec.GetDirectory()) / spec.GetFilename())
+    result = lldb.SBCommandReturnObject()
+    debugger.GetCommandInterpreter().HandleCommand(
+        f'breakpoint set --hardware --address {POINT:#x} --shlib "Pianoteq 9"', result)
+    if not result.Succeeded():
+        raise RuntimeError(result.GetError())
+    hook = target.GetBreakpointAtIndex(target.GetNumBreakpoints() - 1)
+    hook.SetScriptCallbackFunction(__name__ + '.observed')
+    save()
