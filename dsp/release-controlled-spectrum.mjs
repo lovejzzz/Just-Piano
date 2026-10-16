@@ -3,7 +3,7 @@
 import {excitationHardness} from './excitation-hardness.mjs';
 import {nativeScalarCos} from './native-scalar-sin.mjs';
 import {excitationSpectrumControls, excitationExtraTable} from './excitation-spectrum-controls.mjs';
-import {buildLogSpectrum} from './excitation-spectrum.mjs';
+import {buildLogSpectrum, nativeExpWeights, applyModalWeight} from './excitation-spectrum.mjs';
 
 export function buildReleaseControlledSpectrum({input, repeat, controls, count,
  coordinates, baseTable, extraTables, extraControls}, math = {}) {
@@ -14,5 +14,14 @@ export function buildReleaseControlledSpectrum({input, repeat, controls, count,
   {...controls, repeatFlag: repeat.repeatFlag}, math);
  const extraTable = excitationExtraTable({count, tables: extraTables, controls: extraControls}, math);
  const logSpectrum = buildLogSpectrum({...spectrumControls, count, coordinates, baseTable, extraTable});
- return {hardness, controls: spectrumControls, extraTable, logSpectrum};
+ const [columns, rows] = input.header;
+ if (![1, 2, 3].includes(columns) || rows !== count ||
+     Object.values(input.source).some(a => a.length !== rows * columns))
+  throw new RangeError('Complete pre-weight modal source required');
+ const expWeights = nativeExpWeights(logSpectrum);
+ const weightedSource = Object.fromEntries(Object.entries(input.source).map(([key, values]) =>
+  [key, Float32Array.from(values)]));
+ weightedSource.amplitude = Float32Array.from(input.source.amplitude,
+  (amplitude, i) => applyModalWeight(amplitude, expWeights[Math.floor(i / columns)]));
+ return {hardness, controls: spectrumControls, extraTable, logSpectrum, expWeights, weightedSource};
 }
