@@ -58,3 +58,25 @@ export function nativeScalarExp(value) {
   const polynomial = fma64(C2, reduced, C1);
   return Math.fround(fma64(polynomial * reduced, scale, scale));
 }
+
+// exp2f uses the same table as expf, but rounds x to a 1/128 grid directly.
+// The special branch preserves floating values; exception flags are not modeled.
+const EXP2_SHIFT = from64(0x42c8000000000000n);
+const EXP2_C2 = from64(0x3fcebfbdff30d656n);
+const EXP2_C1 = from64(0x3fe62e4453e10daen);
+export function nativeScalarExp2f(value) {
+  const x = Math.fround(value);
+  if (!Number.isFinite(x) || Math.abs(x) >= 256) {
+    if (Number.isNaN(x)) return NaN;
+    return x < 0 ? 0 : Infinity;
+  }
+  const shifted = x + EXP2_SHIFT;
+  view.setFloat64(0, shifted);
+  const integerBits = view.getBigUint64(0);
+  const n = shifted - EXP2_SHIFT;
+  const reduced = x - n;
+  const scaleWord = BigInt.asUintN(64, TABLE[Number(integerBits & 127n)] + (integerBits << 45n));
+  const scale = from64(scaleWord);
+  const polynomial = fma64(EXP2_C2, reduced, EXP2_C1);
+  return Math.fround(fma64(polynomial * reduced, scale, scale));
+}

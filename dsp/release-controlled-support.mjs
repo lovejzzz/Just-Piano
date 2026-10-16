@@ -1,12 +1,14 @@
 // Append and repeated-strike stages following the independently computed spectrum.
-// exp2f/log10f are explicit platform dependencies, not silently approximated here.
+// History math defaults to the recovered scalar platform implementation.
+import {nativeScalarExp2f} from './native-scalar-exp.mjs';
+import {nativeScalarLog10f} from './native-scalar-log10.mjs';
 import {selectSupportRows, supportLogAmplitudes, appendExcitationSupport,
  appendSecondExcitationSupport} from './excitation-append.mjs';
 import {randomizeRepeatedExcitation, updateRepeatedSupportHistory} from './excitation-repeat.mjs';
 
 export function buildReleaseControlledSupport({input, repeat, spectrum, append,
  coordinates, baseTable, extraControls, randomState, randomScale, history,
- historyCurve, historyControls, secondFamilyEnabled}, math) {
+ historyCurve, historyControls, secondFamilyEnabled}, math = {exp2f: nativeScalarExp2f, log10f: nativeScalarLog10f}) {
  const {header, source: preWeightSource} = input;
  const indices = input.mode === 0 && extraControls.direction === 0
   ? selectSupportRows({header, source: preWeightSource, frequencies: append.tables.frequencies,
