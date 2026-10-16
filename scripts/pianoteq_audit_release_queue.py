@@ -49,8 +49,12 @@ def main():
                         help='Alternate local release-window replay implementation')
     parser.add_argument('--release-report', type=Path,
                         help='Calculated control timeline for worker-only render capture')
+    parser.add_argument('--source-report', type=Path,
+                        help='Calculated modal-group output for post-modal replay')
     args = parser.parse_args()
     replay_options = ['--release-report', str(args.release_report)] if args.release_report else []
+    if args.source_report:
+        replay_options += ['--source-report', str(args.source_report)]
     cases = [audit(directory, reference, args.replay_script, replay_options)
              for directory, reference in args.case]
     result = {'passed': all(c['passed'] for c in cases), 'cases': cases,
