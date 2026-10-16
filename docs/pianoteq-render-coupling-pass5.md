@@ -88,7 +88,7 @@ pass4 已证明释放状态先变成四次变量与四阶多项式，再进入�
 
 本轮进一步逐段核对 `pass4-voice-start.txt`（35ed60）、`pass4-voice-configure.txt`（07a60c）、`pass3-contact-parent-c.txt`（715f98）及 `pass4-main-excitation.txt`（692ffc）。旧 voice 为 U，新 voice 为 X，逐音符模型为 G。匹配旧 voice 后的条件分支确实反馈一些旧音符信息，但应按实际字段定名：
 
-- `U+6c` 的计数除以 `G+c`，保存 `X+2ffc`，记为 t；
+- `U+6c` 的计数除以主机对象的采样率 `host+c`，保存 `X+2ffc`，记为 t；pass73通过实际寄存器生产链和动态结果纠正了早期将该别名误记为 `G+c` 的表述，见[再击生产者验证](pianoteq-repeated-strike-producer-pass73.md)。
 - `U+78` 保存到 `X+3000`，记为 v_old；
 - `U+2ed8` 的 count（≤16）及 `U+2ee0` 起的 float 数组复制到 `X+3008/+3010`；
 - 随后 07a60c 在 `X+30a0<fffe` 分支，将临时 count／数组复制回新 voice 的 `X+2ed8/+2ee0`。

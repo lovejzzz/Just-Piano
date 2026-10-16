@@ -12,8 +12,16 @@ def vlq(number):
     return bytes(result)
 
 
-def fixture(slow=False):
-    if slow:
+def fixture(slow=False, expired=False):
+    if slow and expired:
+        raise ValueError('Choose one repeat stimulus')
+    if expired:
+        events = [(0, [0xb0, 64, 127])]
+        for tick in [96, 240, 1600, 1740, 3040]:
+            events.extend([(tick, [0x90, 69, 96]), (tick + 20, [0x80, 69, 0])])
+        events.extend([(3300, [0xb0, 64, 0]), (3360, [0xff, 0x2f, 0])])
+        events.sort(key=lambda event: event[0])
+    elif slow:
         events = [(0, [0xb0, 64, 0]), (96, [0x90, 69, 96]), (192, [0x80, 69, 0]),
                   (450, [0x90, 69, 96]), (500, [0x80, 69, 0]), (540, [0xb0, 64, 127]),
                   (900, [0x90, 69, 96]), (950, [0x80, 69, 0]),
@@ -36,7 +44,9 @@ def fixture(slow=False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
-    parser.add_argument('--slow', action='store_true')
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--slow', action='store_true')
+    group.add_argument('--expired', action='store_true', help='Two repeats exceed the one-second window under pedal')
     args = parser.parse_args()
     with args.output.open('xb') as output:
-        output.write(fixture(args.slow))
+        output.write(fixture(args.slow, args.expired))
