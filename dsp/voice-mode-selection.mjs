@@ -1,5 +1,6 @@
 // 839c04: frequency routing and short-term amplitude/decay mode culling.
 import { fma32 } from './modal-kernel.mjs';
+import { nativeScalarLog2f } from './native-scalar-log2.mjs';
 const f32 = Math.fround;
 const view = new DataView(new ArrayBuffer(8));
 const word = x => { view.setUint32(0, x); return view.getFloat32(0); };
@@ -7,7 +8,7 @@ const LN2 = Math.LN2; // binary64 word 3fe62e42fefa39ef
 const bits = x => { view.setFloat32(0, x); return view.getUint32(0); };
 
 export function selectVoiceModes({ source, columns, splitRow, sampleRate, groupCount, splitFrequency,
-  alignment, bypassAmplitudeFilter, amplitudeThreshold, projectedThreshold }, { log2f } = {}) {
+  alignment, bypassAmplitudeFilter, amplitudeThreshold, projectedThreshold }, { log2f = nativeScalarLog2f } = {}) {
   const size = source.frequency?.length;
   if (!Number.isInteger(columns) || columns < 1 || !size || size % columns ||
       !['frequency', 'amplitude', 'decay'].every(key => source[key]?.length === size && Array.from(source[key]).every(Number.isFinite)))
@@ -19,7 +20,7 @@ export function selectVoiceModes({ source, columns, splitRow, sampleRate, groupC
       ![sampleRate, splitFrequency, amplitudeThreshold, projectedThreshold].every(Number.isFinite) ||
       sampleRate <= 0 || amplitudeThreshold < 0 || projectedThreshold <= 0 ||
       typeof bypassAmplitudeFilter !== 'boolean' || typeof log2f !== 'function')
-    throw new RangeError('Selection controls and explicit scalar log2f required');
+    throw new RangeError('Selection controls and scalar log2f implementation required');
   sampleRate = f32(sampleRate); splitFrequency = f32(splitFrequency);
   amplitudeThreshold = f32(amplitudeThreshold); projectedThreshold = f32(projectedThreshold);
   const logThreshold = f32(log2f(projectedThreshold));

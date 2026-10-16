@@ -26,6 +26,7 @@ if (finalExcitation && (finalExcitation.schema !== 'pianoteq-final-excitation-pa
     finalExcitation.mismatches !== 0 || finalExcitation.predictions?.length !== capture.records.length || finalExcitation.finalSourceTablesCalculated !== true))
   throw new Error('Verified complete final-excitation predictions required');
 const checks = [], failures = [], predictions = [];
+let computedSelections = 0;
 const view = new DataView(new ArrayBuffer(4));
 const bits = x => { view.setFloat32(0, x); return view.getUint32(0); };
 function compare(name, predicted, actual) {
@@ -63,23 +64,24 @@ for (const [recordIndex, r] of capture.records.entries()) {
     }
   }
   let layout = r.layout, indices = r.voice.index, selection;
-  if (selectionLog) {
-    const controls = r.selection_controls, log = selectionLog.records[recordIndex];
-    if (!controls || bits(log.threshold) !== bits(controls.projectedThreshold)) throw new Error('Threshold identity mismatch');
+  if (r.selection_controls) {
+    const controls = r.selection_controls, log = selectionLog?.records[recordIndex];
+    if (log && bits(log.threshold) !== bits(controls.projectedThreshold)) throw new Error('Threshold identity mismatch');
     selection = selectVoiceModes({ ...controls, bypassAmplitudeFilter: Boolean(controls.bypassAmplitudeFilter),
-      source, columns, splitRow: lower }, { log2f: x => Math.fround(Math.log2(x)) });
-    compare('threshold-log2', [selection.logThreshold], [log.log2]);
+      source, columns, splitRow: lower });
+    computedSelections++;
+    if (log) compare('threshold-log2', [selection.logThreshold], [log.log2]);
     compare('selected-layout', selection.layout.flat(), r.layout.flat());
     const valid = r.layout.flatMap(([start, , , count]) => Array.from({ length: count }, (_, i) => start + i));
     compare('selected-indices', valid.map(i => selection.indices[i]), valid.map(i => r.voice.index[i]));
     layout = selection.layout; indices = selection.indices;
-  }
+  } else if (selectionLog) throw new Error('Selection log supplied without selection controls');
   const predicted = mapVoiceSource({ source, columns, referenceRow, zeroAdjustmentRows: [lower, upper],
     layout, indices });
   // Gaps between groups are not initialized by this gather. Only compare valid
   // lanes and four-lane padding that this native function actually clears.
-  const initializedEnd = Math.max(...r.layout.map(([start, , , count]) => start + count));
-  const lanes = r.layout.flatMap(([start, padded, , count]) =>
+  const initializedEnd = Math.max(...layout.map(([start, , , count]) => start + count));
+  const lanes = layout.flatMap(([start, padded, , count]) =>
     Array.from({ length: Math.max(0, Math.min(initializedEnd, padded, Math.ceil((start + count) / 4) * 4) - start) }, (_, i) => start + i));
   for (const name of ['frequency', 'decay', 'amplitude', 'phase', 'J'])
     compare(name, lanes.map(i => predicted[name][i]), lanes.map(i => r.voice[name][i]));
@@ -89,11 +91,12 @@ for (const [recordIndex, r] of capture.records.entries()) {
 }
 const report = { schema: 'pianoteq-voice-source-mapping-pass22', passed: checks.every(x => !x.mismatches),
   comparedFloatValues: checks.reduce((n, x) => n + x.count, 0), mismatches: checks.reduce((n, x) => n + x.mismatches, 0),
-  checks, failures, predictions, postExcitationSourceStillCaptured: !finalExcitation, indexMapStillCaptured: !selectionLog,
+  checks, failures, predictions, postExcitationSourceStillCaptured: !finalExcitation, indexMapStillCaptured: computedSelections !== capture.records.length,
   finalSourceTablesCalculated: Boolean(finalExcitation), initialExcitationInputsStillCaptured: true,
   secondaryExcitationStillCaptured: finalExcitation?.secondaryExcitationStillCaptured !== false, initialRandomStateStillCaptured: true,
-  modeSelectionComputed: Boolean(selectionLog), selectionControlsStillCaptured: true,
-  scalarLog2VerifiedOnlyAtObservedThreshold: Boolean(selectionLog),
+  modeSelectionComputed: computedSelections === capture.records.length, computedSelections, selectionControlsStillCaptured: true,
+  nativeScalarLog2Implemented: computedSelections > 0, scalarLog2VerifiedOnlyAtObservedThreshold: false,
+  thresholdLogCompared: Boolean(selectionLog),
   postExcitationFrequencyDecayPrefixComputed: Boolean(postExcitation),
   wholeVoiceAudioVerified: false };
 fs.writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
