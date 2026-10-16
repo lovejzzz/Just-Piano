@@ -3,12 +3,38 @@
 import fs from 'node:fs';
 import { coupledModes } from '../dsp/modal-poles.mjs';
 import { prepareModalInputs, modePoleInputs } from '../dsp/modal-source.mjs';
-const [inputPath, sourcePath, amplitudePath, powfPath, reportPath] = process.argv.slice(2);
+const positional = [];
+let impedanceReportPath;
+for (let i = 2; i < process.argv.length; i++) {
+  if (process.argv[i] === '--impedance-report') {
+    if (!process.argv[i + 1]) throw new Error('Missing impedance report path');
+    impedanceReportPath = process.argv[++i];
+  } else positional.push(process.argv[i]);
+}
+const [inputPath, sourcePath, amplitudePath, powfPath, reportPath] = positional;
 if (![inputPath, sourcePath, amplitudePath, powfPath].every(Boolean)) throw new Error('Expected three authentic runtime captures and independent powf oracle');
 const input = JSON.parse(fs.readFileSync(inputPath));
 const sources = JSON.parse(fs.readFileSync(sourcePath));
 const amplitudes = JSON.parse(fs.readFileSync(amplitudePath));
 const powfOracle = JSON.parse(fs.readFileSync(powfPath));
+let impedanceReport;
+const reconstructedCoupling = new Map();
+if (impedanceReportPath) {
+  impedanceReport = JSON.parse(fs.readFileSync(impedanceReportPath));
+  if (impedanceReport.passed !== true || impedanceReport.controlsAndCurvesComputedFromArchives !== true ||
+      impedanceReport.matchedRecords !== 36 || impedanceReport.outputValues !== 72 || impedanceReport.bitMismatches !== 0 || impedanceReport.jitterValues !== 72 || impedanceReport.jitterMismatches !== 0 ||
+      impedanceReport.jitterChecks?.length !== 36 || impedanceReport.commonReturnBitMismatches !== 0)
+    throw new Error('Impedance report must prove complete archive-derived 36-row / 72-value coupling replay');
+  for (const row of impedanceReport.jitterChecks) {
+    if (reconstructedCoupling.has(row.key) || row.errors?.length !== 2 ||
+        !['p', 'q'].every(name => row.errors.filter(error => error.name === name && error.bitEqual === true && Number.isFinite(error.prediction)).length === 1))
+      throw new Error('Invalid reconstructed coupling report schema');
+    reconstructedCoupling.set(row.key, Object.fromEntries(row.errors.map(error => [error.name, error.prediction])));
+  }
+  const inputKeys = input.records.map(row => `${row.note_index}:${row.cache_mode}:${row.parameters.mode}`);
+  if (new Set(inputKeys).size !== 36 || inputKeys.some(key => !reconstructedCoupling.has(key)))
+    throw new Error('Impedance report does not cover exactly these captured modal input keys');
+}
 if (!powfOracle.records.length) throw new Error('Empty powf oracle');
 for (const data of [input, sources, amplitudes])
   if (!data.records.length || data.errors.length) throw new Error('Incomplete runtime capture');
@@ -17,6 +43,7 @@ function bits(value) { view.setFloat32(0, value); return view.getUint32(0); }
 const same = (a, b) => bits(a) === bits(b);
 const checks = [], failures = [], visited = new Set();
 let lambdaCount = 0, lambdaMismatches = 0, centerCount = 0, centerMismatches = 0;
+let reconstructedCouplingValues = 0, reconstructedCouplingMismatches = 0;
 const preparedSources = new Map(), rowCountChecks = [];
 for (const source of sources.records) {
   const g = source.G_controls, c = source.cache_controls, v = source.G_vectors, w = source.cache_vectors;
@@ -68,7 +95,17 @@ for (const [recordIndex, record] of input.records.entries()) {
     centerMismatches += !Object.is(reconstructed.center, parameters.center);
     if (lambdaErrors.some(error => !error.doubleEqual) || !Object.is(reconstructed.center, parameters.center))
       failures.push({ recordIndex, stage: 'source-controls-to-pole-inputs', lambdaErrors, predictedCenter: reconstructed.center, observedCenter: parameters.center });
-    const prediction = coupledModes(reconstructed.lambda, { ...parameters, center: reconstructed.center });
+    let coupling = parameters;
+    if (impedanceReport) {
+      coupling = reconstructedCoupling.get(`${record.note_index}:${record.cache_mode}:${parameters.mode}`);
+      for (const name of ['p', 'q']) {
+        reconstructedCouplingValues++;
+        const equal = Object.is(coupling[name], parameters[name]);
+        reconstructedCouplingMismatches += !equal;
+        if (!equal) failures.push({ stage: 'reconstructed-impedance-input', recordIndex, name, prediction: coupling[name], actual: parameters[name] });
+      }
+    }
+    const prediction = coupledModes(reconstructed.lambda, { ...parameters, p: coupling.p, q: coupling.q, center: reconstructed.center });
     const frequencyErrors = expectedFrequency.map((value, j) => ({ predicted: prediction.frequency[j], actual: value,
       bitEqual: same(prediction.frequency[j], value), absoluteError: Math.abs(prediction.frequency[j] - value) }));
     const decayErrors = expectedDecay.map((value, j) => ({ predicted: prediction.decay[j], actual: value,
@@ -97,7 +134,10 @@ const result = {
   nativeScalarPowfImplemented: false, powfOracleRecords: powfOracle.records.length,
   rootAlgorithm: 'independent Durand–Kerner, not native QR reproduction',
   polynomialConfiguration: { kappa: Math.PI, gamma: 0, provenance: 'pass7 actual global configuration capture; same binary' },
-  sourceControlsToLambdaReconstructed: true, complexCouplingParameterProducerReconstructed: false,
+  sourceControlsToLambdaReconstructed: true, complexCouplingParameterProducerReconstructed: Boolean(impedanceReport),
+  reconstructedCouplingValues, reconstructedCouplingMismatches,
+  couplingSource: impedanceReport ? 'archive impedance calculation and deterministic jitter with platform math oracle' : 'captured p/q parameters',
+  platformTranscendentalOracleRequired: Boolean(impedanceReport),
   checks, failures, passed: failures.length === 0,
 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
