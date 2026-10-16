@@ -35,11 +35,15 @@ def ready(port,process):
   try:return rpc('getParameters',port=port)
   except OSError:time.sleep(.1)
  raise RuntimeError('not ready')
-def settle(pid=None,v=None):
+def settle():
  for _ in range(100):
   i=rpc('getInfo')[0]
-  if not i['computing_parameter_update'] and (pid is None or i['modified']):
-   time.sleep(3);return rpc('getInfo')[0]
+  if not i['computing_parameter_update']:
+   # Strike Point can persist correctly while getInfo.modified remains false.
+   # A fresh-process full readback below is the authoritative save check.
+   time.sleep(3)
+   final=rpc('getInfo')[0]
+   if not final['computing_parameter_update']:return final
   time.sleep(.1)
  raise RuntimeError('not committed')
 results={'bank':bank,'cases':{},'initial_audio_device':rpc('getAudioDeviceInfo')}
@@ -51,7 +55,7 @@ try:
    current=next(x for x in rpc('getParameters') if x['id']==pid)
    assert '(locked)' not in current['name']
    rpc('setParameters',{'list':[{'id':pid,'normalized_value':v}]})
-  info=settle(pid,v);params=rpc('getParameters');rpc('savePreset',{'name':name,'bank':bank,'preset_type':'full'})
+  info=settle();params=rpc('getParameters');rpc('savePreset',{'name':name,'bank':bank,'preset_type':'full'})
   src=bankpath/(name+'.fxp');dst=out/(name+'.fxp');shutil.copy2(src,dst);src.unlink()
   command=[E.APP,'--headless','--no-prefs','--fxp',str(dst),'--serve',f'127.0.0.1:{args.port+1}']
   with (out/(name+'.verify.log')).open('w') as log:
