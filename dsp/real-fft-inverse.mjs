@@ -1,12 +1,12 @@
-// Native real inverse pre-combination for the inspected unordered 128-point plan.
+// Native real inverse pre-combination for the inspected fixed unordered plans.
 import {fma32} from './modal-kernel.mjs';
 import {buildRealCoreTwiddles32} from './real-fft-core.mjs';
 import {buildRealFinalizeCoefficients128} from './real-fft-finalize.mjs';
 const f=Math.fround,root2=f(Math.SQRT2);
-export function preprocessInverseReal128(input,e=buildRealFinalizeCoefficients128()){
- if(input.length!==128||e.length!==96)throw new Error('Unverified inverse real FFT size');
- const out=new Float32Array(128);
- for(let block=0;block<4;block++)for(let lane=block?0:1;lane<4;lane++){
+function preprocessInverseReal(input,e){
+ if(![128,1024].includes(input.length)||e.length!==input.length*3/4)throw new Error('Unverified inverse real FFT size');
+ const out=new Float32Array(input.length);
+ for(let block=0;block<input.length/32;block++)for(let lane=block?0:1;lane<4;lane++){
   const base=block*32,z=j=>input[base+4*j+lane];
   const a=f(z(0)+z(6)),b=f(z(0)-z(6)),c=f(z(1)+z(7)),d=f(z(1)-z(7));
   const t=f(z(2)+z(4)),u=f(z(2)-z(4)),v=f(z(3)+z(5)),w=f(z(3)-z(5));
@@ -20,12 +20,12 @@ export function preprocessInverseReal128(input,e=buildRealFinalizeCoefficients12
  const a=f(input[0]+input[4]),b=f(input[0]-input[4]),c=f(input[16]+input[16]),d=f(input[20]+input[20]);
  out[0]=f(a+c);out[1]=f(b-d);out[2]=f(a-c);out[3]=f(b+d);
  const t=f(input[8]+input[24]),u=f(input[8]-input[24]),v=f(f(input[12]+input[28])*root2),w=f(input[28]-input[12]);
- out[124]=f(t+t);out[125]=fma32(u,root2,-v);out[126]=f(w+w);out[127]=fma32(u,-root2,-v);
+ const n=input.length;out[n-4]=f(t+t);out[n-3]=fma32(u,root2,-v);out[n-2]=f(w+w);out[n-1]=fma32(u,-root2,-v);
  return out;
 }
 
 function backwardStage(input,ido,l1,radix,wa,offset){
- const out=new Float32Array(128);
+ const out=new Float32Array(input.length);
  for(let lane=0;lane<4;lane++)for(let k=0;k<l1;k++){
   const c=(j,i)=>input[((k*radix+j)*ido+i)*4+lane];
   const set=(j,i,x)=>{out[((j*l1+k)*ido+i)*4+lane]=f(x);};
@@ -64,3 +64,17 @@ export function inverseRealCore32(input,wa){
 }
 
 export function inverseReal128(input){return inverseRealCore32(preprocessInverseReal128(input),buildRealCoreTwiddles32());}
+
+export function preprocessInverseReal128(input,e=buildRealFinalizeCoefficients128()){
+ if(input.length!==128)throw new Error('128-point input required');return preprocessInverseReal(input,e);
+}
+export function preprocessInverseReal1024(input,e){
+ if(input.length!==1024)throw new Error('1024-point input required');return preprocessInverseReal(input,e);
+}
+export function inverseRealCore256(input,wa){
+ if(input.length!==1024||wa.length!==256)throw new Error('Unverified inverse FFT256 core size');
+ let a=backwardStage(input,64,1,4,wa,0);
+ a=backwardStage(a,16,4,4,wa,192);
+ a=backwardStage(a,4,16,4,wa,240);
+ return backwardStage(a,1,64,4,wa,252);
+}
