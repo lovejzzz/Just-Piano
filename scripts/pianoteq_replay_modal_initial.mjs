@@ -1,11 +1,36 @@
 // node SCRIPT initial.json final.json coefficients.json recurrence.json report.json
 //   [--tail-capture tail.json]
+//   [--pitch-report computed-pitch.json]
 import fs from 'node:fs';
 import { initialModalGroup, initialModalRadii, dampInitialQ, modalAngleGroup, projectModalHistory } from '../dsp/modal-initial.mjs';
 import { recurrenceCoefficients } from '../dsp/modal-coefficients.mjs';
 import { renderSixteen, renderEight } from '../dsp/modal-kernel.mjs';
 const [initialPath, finalPath, coefficientPath, recurrencePath, reportPath, ...options] = process.argv.slice(2);
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
+let tailCapturePath, pitchReportPath;
+for (let i = 0; i < options.length; i++) {
+  if (options[i] === '--tail-capture') tailCapturePath = options[++i];
+  else if (options[i] === '--pitch-report') pitchReportPath = options[++i];
+  else throw new Error('Expected --tail-capture or --pitch-report');
+}
+const calculatedPitches = new Map();
+if (pitchReportPath) {
+  const report = read(pitchReportPath);
+  if (report.schema !== 'pianoteq-dynamic-pitch-pass21' || report.passed !== true || report.mismatches !== 0 ||
+      report.predictedControls?.length !== 64 || report.nativeMathOracleRequired !== false)
+    throw new Error('Verified calculated frequency trajectory required');
+  for (const row of report.predictedControls.filter(row => row.stage === 'held')) {
+    if (!Number.isInteger(row.sampleAge) || !Number.isFinite(row.pitch) || calculatedPitches.has(row.sampleAge))
+      throw new Error('Invalid or duplicate computed pitch age');
+    calculatedPitches.set(row.sampleAge, row.pitch);
+  }
+  if (calculatedPitches.size !== 32 || !calculatedPitches.has(0)) throw new Error('Incomplete held pitch trajectory');
+}
+const calculatedPitchAt = (age, fallback) => {
+  if (!pitchReportPath) return fallback;
+  if (!calculatedPitches.has(age)) throw new Error(`Computed pitch missing age ${age}`);
+  return calculatedPitches.get(age);
+};
 const initial = read(initialPath), final = read(finalPath), coefficients = read(coefficientPath), recurrence = read(recurrencePath);
 for (const data of [initial, final, coefficients, recurrence])
   if (data.errors.length || !data.records.length) throw new Error('Incomplete capture');
@@ -38,8 +63,9 @@ if (initial.records.length !== expected.length || new Set(initial.records.map(r 
 for (const row of [last, c]) compare('controls-match', Object.values(initial.records[0].controls),
   Object.keys(initial.records[0].controls).map(key => row.controls[key]));
 const predicted = new Map();
+compare('computed-initial-pitch', [calculatedPitchAt(0, initial.records[0].controls['0x780'])], [initial.records[0].controls['0x780']]);
 for (const record of initial.records) {
-  const controls = record.controls;
+  const controls = { ...record.controls, '0x780': calculatedPitchAt(0, record.controls['0x780']) };
   const result = initialModalGroup({ frequency: record.frequency, pitchAdjustment: record.J,
     amplitude: record.amplitude_or_R, phase: record.phase, timestep: controls['0xc'], pitch: controls['0x780'],
     adjustmentRatio: controls['0x784'], inputMode: record.input_mode });
@@ -50,7 +76,7 @@ for (const record of initial.records) {
     ['P', 'Q', 'energy', 'S', 'K', 'sinInverse'].map(name => [name, result[name][j]])));
 }
 const decayGroups = layout.map((_, group) => c.lanes.filter(row => row.group === group));
-const control = c.controls;
+const control = { ...c.controls, '0x780': calculatedPitchAt(0, c.controls['0x780']) };
 const radii = initialModalRadii(decayGroups.map(group => group.map(row => row.modal_decay)), {
   timestep: control['0xc'], pitch: control['0x780'], scale: control['0x7f8'], release: control['0x7e4'],
   positionGain: control['0x7b0'], extraGain: control['0x7e0'], releaseShape: control['0x7ec'] });
@@ -101,9 +127,8 @@ for (const [index, row] of firstBlock.entries()) {
 let completeGroupBuffers = 0, tailGroups = 0, continuousBlocks = 0;
 let frequencyRefreshCount = 0;
 const predictedGroupBuffers = layout.map(() => []);
-if (options.length) {
-  if (options.length !== 2 || options[0] !== '--tail-capture') throw new Error('Expected --tail-capture path');
-  const tail = read(options[1]);
+if (tailCapturePath) {
+  const tail = read(tailCapturePath);
   const expectedTails = layout.map(([start, , , count], group) => {
     const padded = Math.ceil((start + count) / 4) * 4 - Math.floor(start / 4) * 4;
     return { group, start: Math.floor(start / 4) * 4, padded, prefix: Math.floor(padded / 16) * 16 };
@@ -140,13 +165,15 @@ if (options.length) {
   const running = new Map([...predicted].map(([lane, state]) => [lane, { ...state }]));
   const heldCoefficients = coefficients.records.filter(row => row.stage === 'held');
   if (heldCoefficients.length < blocks) throw new Error('Missing continuous control snapshots');
-  let previousControls = c.controls;
+  let previousControls = control;
   const stateAt = lane => {
     if (!running.has(lane)) running.set(lane, { P: 0, Q: 0, A: 0, B: 0 });
     return running.get(lane);
   };
   for (let block = 0; block < blocks; block++) {
-    const snapshot = heldCoefficients[block], nextControls = snapshot.controls;
+    const snapshot = heldCoefficients[block], nextControls = { ...snapshot.controls,
+      '0x780': calculatedPitchAt(block * 64, snapshot.controls['0x780']) };
+    compare(`continuous-${block}-computed-pitch`, [nextControls['0x780']], [snapshot.controls['0x780']]);
     if (snapshot.input_mode !== 0 || snapshot.layout_flag !== 0 || JSON.stringify(snapshot.groups) !== JSON.stringify(layout) ||
         snapshot.initial_flag !== (block === 0 ? 1 : 0)) throw new Error('Continuous coefficient stage changes');
     if (block > 0) {
@@ -223,6 +250,7 @@ const report = { schema: 'pianoteq-modal-initial-pass20', passed: checks.every(x
   completeFirstGroupBufferSamples: completeGroupBuffers * 64,
   tailsVerified: Boolean(completeGroupBuffers), continuousBlocks, continuousCompleteBufferSamples: continuousBlocks * layout.length * 64,
   frequencyRefreshCount, continuousControlInputsStillCaptured: true,
+  frequencyTrajectoryComputed: Boolean(pitchReportPath),
   continuousStateResetFromCapture: false, predictedGroupBuffers, wholeVoiceAudioVerified: false };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({ ...report, checks: undefined, predictedGroupBuffers: undefined }, null, 2));

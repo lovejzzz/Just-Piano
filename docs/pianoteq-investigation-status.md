@@ -1,6 +1,6 @@
 # Pianoteq 深入分析：问题与验证状态
 
-目标：本机 Pianoteq 9.2.5 ARM64。更新：2026-10-16，pass20。参数保存实验已修复；完整琴槌—琴弦—制音器耦合与网页声音等价性仍未完成。
+目标：本机 Pianoteq 9.2.5 ARM64。更新：2026-10-16，pass21。参数保存实验已修复；完整琴槌—琴弦—制音器耦合与网页声音等价性仍未完成。
 
 | 问题 | 已验证证据 | 剩余缺口 |
 |---|---|---|
@@ -41,6 +41,9 @@ pass12资源存档进一步落地：1105成员MD5全部验证；D4完整50份A�
 
 详细报告：
 
+- [动态频率轨迹到连续输出](pianoteq-dynamic-pitch-pass21.md)：64个按住/释放记录、384float逐位同；替换捕获pitch后8块连续渲染33699float仍全同。
+- [模型曲线到动态音高控制源](pianoteq-pitch-source-controls-pass21.md)：68项真实曲线、力度缩放和初始化输出逐位同；共享控制及host78仍外置。
+- [标量expf纯浏览器实现](pianoteq-native-scalar-exp-pass21.md)：64个实际返回及60461个独立系统oracle输入零差，区别于四lane指数与Math.exp。
 - [幅度/相位到动态P/Q与连续分组输出](pianoteq-modal-initial-pass20.md)：184初始分量、8块连续渲染、7次频率投影及1536个完整分组输出样本，33690个float逐位同，不以捕获状态重置；初始激励表和控制轨迹仍外置。
 - [原程序的纯浏览器三角近似](pianoteq-native-modal-trig-pass20.md)：736个实际sin/cos逐位同，Math.sin/cos负对照70处不同。
 - [八lane尾部](pianoteq-eight-lane-tail-pass20.md)：保留实际额外padding读取与求和顺序，已接入完整分组验证。
