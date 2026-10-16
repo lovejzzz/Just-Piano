@@ -20,7 +20,7 @@ export class GlobalRawKeys {
    if(this.nodes.get(node.object).key!==i)throw new Error('Raw node owner changed');
   }
  }
- process(snapshot){
+ process(snapshot,{nodeVelocities}={}){
   const {samples,sampleRate,hostControl,hostBlend,softControl,pedalControl,binaryPedal,bypassFlags}=snapshot;
   if(!Number.isInteger(samples)||samples<=0||![sampleRate,hostControl,hostBlend,softControl,pedalControl].every(Number.isFinite)||sampleRate<=0||bypassFlags.length!==2||bypassFlags.some(x=>x!==0))throw new Error('Unverified raw key clock/extra processors');
   this.ensureNodes(snapshot);const dt=f(f(samples)/f(sampleRate)),values=[],flags=[];
@@ -32,7 +32,7 @@ export class GlobalRawKeys {
    const soft=clamp(f(f(softControl)*f(1-f(key.localSoftControl))));
    const keyCap=f(1-control),softCap=f(1-soft);let aggregate=key.flags[2]!==0?1:0;
    for(const input of key.nodes){
-    const node=this.nodes.get(input.object),velocity=f(input.velocity);
+    const node=this.nodes.get(input.object),velocity=f(nodeVelocities?nodeVelocities.get(input.object):input.velocity);
     if(!Number.isFinite(velocity))throw new Error('Nonfinite raw node velocity');
     if(!(key.flags[0]&1)){node.position=1;node.intermediate=1;}
     else{

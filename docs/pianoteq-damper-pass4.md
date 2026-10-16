@@ -52,7 +52,7 @@ d = clamp(d, -96, 32)
 
 事件分派 `10053f47c` 调用 `1005b5698`。此处对象 C 是 engine `+c88..c90` 向量的一个 `0x140` 字节元素。C+20 是键状态链表首指针，链表节点 N+18 为 next、N+20 指向 voice，不能与 C+0 的 voice 链混用。
 
-释放函数先匹配节点 ID、清除 N+28 中此次事件的位；剩余位为零才改变释放速率。设 `T0=C.float38`、`T1=C.float3c`、`k=C.float40`、`a=voice.float78`。voice 存在且 k≠1 时 `T=T0*(1+(k−1)*a^4)`，否则 `T=T0`。传入 release=0 被置为1，非1时令 `v=clamp(release,1/127,1)`、`p=log(T0/T1)/(-4.8441873)`，再置 `T=T/v^p`。最终 `N.float8=-1/max(T0,T,T1)`。这是已确认的计算关系；T 的物理时间单位及 a 的物理身份仍待上游证明。
+释放函数先匹配节点 ID、清除 N+28 中此次事件的位；剩余位为零才改变释放速率。设 `T0=C.float38`、`T1=C.float3c`、`k=C.float40`、`a=voice.float78`。voice 存在且 k≠1 时 `T=T0*(1+(k−1)*a^4)`，否则 `T=T0`。传入 release=0 被置为1，非1时令 `v=clamp(release,1/127,1)`、`p=log(T0/T1)/(-4.8441873)`，再置 `T=T/v^p`。最终 `N.float8=-1/min(T1,max(T0,T))`。原文的max三项比较方向错误，已在[pass70实际note-off与中间量验证](pianoteq-noteoff-global-chain-pass70.md)中按原指令及实测速度更正；T 的物理时间单位及 a 的物理身份仍待上游证明。
 
 消费者 `1005e1d18(delta,engine,note)` 读同一 C+20 链。在 C.byte1c=1、C.byte1d=0 的普通分支，先推进 `z=max(0,N.float0+delta*N.float8)`，再限制上界 `1-A`，将结果同时写 N.float0/+4；之后 N.float0 另外受上界 `1-B`，因此 N+0 与 N+4 在该分支可不同。这里 A 来自 `clamp((*(engine+c08).floatc0+C.float30)*(1-*(engine+c08).floatbc),0,1)`，A<0.01 时置零；B 来自 `clamp(*(engine+e00).floate8*(1-C.float34),0,1)`。其他 flag 分支可强制1，delta=0 分支只限制状态、不作速率积分。
 
