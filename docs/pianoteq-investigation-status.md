@@ -134,3 +134,5 @@ pass5新增REA响应与旧证据合并导出为 `pass5-evidence-bundle.json`、`
 ## pass38：宽度参数 A/B/A 实际音频对照
 
 同一 running 官方实例中顺序保存 .5/.25/.5，三份均在新进程恢复215项参数。两份基准PCM逐字节相同，宽度修改音频稳定复现pass37结果。已排除本次实验中的一般保存流程差异；底层宽度计算与最终网页声音尚未完成。见 [pass38 对照](pianoteq-width-control-pass38.md)。
+
+同轮新增声部消费延迟与增益实现，4个正式场景205344项逐位同，原生WAV同各自官方基准。释放主组附加信号仍有3199项待解释，未宣称整链等价。见 [pass38 声部消费](pianoteq-voice-consumer-pass38.md)。
