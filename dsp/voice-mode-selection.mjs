@@ -61,5 +61,9 @@ export function selectVoiceModes({ source, columns, splitRow, sampleRate, groupC
     // Native index padding is a sentinel. It is never gathered as a source lane.
     if (group + 1 < groupCount) while (indices.length < padded) indices.push(-1);
   }
-  return { indices, layout, decisions, logThreshold };
+  // 839fd0 -> 195570 clears only the final four-lane storage tail. Gaps
+  // inserted between groups keep the selector's 1e6 sentinel instead.
+  const indexStorage = Float32Array.from({ length: Math.ceil(indices.length / 4) * 4 },
+    (_, i) => i >= indices.length ? 0 : indices[i] === -1 ? 1e6 : indices[i]);
+  return { indices, indexStorage, layout, decisions, logThreshold };
 }

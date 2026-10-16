@@ -15,9 +15,10 @@ int main(void) {
   if(dladdr(dlsym(RTLD_DEFAULT,"logf"),&image)) fprintf(stderr,"logf image: %s\n",image.dli_fname);
   char line[256], mode[16]; unsigned a,b,c,d;
   while(fgets(line,sizeof(line),stdin)) {
-    if(sscanf(line,"%15s %x %x %x %x",mode,&a,&b,&c,&d)==5 && strcmp(mode,"exp4")==0) {
+    if(sscanf(line,"%15s %x %x %x %x",mode,&a,&b,&c,&d)==5 &&
+       (strcmp(mode,"exp4")==0 || strcmp(mode,"cos4")==0)) {
       vFloat value={decode(a),decode(b),decode(c),decode(d)};
-      vFloat result=vexpf(value);
+      vFloat result=strcmp(mode,"cos4")==0 ? vcosf(value) : vexpf(value);
       printf("%08x %08x %08x %08x\n",encode(result[0]),encode(result[1]),encode(result[2]),encode(result[3]));
     } else if(sscanf(line,"%15s %x",mode,&a)==2 && strcmp(mode,"log")==0) {
       // Volatile input and -O0 prevent compile-time/builtin substitution.
