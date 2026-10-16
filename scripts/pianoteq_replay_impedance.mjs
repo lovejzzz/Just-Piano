@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { modalImpedance, couplingJitterFactors } from '../dsp/modal-impedance.mjs';
 import { impedanceControls } from '../dsp/impedance-controls.mjs';
 const argumentsOnly = [], additionalReturnPaths = [];
-let sourcePolesPath, sourceControlsPath, baseModelsPath, presetPath, baseModelIndex = 0;
+let sourcePolesPath, sourceControlsPath, baseModelsPath, presetPath, couplingInputReportPath, baseModelIndex = 0;
 for (let i = 2; i < process.argv.length; i++) {
   if (process.argv[i] === '--additional-return') {
     if (!process.argv[i + 1]) throw new Error('Missing additional return capture path');
@@ -14,6 +14,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (process.argv[i] === '--base-models') baseModelsPath = process.argv[++i];
   else if (process.argv[i] === '--preset') presetPath = process.argv[++i];
   else if (process.argv[i] === '--base-index') baseModelIndex = Number(process.argv[++i]);
+  else if (process.argv[i] === '--coupling-input-report') couplingInputReportPath = process.argv[++i];
   else argumentsOnly.push(process.argv[i]);
 }
 const [beforePath, afterPath, radiusPath, oracle, reportPath] = argumentsOnly;
@@ -54,6 +55,21 @@ const math = Object.fromEntries(['log2f', 'exp', 'sincos', 'tan', 'pow', 'log'].
 const approximateMath = { log2f: x => Math.fround(Math.log2(x)), exp: Math.exp,
   sincos: x => ({ sin: Math.sin(x), cos: Math.cos(x) }), tan: Math.tan, pow: Math.pow, log: Math.log };
 const key = record => `${record.note_index}:${record.cache_mode}:${record.modal_coordinate}`;
+const computedInputs = new Map();
+if (couplingInputReportPath) {
+  const data = JSON.parse(fs.readFileSync(couplingInputReportPath));
+  if (data.passed !== true || data.failures?.length !== 0 || data.archiveGridVerified !== true ||
+      data.expectedCalls !== 36 || data.capturedCalls !== 36 || data.inputValues !== 144 ||
+      data.inputMismatches !== 0 || data.checks?.length !== 36)
+    throw new Error('Expected complete archive-grid input reconstruction report');
+  for (const row of data.checks) {
+    if (computedInputs.has(row.key) || !['s0', 's1', 's2', 's3'].every(name => Number.isFinite(row.inputs?.[name])))
+      throw new Error('Invalid computed-input report row');
+    computedInputs.set(row.key, row.inputs);
+  }
+  if (before.records.length !== 36 || before.records.some(row => !computedInputs.has(key(row))))
+    throw new Error('Computed inputs do not cover exactly these 36 calls');
+}
 const returned = new Map();
 const checks = [], failures = [];
 let commonReturnKeys = 0, commonReturnBitMismatches = 0;
@@ -70,8 +86,12 @@ let outputValues = 0, bitMismatches = 0, approximateBitMismatches = 0, staticRad
 for (const [recordIndex, record] of before.records.entries()) {
   const actual = returned.get(key(record));
   if (!actual) { failures.push({ stage: 'missing-return', recordIndex, key: key(record) }); continue; }
+  const args = computedInputs.get(key(record)) ?? record.inputs;
+  if (computedInputs.size) for (const name of ['s0', 's1', 's2', 's3'])
+    if (bits(Math.fround(args[name])) !== bits(Math.fround(record.inputs[name])))
+      failures.push({ stage: 'computed-input-binding', key: key(record), name, prediction: args[name], actual: record.inputs[name] });
   const curve = record.phase_curve;
-  if (curve.x.length > 1 && record.inputs.s2 >= curve.x.at(-1))
+  if (curve.x.length > 1 && args.s2 >= curve.x.at(-1))
     throw new Error('Captured phase grid upper end must cover this input without assuming an uncaptured endpoint');
   let sourceControls = record.controls, phaseCurve = curve, bandFrequencies = record.band_frequencies, bandGains = record.band_gains;
   if (baseModel) {
@@ -93,7 +113,7 @@ for (const [recordIndex, record] of before.records.entries()) {
     bandFrequencies = source.bandFrequencies; bandGains = source.bandGains;
   }
   const input = {
-    fundamental: record.inputs.s0, reference: record.inputs.s1, frequency: record.inputs.s2, extraDb: record.inputs.s3,
+    fundamental: args.s0, reference: args.s1, frequency: args.s2, extraDb: args.s3,
     strength: sourceControls['0x20'], minimumReference: sourceControls['0x38'], tilt: sourceControls['0x50'],
     mixture: sourceControls['0xc8'], phaseCurve: { ...phaseCurve, flags: phaseCurve.log_x, special: phaseCurve.special_mode },
     bandFrequencies, bandDb: bandGains, polarRadius,
@@ -151,6 +171,7 @@ for (const call of oracleCalls) {
 }
 const result = {
   inputRecords: before.records.length, returnCaptureCount: returnCaptures.length,
+  fourArgumentsReconstructed: computedInputs.size > 0,
   returnRecords: returnCaptures.reduce((n, data) => n + data.records.length, 0), uniqueReturnRecords: returned.size,
   commonReturnKeys, commonReturnBitMismatches, matchedRecords: checks.length,
   outputValues, bitMismatches, approximateBitMismatches, staticRadiusBitMismatches,

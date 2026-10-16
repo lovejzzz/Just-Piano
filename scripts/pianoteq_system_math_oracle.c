@@ -34,6 +34,10 @@ int main(int argc, char **argv) {
         if (argc != 4) return 2;
         result = pow(x, y);
     }
+    else if (!strcmp(argv[1], "powf")) {
+        if (argc != 4) return 2;
+        result = powf((float)x, (float)y);
+    }
     else if (!strcmp(argv[1], "log")) result = log(x);
     else if (!strcmp(argv[1], "sincos")) {
         double sine, cosine;

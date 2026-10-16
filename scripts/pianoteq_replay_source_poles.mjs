@@ -136,6 +136,7 @@ const result = {
   polynomialConfiguration: { kappa: Math.PI, gamma: 0, provenance: 'pass7 actual global configuration capture; same binary' },
   sourceControlsToLambdaReconstructed: true, complexCouplingParameterProducerReconstructed: Boolean(impedanceReport),
   reconstructedCouplingValues, reconstructedCouplingMismatches,
+  fourCouplingArgumentsReconstructed: impedanceReport?.fourArgumentsReconstructed === true,
   couplingSource: impedanceReport ? 'archive impedance calculation and deterministic jitter with platform math oracle' : 'captured p/q parameters',
   platformTranscendentalOracleRequired: Boolean(impedanceReport),
   checks, failures, passed: failures.length === 0,
