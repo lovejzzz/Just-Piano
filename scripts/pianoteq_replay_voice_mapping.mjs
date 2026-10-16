@@ -2,13 +2,15 @@ import fs from 'node:fs';
 import { mapVoiceSource } from '../dsp/voice-source-mapping.mjs';
 import { selectVoiceModes } from '../dsp/voice-mode-selection.mjs';
 const [capturePath, outputPath, ...options] = process.argv.slice(2);
-let selectionLog, postExcitation;
+let selectionLog, postExcitation, finalExcitation;
 for (let i = 0; i < options.length; i += 2) {
   if (!options[i + 1]) throw new Error('Missing report path');
   if (options[i] === '--selection-log' && !selectionLog) selectionLog = JSON.parse(fs.readFileSync(options[i + 1], 'utf8'));
   else if (options[i] === '--post-excitation-report' && !postExcitation) postExcitation = JSON.parse(fs.readFileSync(options[i + 1], 'utf8'));
-  else throw new Error('Expected --selection-log or --post-excitation-report');
+  else if (options[i] === '--final-excitation-report' && !finalExcitation) finalExcitation = JSON.parse(fs.readFileSync(options[i + 1], 'utf8'));
+  else throw new Error('Expected --selection-log, --post-excitation-report or --final-excitation-report');
 }
+if (postExcitation && finalExcitation) throw new Error('Choose a prefix or complete source report');
 if (selectionLog) {
   if (selectionLog.schema !== 1 || selectionLog.point !== '0x100839c50' || selectionLog.errors.length || !selectionLog.records.length)
     throw new Error('Complete threshold log return required');
@@ -20,6 +22,9 @@ if (capture.schema !== 1 || capture.point !== '0x1009517d8' || capture.errors.le
 if (postExcitation && (postExcitation.schema !== 'pianoteq-post-excitation-pass24' || postExcitation.passed !== true ||
     postExcitation.mismatches !== 0 || postExcitation.predictions?.length !== capture.records.length))
   throw new Error('Verified matching post-excitation predictions required');
+if (finalExcitation && (finalExcitation.schema !== 'pianoteq-final-excitation-pass25' || finalExcitation.passed !== true ||
+    finalExcitation.mismatches !== 0 || finalExcitation.predictions?.length !== capture.records.length || finalExcitation.finalSourceTablesCalculated !== true))
+  throw new Error('Verified complete final-excitation predictions required');
 const checks = [], failures = [], predictions = [];
 const view = new DataView(new ArrayBuffer(4));
 const bits = x => { view.setFloat32(0, x); return view.getUint32(0); };
@@ -39,6 +44,14 @@ for (const [recordIndex, r] of capture.records.entries()) {
   if (specialA || specialB || rows * columns !== r.source_size) throw new Error('Unverified source mode');
   const source = Object.fromEntries(Object.entries(r.source).map(([key, values]) => [key, [...values]]));
   let computedFrequencyDecayPrefix = 0;
+  if (finalExcitation) {
+    const p = finalExcitation.predictions[recordIndex];
+    if (JSON.stringify(p.header) !== JSON.stringify(r.header)) throw new Error('Final source header differs');
+    for (const key of ['frequency', 'decay', 'amplitude', 'phase']) {
+      compare(`calculated-final-source-${key}`, p.source[key], r.source[key]);
+      source[key] = [...p.source[key]];
+    }
+  }
   if (postExcitation) {
     const p = postExcitation.predictions[recordIndex];
     if (p.header[0] !== columns || p.source.frequency.length !== p.header[1] * columns || p.source.frequency.length > r.source_size)
@@ -76,7 +89,9 @@ for (const [recordIndex, r] of capture.records.entries()) {
 }
 const report = { schema: 'pianoteq-voice-source-mapping-pass22', passed: checks.every(x => !x.mismatches),
   comparedFloatValues: checks.reduce((n, x) => n + x.count, 0), mismatches: checks.reduce((n, x) => n + x.mismatches, 0),
-  checks, failures, predictions, postExcitationSourceStillCaptured: true, indexMapStillCaptured: !selectionLog,
+  checks, failures, predictions, postExcitationSourceStillCaptured: !finalExcitation, indexMapStillCaptured: !selectionLog,
+  finalSourceTablesCalculated: Boolean(finalExcitation), initialExcitationInputsStillCaptured: true,
+  secondaryExcitationStillCaptured: true, initialRandomStateStillCaptured: true,
   modeSelectionComputed: Boolean(selectionLog), selectionControlsStillCaptured: true,
   scalarLog2VerifiedOnlyAtObservedThreshold: Boolean(selectionLog),
   postExcitationFrequencyDecayPrefixComputed: Boolean(postExcitation),

@@ -60,6 +60,7 @@ function compare(name, prediction, actual) {
 const mappedSources = new Map();
 let sourceIndexMapStillCaptured = true, sourceModeSelectionComputed = false;
 let postExcitationFrequencyDecayPrefixComputed = false;
+let finalSourceTablesCalculated = false;
 if (sourceMappingPath) {
   const report = read(sourceMappingPath);
   if (report.schema !== 'pianoteq-voice-source-mapping-pass22' || report.passed !== true || report.mismatches !== 0 ||
@@ -68,6 +69,7 @@ if (sourceMappingPath) {
   sourceIndexMapStillCaptured = report.indexMapStillCaptured !== false;
   sourceModeSelectionComputed = report.modeSelectionComputed === true;
   postExcitationFrequencyDecayPrefixComputed = report.postExcitationFrequencyDecayPrefixComputed === true;
+  finalSourceTablesCalculated = report.finalSourceTablesCalculated === true;
   for (const row of report.predictions[0].lanes) {
     if (!Number.isInteger(row.lane) || mappedSources.has(row.lane) ||
         !['frequency', 'decay', 'amplitude', 'phase', 'J'].every(key => Number.isFinite(row[key])))
@@ -283,7 +285,9 @@ const report = { schema: 'pianoteq-modal-initial-pass20', passed: checks.every(x
   recurrenceOutputSamples, comparedFloatValues: checks.reduce((n, x) => n + x.count, 0),
   mismatches: checks.reduce((n, x) => n + x.mismatches, 0), checks, failures,
   initialAmplitudePhaseFrequencyAndDecayStillCaptured: !sourceMappingPath,
-  postExcitationSourceStillCaptured: true, sourceIndexMapStillCaptured, sourceModeSelectionComputed,
+  postExcitationSourceStillCaptured: !finalSourceTablesCalculated, finalSourceTablesCalculated,
+  initialExcitationInputsStillCaptured: true, secondaryExcitationStillCaptured: true, initialRandomStateStillCaptured: true,
+  sourceIndexMapStillCaptured, sourceModeSelectionComputed,
   postExcitationFrequencyDecayPrefixComputed,
   sourceToVoiceMappingComputed: Boolean(sourceMappingPath), radiusCalculated: true,
   nativeMathOracleRequired: false, eightLaneTailGroups: tailGroups, completeFirstGroupBuffers: completeGroupBuffers,
