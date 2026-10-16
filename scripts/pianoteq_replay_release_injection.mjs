@@ -153,6 +153,7 @@ if (consumerPath) {
       throw new Error('Unverified changing terminal level');
     }
     const scaled = scaleVoiceGroups(combined, initialControls['0x9c'], initialControls['0xa0']);
+    predictions[ordinal].consumerGroups = scaled.map(group => [...group]);
     for (let g = 0; g < 3; g++) {
       check(`${ordinal}:${g}:completeConsumerBeforeGain`, combined[g], block[1].groups[g].values);
       check(`${ordinal}:${g}:completeConsumerGain`, scaled[g], block[2].groups[g].values);
