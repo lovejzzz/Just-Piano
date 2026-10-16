@@ -38,7 +38,7 @@ No recorded samples, proprietary DSP code, or third-party preset data are includ
 
 REA/Ghidra and read-only runtime captures are being used to investigate the user's installed Pianoteq 9.2.5. The [investigation status](docs/pianoteq-investigation-status.md) distinguishes static formulas, authentic runtime checks, audio controls, and unresolved work.
 
-A reconstructed JavaScript modal kernel in `dsp/modal-kernel.mjs` reproduces 4,096 captured state values and 8,192 internal output samples bit for bit. It is a research implementation and is not yet connected to the piano UI. The current browser instrument remains the independent engine described above; complete Pianoteq sound and presets have not been reproduced.
+A reconstructed JavaScript modal kernel in `dsp/modal-kernel.mjs` reproduces 4,096 captured state values and 8,192 internal output samples bit for bit. Companion modules reconstruct captured control, excitation, pole and damper-coefficient arithmetic, including the observed native exp/log dependencies. These are research implementations and are not yet connected to the piano UI. The current browser instrument remains the independent engine described above; complete Pianoteq sound and presets have not been reproduced.
 
 ## Verify
 

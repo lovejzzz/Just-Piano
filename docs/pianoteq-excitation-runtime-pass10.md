@@ -113,3 +113,6 @@ node scripts/pianoteq_replay_excitation_spectrum.mjs SPECTRUM_RUNTIME_JSON GAIN_
 对多音符真实快照重放，JavaScript 计算的263个 L 及使用实际原生H的512个 W 全部 float32 字节一致。正负斜率独立单音符快照各36个 L、单音符108个 W 也全部字节一致。重放报告将 `native_vexpf_implemented` 和 `entire_native_pipeline_bit_exact` 固定为false；`Math.exp` 的39/263处差异单独统计，不允许通过取原生H来隐去该缺口。这里“已恢复阶段通过”仅指L及给定原生H后的乘法。
 
 当前实现仍依赖调用方提供模型表、参考量及斜率，没有生成预设或自动从网页控件计算这些表。非整数坐标公式已按原指令写入，但真实采集的 `fractional_coordinates=0`，未以合成fixture冒充实际覆盖。此次没有把研究模块接入现有网页发声路径，完整音色一致性仍未成立。
+
+
+后续更新：[第十二轮](pianoteq-native-math-pass12.md)已恢复目标依赖的四lane指数，真实263个和另36个指数权重均逐位一致。当前重放器同时保留旧Math.exp负对照与新nativeExpWeights精确路径；本报告前文的“尚未实现”描述保留为第十轮时的实验边界，不代表当前模块状态。上游完整模型生成和完整网页声音验证仍缺。

@@ -1,7 +1,8 @@
 // Recovered preparation-stage spectrum arithmetic. This is not a contact-force
-// solver, a preset/model table library, or an implementation of Apple's vexpf.
+// solver or a preset/model table library.
 import { fma32 } from './modal-kernel.mjs';
 import { fma64 } from './modal-poles.mjs';
+import { nativeVectorExpLane } from './native-vector-exp.mjs';
 const f32 = Math.fround;
 const word = new DataView(new ArrayBuffer(8));
 word.setBigUint64(0, 0x3fbd791c5f888823n, true);
@@ -37,6 +38,11 @@ export function buildLogSpectrum({ slope, baseScale, reference, lower,
 // measured separately; do not use it to claim exact native amplitude replay.
 export function approximateExpWeights(logSpectrum) {
   return Float32Array.from(logSpectrum, value => f32(Math.exp(value)));
+}
+
+// Instruction-order reconstruction of the observed host's vexpf dependency.
+export function nativeExpWeights(logSpectrum) {
+  return Float32Array.from(logSpectrum, nativeVectorExpLane);
 }
 
 // Accepts actual supplied weights; the caller must establish their provenance.
