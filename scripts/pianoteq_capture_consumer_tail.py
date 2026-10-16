@@ -31,7 +31,7 @@ def observed(frame,location,_):
         count=scalar(frame,b,'Q');assert 0<count<=8
         r={'stage':stage,'ordinal':ordinal,'H':hex(h),'B':hex(b),'aux':matrix(frame,aux),
            'groups':[matrix(frame,b+8+56*i) for i in range(count)],
-           'controls':{hex(o):scalar(frame,h+o) for o in (0x94,0x98,0x29f8,0x29fc)},
+           'controls':{hex(o):scalar(frame,h+o) for o in (0x94,0x98,0x9c,0xa0,0x29f8,0x29fc)},
            'rowGains':floats(frame,h+0xd0,scalar(frame,h+0xc8,'Q')),
            'processorWords':list(unpack(frame,h+0x2a00,'Q'*32))}
         proc=h+0x2a00

@@ -1,11 +1,12 @@
 // Calculated consumer groups -> merge/unmerge -> packed spatial network -> auxiliary split.
 import fs from 'node:fs';
+import {scaleVoiceGroups} from '../dsp/voice-output-delay.mjs';
 import {combineThenRestoreGroups,spatializeVoiceGroups,distributeAuxiliary} from '../dsp/voice-spatial-output.mjs';
 const [capturePath,reportPath,option,sourcePath,...extra]=process.argv.slice(2);
-if(!capturePath||!reportPath||option!=='--source-report'||!sourcePath||extra.length) throw new Error('Usage: capture.json report.json --source-report calculated-release-consumer.json');
+if(!capturePath||!reportPath||option!=='--source-report'||!sourcePath||(extra.length&&(extra.length!==2||extra[0]!=='--delay-report'))) throw new Error('Usage: capture.json report.json --source-report calculated-release-consumer.json');
 const data=JSON.parse(fs.readFileSync(capturePath,'utf8'));
 const source=JSON.parse(fs.readFileSync(sourcePath,'utf8'));
-if(data.schema!==1||!data.windowComplete||data.errors.length||!source.passed||source.mismatches||!source.observedConsumerWindowChainVerified) throw new Error('Complete capture and computed consumer groups required');
+if(data.schema!==1||!data.windowComplete||data.errors.length||!source.passed||source.mismatches||!source.calculatedDelayInput||!source.filterCoefficientsComputed) throw new Error('Complete capture and computed consumer groups required');
 const bytes=new DataView(new ArrayBuffer(256));
 const word=new DataView(new ArrayBuffer(4));
 const from=x=>{word.setUint32(0,x);return word.getFloat32(0);};
@@ -35,7 +36,25 @@ const rows=first.spatialRows.map(row=>{
   check('initialSpatialZeroRing',state.ring,row.ring);
   return state;
 });
-const computed=new Map(source.predictions.map(r=>[r.ordinal,r.consumerGroups]));
+let computed;
+let additionalDelayReport=false;
+if(extra.length){
+  const delay=JSON.parse(fs.readFileSync(extra[1],'utf8'));
+  if(!delay.passed||delay.mismatches||!delay.delayStateSeededOnce)throw new Error('Verified calculated delay required');
+  const groups=new Map();
+  for(const r of delay.predictions){if(!groups.has(r.ordinal))groups.set(r.ordinal,[]);groups.get(r.ordinal)[r.group]=r.output;}
+  const controls=first.controls;
+  if(!Number.isFinite(controls['0x9c'])||!Number.isFinite(controls['0xa0']))throw new Error('Terminal level observations missing');
+  computed=new Map(source.predictions.map(r=>{
+    const d=groups.get(r.ordinal);
+    if(!d||d.length!==3||d.some(g=>!g))throw new Error('Missing calculated delay group');
+    return [r.ordinal,scaleVoiceGroups([r.primary,d[1],d[2]],controls['0x9c'],controls['0xa0'])];
+  }));
+  additionalDelayReport=true;
+}else{
+  if(!source.observedConsumerWindowChainVerified)throw new Error('Computed terminal consumer groups missing');
+  computed=new Map(source.predictions.map(r=>[r.ordinal,r.consumerGroups]));
+}
 if(computed.size!==data.ordinalLimit||rows.length!==3)throw new Error('Missing computed consumer output');
 let roundTripDifferences=0;
 for(let ordinal=0;ordinal<data.ordinalLimit;ordinal++){
@@ -43,6 +62,7 @@ for(let ordinal=0;ordinal<data.ordinalLimit;ordinal++){
   for(let i=0;i<4;i++)if(block[i].stage!==stages[i]||block[i].ordinal!==ordinal||block[i].groups.length!==3)throw new Error('Missing/reordered tail stage');
   const [before,nonlinear,filtered,expanded]=block;
   for(const record of block){
+    if(additionalDelayReport&&(record.controls['0x9c']!==first.controls['0x9c']||record.controls['0xa0']!==first.controls['0xa0']))throw new Error('Changing terminal level unverified');
     for(const [name,value]of Object.entries(requiredFlags))if(record.spatialFlags[name]!==value)throw new Error('Unsupported spatial branch');
     if(record.controls['0x29f8']!==0||record.controls['0x29fc']!==0)throw new Error('Tail nonlinearity unverified');
     if(record.rowGains.slice(0,3).some(g=>g!==1))throw new Error('Nonunit row level not covered');
@@ -74,7 +94,7 @@ for(let ordinal=0;ordinal<data.ordinalLimit;ordinal++){
 }
 const count=checks.reduce((n,c)=>n+c.count,0),mismatches=checks.reduce((n,c)=>n+c.mismatches,0);
 const report={passed:mismatches===0,count,matched:count-mismatches,mismatches,windowComplete:true,blocks:data.ordinalLimit,
-  roundTripDifferences,computedConsumerInputs:true,spatialRingsStartAtZero:true,spatialStateCarried:true,
+  roundTripDifferences,computedConsumerInputs:true,additionalCalculatedDelayReport:additionalDelayReport,spatialRingsStartAtZero:true,spatialStateCarried:true,
   spatialCoefficientsStillObserved:true,auxiliarySourceStillObserved:true,upstreamFromSeparateVerifiedRun:true,
   finalStereoAudioVerified:false,completeVoiceOrBrowserEquivalence:false,predictions,checks,failures};
 fs.writeFileSync(reportPath,JSON.stringify(report,null,2)+'\n');
