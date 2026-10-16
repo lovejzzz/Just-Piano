@@ -11,8 +11,249 @@ import struct
 from pathlib import Path
 
 
+def read_base_continuation(reader, module, base):
+    """Observed v89 modern subreaders through B+1c58; fail closed on other versions."""
+    m, r = module, reader
+    # mar_param uses float-pointer indices, so each stored destination offset is 4*i.
+
+    def check(condition):
+        if not condition:
+            raise ValueError('unsupported base continuation branch or shape')
+
+    def control_2548(r):
+        v = r.u32()
+        check(v == 14)
+        result = {'version': v, 'indexmap': m.read_vector(r, 'I')}
+        check(len(result['indexmap']) == 128)
+        result['curves'] = [m.read_curve(r) for _ in range(10)]
+        result['scalar68'] = m.read_float(r)
+        result['curves69'] = [m.read_curve(r) for _ in range(4)]
+        result['vectors'] = [m.read_vector(r) for _ in range(4)]
+        result['scalar9d'] = m.read_float(r)
+        return result
+
+    def curve_list(r):
+        v = r.u32()
+        check(v == 1)
+        x = m.read_vector(r)
+        n = r.u32()
+        check(n <= 1000000)
+        return {'version': v, 'coordinates': x, 'curves': [m.read_curve(r) for _ in range(n)]}
+
+    def control_2a38(r):
+        v = r.u32()
+        check(v == 10)
+        result = {'version': v, 'scalars': [m.read_float(r), m.read_float(r)], 'curves': [m.read_curve(r) for _ in range(4)], 'scalar148': m.read_float(r), 'integer14c': r.u32(), 'scalar154': m.read_float(r), 'curve158': m.read_curve(r), 'curve1f8': m.read_curve(r)}
+        result['curves248'] = [m.read_curve(r) for _ in range(3)]
+        result['curve1a8'] = m.read_curve(r)
+        result['scalar150'] = m.read_float(r)
+        result['curve_list478'] = curve_list(r)
+        result['curves338'] = [m.read_curve(r) for _ in range(4)]
+        result['vectors'] = [m.read_vector(r), m.read_vector(r)]
+        return result
+
+    def mar_param(r):
+        start = r.pos
+        v = r.u32()
+        check(v == 35)
+        fields = []
+
+        def F(i, k):
+            begin = r.pos
+            if k == 'u':
+                value = r.u32()
+            elif k == 'f':
+                value = m.read_float(r)
+            elif k == 'c':
+                value = m.read_curve(r)
+            elif k in ['vf', 'vi']:
+                value = m.read_vector(r, 'I' if k == 'vi' else 'f')
+            elif k == 'list':
+                value = curve_list(r)
+            elif k == 'grid':
+                ver = r.u32()
+                check(ver <= 1)
+                n = r.u32()
+                check(n <= 1000000)
+                value = {'version': ver, 'rows': [{'coordinate': m.read_float(r), 'curve': m.read_curve(r)} for _ in range(n)]}
+            fields.append({'object_offset': 4 * i, 'kind': k, 'offset': begin, 'end_offset': r.pos, 'value': value})
+        F(898, 'u')
+        for i in [900, 906, 912]:
+            F(i, 'vf')
+        F(0, 'f')
+        F(2, 'vi')
+        F(8, 'f')
+        F(9, 'f')
+        F(12, 'c')
+        for i in [52, 94, 96]:
+            F(i, 'f')
+        F(98, 'c')
+        F(118, 'f')
+        F(95, 'f')
+        F(32, 'c')
+        for i in [54, 74, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300, 320, 340, 360, 380, 400, 420, 440, 460]:
+            F(i, 'c')
+        for i in [480, 486, 492]:
+            F(i, 'vf')
+        F(498, 'f')
+        F(500, 'c')
+        F(520, 'f')
+        F(522, 'vf')
+        F(528, 'vf')
+        F(534, 'u')
+        F(535, 'f')
+        F(536, 'vf')
+        F(542, 'vf')
+        F(548, 'f')
+        F(549, 'f')
+        F(556, 'vf')
+        F(562, 'vf')
+        F(550, 'vf')
+        check(len(fields[-3]['value']) == 2 and len(fields[-2]['value']) == 2 and (len(fields[-1]['value']) == 2))
+        for i in [568, 588, 608]:
+            F(i, 'c')
+        F(628, 'vf')
+        check(len(fields[-1]['value']) == 4)
+        for i in [736, 756, 776, 634, 654]:
+            F(i, 'c')
+        for i in [674, 686]:
+            F(i, 'list')
+        F(698, 'grid')
+        F(704, 'u')
+        F(706, 'vf')
+        F(714, 'c')
+        F(734, 'f')
+        F(712, 'f')
+        for i in [10, 11, 796]:
+            F(i, 'f')
+        for i in [798, 818, 838, 858, 878]:
+            F(i, 'c')
+        return {'version': v, 'fields': fields, 'offset': start, 'end_offset': r.pos}
+
+    def filter_child(r):
+        v = r.u32()
+        check(v == 5)
+        z = {'version': v, 'scalar0': m.read_float(r), 'vector8': m.read_vector(r), 'scalars20': [m.read_float(r) for _ in range(13)], 'vector58': m.read_vector(r)}
+        check(len(z['vector58']) == 3)
+        z['scalars70'] = [m.read_float(r) for _ in range(4)]
+        z['curve78'] = m.read_curve(r)
+        z['scalarsd4'] = [m.read_float(r) for _ in range(3)]
+        return z
+
+    def filter_(r):
+        v = r.u32()
+        check(v == 9)
+        z = {'version': v, 'curve': m.read_curve(r), 'vector80': m.read_vector(r), 'scalars': [m.read_float(r) for _ in range(6)], 'vector68': m.read_vector(r), 'mode': r.u32(), 'mode9c': r.u32()}
+        check(z['mode'] < 2)
+        z['curve1e8'] = m.read_curve(r)
+        c = z['curve1e8']
+        check(len(c['y']) // max(1, len(c['x'])) == 1)
+        z['vectors'] = [m.read_vector(r) for _ in range(4)]
+        z['curves'] = [m.read_curve(r) for _ in range(3)]
+        z['vector328'] = m.read_vector(r, 'I')
+        z['flag100'] = r.u32()
+        check(z['flag100'] in [0, 1])
+        if z['flag100']:
+            z['child108'] = filter_child(r)
+        return z
+
+    def extend(b, r):
+
+        def add(o, k, fun):
+            p = r.pos
+            v = fun()
+            b['fields'].append({'object_offset': o, 'kind': k, 'offset': p, 'end_offset': r.pos, 'value': v})
+            return v
+
+        def f():
+            return m.read_float(r)
+
+        def c():
+            return m.read_curve(r)
+
+        def vf():
+            return m.read_vector(r)
+
+        def grid():
+            v = r.u32()
+            check(v <= 1)
+            n = r.u32()
+            check(n <= 1000000)
+            return {'version': v, 'rows': [{'coordinate': f(), 'curve': c()} for _ in range(n)]}
+
+        def param3e28():
+            v = r.u32()
+            check(v == 2)
+            return {'version': v, 'vector': vf(), 'floats': [f() for _ in range(6)]}
+
+        def p3f98():
+            v = r.u32()
+            check(v <= 1)
+            return {'version': v, 'floats': [f() for _ in range(8)]}
+
+        def p3fb8():
+            v = r.u32()
+            check(v == 2)
+            return {'version': v, 'curves': [c() for _ in range(5)]}
+
+        def p4148():
+            v = r.u32()
+            check(v <= 1)
+            return {'version': v, 'integer': r.u32(), 'curves': [c() for _ in range(4)]}
+
+        def p4290():
+            v = r.u32()
+            check(v == 3)
+            z = {'version': v, 'scalar4': f(), 'curves8': [c() for _ in range(10)], 'grid330': grid(), 'vector348': vf(), 'curves360': [c() for _ in range(3)], 'scalars450': [f() for _ in range(4)], 'scalar0': f(), 'scalar32c': f()}
+            check(len(z['vector348']) % 4 == 0)
+            return z
+        add(15744, 'f', f)
+        add(15752, 'c', c)
+        add(15832, 'c', c)
+        add(15912, 'p3e28', param3e28)
+        for o in [15960, 15984, 16008, 16032, 16056]:
+            add(o, 'vf', vf)
+        for o in [16084, 16080]:
+            add(o, 'u', r.u32)
+        v = add(16088, 'vf', vf)
+        check(len(v) == 3)
+        for o in [16112, 16192]:
+            add(o, 'c', c)
+        for o in [16272, 16276]:
+            add(o, 'u', r.u32)
+        add(16280, 'p3f98', p3f98)
+        add(16312, 'p3fb8', p3fb8)
+        add(16712, 'p4148', p4148)
+        add(17040, 'p4290', p4290)
+        add(7160, 'vi', lambda: m.read_vector(r, 'I'))
+        add(7184, 'vf', vf)
+
+        def matrix():
+            n = r.u32()
+            check(n <= 1000000)
+            return [vf() for _ in range(n)]
+        for o in [7208, 7232]:
+            add(o, 'matrix', matrix)
+        add(7256, 'vf', vf)
+        b.update(next_offset=r.pos, unparsed_suffix_bytes=r.end - r.pos, next_reader='FUN_100121574(B+0x1c88)')
+        return b
+    for offset, kind, function in [(9512, 'control2528', lambda r: {'version': r.u32(), 'floats': [m.read_float(r) for _ in range(7)]}), (9544, 'control2548', control_2548), (10808, 'control2a38', control_2a38), (12048, 'mar_param', mar_param)]:
+        start = r.pos
+        value = function(r)
+        if offset == 9512:
+            check(value['version'] <= 1)
+        base['fields'].append({'object_offset': offset, 'kind': kind, 'offset': start, 'end_offset': r.pos, 'value': value})
+    start = r.pos
+    check(r.u32() == 1)
+    count = r.u32()
+    check(count <= 1000000)
+    value = {'version': 1, 'filters': [filter_(r) for _ in range(count)]}
+    base['fields'].append({'object_offset': 15720, 'kind': 'filters', 'offset': start, 'end_offset': r.pos, 'value': value})
+    return extend(base, r)
+
+
 def read_base_prefix(data, start, end, module):
-    """Version89 FUN_10059f2cc path through B+0x1bf4; preserves unknown suffix."""
+    """Version89 prefix; verified D4 models continue through B+0x1c58."""
     def require(value, expected):
         if value != expected:
             raise ValueError('unsupported base-model branch')
@@ -112,10 +353,14 @@ def read_base_prefix(data, start, end, module):
     ]
     for offset, kind in schema:
         field(offset, kind)
-    return {'version': 89, 'metadata_type': metadata_type, 'strings': strings,
+    base = {'version': 89, 'metadata_type': metadata_type, 'strings': strings,
             'metadata_integer': metadata_integer, 'metadata_vector': metadata_vector,
             'fields': fields, 'next_offset': reader.pos, 'unparsed_suffix_bytes': end - reader.pos,
             'next_reader': 'FUN_10099d658(B+0x2528)'}
+    # Deeper subreader versions are verified only for these two built-in models.
+    if strings[0] in ('steinwayny', 'd4'):
+        return read_base_continuation(reader, module, base)
+    return base
 
 
 def inspect_bank(data):
@@ -158,7 +403,16 @@ def inspect_bank(data):
                 base_summary = module.summarize_tail({'fields': base['fields']})
                 for curve in base_summary['curve_inventory']:
                     curve['path'] = 'B+' + curve['path'].removeprefix('A+')
-                models.append({'base_prefix': {**base_summary, 'end_offset': base['next_offset'], 'unparsed_suffix_bytes': base['unparsed_suffix_bytes']}, 'offset': begin, 'bytes': length, 'identity': identity,
+                arrays = []
+                for field in base['fields']:
+                    if field['kind'] in ('vf', 'vi', 'matrix'):
+                        value = field['value']
+                        row = {key: field[key] for key in ('object_offset', 'kind', 'offset', 'end_offset')}
+                        row['count'] = len(value)
+                        if field['kind'] == 'matrix':
+                            row['row_lengths'] = [len(item) for item in value]
+                        arrays.append(row)
+                models.append({'base_prefix': {**base_summary, 'array_inventory': arrays, 'end_offset': base['next_offset'], 'unparsed_suffix_bytes': base['unparsed_suffix_bytes']}, 'offset': begin, 'bytes': length, 'identity': identity,
                                'source': source, 'model_reader_offset': model_start,
                                'model_version': version, 'end_offset': payload.pos})
             if payload.pos != payload.end:
