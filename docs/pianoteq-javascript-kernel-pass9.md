@@ -35,3 +35,31 @@ node scripts/pianoteq_replay_modal_kernel.mjs \
 ## 仍缺的接入条件
 
 完整浏览器引擎仍需要精确生成每个预设、琴键、力度和控制状态下的初值、频率、衰减、输入权重、噪声与音板/麦克风/效果路径；还需覆盖带输入、末尾不足四组、门限淘汰、改频和非线性约束路径。本轮没有用猜测的参数填补这些缺口，也没有把当前网页的原始音色宣布为已匹配。
+
+
+## 控制公式的 JavaScript 实现
+
+`dsp/physical-controls.mjs` 另外实现已验证分支的五节点硬度插值和制音释放系数。`scripts/pianoteq_replay_controls.mjs` 用第六轮真实硬度捕获与第七轮单断点释放捕获重放：4个硬度输出和24个释放输出float32全部逐位相同。
+
+硬度模块仅接受已验证的u=0/mode=0及节点内插值，明确拒绝未验证的外推和其它模式；释放模块明确拒绝未验证的非正duration。没有用未经证实的默认曲线填补这些情况。它们与模态核一样还未接入网页的完整模型。
+
+```sh
+node scripts/pianoteq_replay_controls.mjs \
+  "$HOME/.local/share/just-piano-analysis/debug-pass6/runtime-hardness-v3.json" \
+  "$HOME/.local/share/just-piano-analysis/runtime-damper-pass7/release-only/damper-runtime.json" \
+  /tmp/pianoteq-js-controls.json
+```
+
+
+## 真实 AudioWorklet 线程的复验
+
+新增 `tests/modal-browser.cjs` 在本机Chrome的真实AudioWorklet线程导入同一ES模块，分块执行128条实际快照，而不是在Node VM冒充浏览器。4,096个状态和8,192个内部输出sample仍逐位相同，没有pageerror。测试处理器将实际重建块写入worklet输出，随后以零增益连接音频设备以避免重复播放研究片段；这不是完整网页音源的听感/PCM对照。
+
+```sh
+# 需本地HTTP服务运行，npm ci已安装开发依赖
+node tests/modal-browser.cjs \
+  "$HOME/.local/share/just-piano-analysis/debug-pass9-recurrence-v2/runtime.json" \
+  /tmp/pianoteq-worklet-replay.json
+```
+
+Chrome的该次通过不代表所有浏览器/芯片已验证；特别是未覆盖其它引擎的超越函数实现和实时最大复音性能。
