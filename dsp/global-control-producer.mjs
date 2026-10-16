@@ -14,6 +14,10 @@ export class GlobalControlProducer {
   this.bitsets=initial.bitsets.map(s=>({...s,words:s.words.map(BigInt)}));
  }
  getBitsets(){return this.bitsets.map(s=>({...s,words:s.words.map(w=>'0x'+w.toString(16))}));}
+ addDirtyModes(setIndex,indices){
+  if((setIndex!==0&&setIndex!==1)||!Array.isArray(indices)||indices.some(i=>!Number.isInteger(i)||i<0||i>=this.modeCount))throw new Error('Invalid computed global dirty modes');
+  if(indices.length){const set=this.bitsets[setIndex];for(const index of indices)mark(set.words,index);set.flag=0;}
+ }
  process(controls){
   if(controls.modeCount!==this.modeCount||controls.weightedModeCount!==this.weightedModeCount||controls.timeScale!==this.timeScale||controls.bitsets.length!==2)throw new Error('Global control profile changed');
   const observed=controls.bitsets.map(s=>({...s,words:s.words.map(BigInt)})),n=this.modeCount;
