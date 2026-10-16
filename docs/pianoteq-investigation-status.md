@@ -41,6 +41,7 @@ pass12资源存档进一步落地：1105成员MD5全部验证；D4完整50份A�
 
 详细报告：
 
+- [存档到复耦合控制值](pianoteq-impedance-controls-pass15.md)：A4两个分支的四项控制值及3000点相位曲线与实际入口逐位一致；非零ageing及其他音高仍待验证。
 - [全部工厂A、层和FX状态](pianoteq-factory-banks-pass14.md)：800顶层A、59内嵌A、69FX，包含prom/ryal/olos，全部实际record末端闭合。
 - [全部58个基础B存档](pianoteq-all-base-archives-pass14.md)：58份均无未解析suffix；537负例拒绝；额外KVR2资源及运行语义仍需恢复。
 - [存档谐波幅度到运行时权重](pianoteq-source-weights-pass14.md)：35个实际权重逐位同，double log/exp依赖及非恒等分支保留范围限制。
