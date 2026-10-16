@@ -7,6 +7,7 @@ from pianoteq_damper_runtime_capture import scalar, unpack, verify_text
 from pianoteq_capture_modal_source import vector
 from pianoteq_capture_source_amplitude import regfloat
 from pianoteq_capture_final_excitation import table
+from pianoteq_capture_excitation_slopes import capture_inputs
 
 ROOT = Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
 STAGE = os.environ.get('PIANOTEQ_SPECTRUM_STAGE', 'controls')
@@ -40,6 +41,8 @@ def observed(frame, bp, _):
                     'lowerUSupport': scalar(frame, shared + 0x4f8)}
         record = {'note': scalar(frame, g + 0x14), 'mode': scalar(frame, scratch + 0xec, 'I'),
                   'controls': controls}
+        if STAGE in ('controls', 'spectrum'):
+            record['hardnessInputs'] = capture_inputs(frame, scratch)
         if STAGE in ('weights', 'weighted'):
             record['table'] = table(frame, scalar(frame, scratch + 0xb8, 'Q'))
             count = scalar(frame, scratch + 0xf8, 'I')

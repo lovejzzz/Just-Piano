@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import { excitationHardness } from '../dsp/excitation-hardness.mjs';
 const [capturePath, reportPath, ...options] = process.argv.slice(2);
-let position;
-if (options.length) {
-  if (options.length !== 2 || options[0] !== '--position-report') throw new Error('Expected --position-report path');
-  position = JSON.parse(fs.readFileSync(options[1], 'utf8'));
+let position, cosfCandidate = false;
+while (options.length) {
+  const option = options.shift();
+  if (option === '--cosf-candidate') { cosfCandidate = true; continue; }
+  if (option !== '--position-report' || !options.length) throw new Error('Expected --position-report path or --cosf-candidate');
+  position = JSON.parse(fs.readFileSync(options.shift(), 'utf8'));
   if (position.schema !== 'pianoteq-excitation-position-pass27' || !position.passed || position.mismatches)
     throw new Error('Verified computed position report required');
 }
@@ -33,7 +35,7 @@ for (const [index, record] of capture.records.entries()) {
     }
     source = p.source; header = p.header;
   }
-  const result = excitationHardness({ ...record, source, header });
+  const result = excitationHardness({ ...record, source, header }, cosfCandidate ? { cosf: x => Math.fround(Math.cos(x)) } : {});
   for (const key of ['primary', 'secondary', 'referenceFrequency'])
     compare(index, key, result[key], record.actual[key]);
   predictions.push({ note: record.note, mode: record.mode, ...result });
@@ -41,7 +43,9 @@ for (const [index, record] of capture.records.entries()) {
 const report = { schema: 'pianoteq-excitation-hardness-pass28', passed: !failures.length,
   comparedFloatValues, mismatches: failures.length, failures, predictions,
   sourceFromComputedPosition: Boolean(position), initialSourceGenerationStillCaptured: true,
-  sourceTablesStillCaptured: !position, hardnessCurvesStillCaptured: true, repeatBranchVerified: false,
+  sourceTablesStillCaptured: !position, hardnessCurvesStillCaptured: true,
+  repeatBranchVerified: cosfCandidate && capture.records.some(r => r.controls.repeatFlag === 1),
+  nativeScalarCosfImplemented: false, browserCosfCandidateExplicit: cosfCandidate,
   editedHardnessVerified: false, fullExcitationGenerationVerified: false, wholeVoiceAudioVerified: false };
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({ ...report, predictions: undefined }, null, 2));

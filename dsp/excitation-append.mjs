@@ -44,7 +44,6 @@ export function appendExcitationSupport({ header, source, indices, logAmplitudes
       indices.length !== logAmplitudes.length || tables.frequencies.length < indices.length || tables.decayMultipliers.length < indices.length ||
       ![c.scale, c.frequencyLimit, c.supportScale, c.amplitudeGain, ...referenceFrequencies, ...logAmplitudes].every(Number.isFinite))
     throw new RangeError('Complete support excitation inputs required');
-  if (c.repeatFlag === 1 && c.attenuation > 0) throw new RangeError('Unverified repeated-strike history branch');
   const result = Object.fromEntries(Object.entries(source).map(([key, values]) => [key, Array.from(values)]));
   const rowControls = [];
   for (let i = 0; i < indices.length; i++) {
