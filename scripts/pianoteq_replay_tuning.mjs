@@ -10,16 +10,21 @@ for (const data of [final, stretched, anchor]) if (!data.records.length || data.
 if (final.point !== '0x1008a3c60' || stretched.point !== '0x1009626b4' || anchor.point !== '0x1004c3898' ||
     final.configurations.length !== 1 || stretched.configurations.length !== 1) throw new Error('Unexpected capture stages');
 const cfg = stretched.configurations[0], b = new Map(base.fields.map(x => [x.object_offset, x.value]));
-let stretchTable = cfg.stretch_table, stretchTableComputedFromSystem = false;
+let stretchTable = cfg.stretch_table, stretchTableComputedFromSystem = false, stretchRhsStillCaptured = true;
 if (options.length) {
   if (options.length !== 2 || options[0] !== '--stretch-report') throw new Error('Expected --stretch-report path');
   const report = read(options[1]);
-  if (report.schema !== 'pianoteq-stretch-system-pass18' || report.passed !== true ||
+  if (!['pianoteq-stretch-system-pass18', 'pianoteq-stretch-rhs-pass19'].includes(report.schema) || report.passed !== true ||
       report.predictedTable?.length !== 128 || !report.predictedTable.every(Number.isFinite) ||
       !report.checks.some(x => x.name === 'frequency-table' && x.count === 128 && x.bitExact === true && x.mismatches === 0))
     throw new Error('Verified computed stretch table required');
   stretchTable = report.predictedTable;
   stretchTableComputedFromSystem = true;
+  if (report.schema === 'pianoteq-stretch-rhs-pass19') {
+    if (report.rhsStillCaptured !== false || !report.checks.some(x => x.name === 'complete-rhs' && x.count === 203 && x.bitExact === true && x.mismatches === 0))
+      throw new Error('Verified computed stretch RHS required');
+    stretchRhsStillCaptured = false;
+  }
 }
 const a = new Map(preset.decoded_tail.fields.map(x => [x.object_offset, x.value]));
 const tuning = a.get(0x318), pitchCurve = a.get(0x3b0), observedCurve = cfg.pitch_edits;
@@ -104,7 +109,7 @@ if (stretchedKeys.size !== prepared.size) throw new Error('Stretched capture has
 const result = { schema: 'pianoteq-source-tuning-pass17', uniqueNotes: prepared.size, finalRecords: final.records.length, stretchedRecords: stretched.records.length,
   floatValues, floatMismatches, calculatedAnchorScale: scale, anchorInputVerified: true,
   archivePitchCurveVerified: true, stretchTableProducerReconstructed: false, stretchTableComputedFromSystem,
-  stretchRhsStillCaptured: true, nativeMathOracleRequired: true,
+  stretchRhsStillCaptured, nativeMathOracleRequired: true,
   predictedSources: [...prepared].map(([key, value]) => ({ key, frequency: value.output.frequency })),
   nativeUniqueRequests: nativeCalls.size, checks, oracleCalls: [...nativeCalls.values()], failures, passed: failures.length === 0 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');

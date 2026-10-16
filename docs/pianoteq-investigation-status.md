@@ -1,6 +1,6 @@
 # Pianoteq 深入分析：问题与验证状态
 
-目标：本机 Pianoteq 9.2.5 ARM64。更新：2026-10-16，pass18。参数保存实验已修复；完整琴槌—琴弦—制音器耦合与网页声音等价性仍未完成。
+目标：本机 Pianoteq 9.2.5 ARM64。更新：2026-10-16，pass19。参数保存实验已修复；完整琴槌—琴弦—制音器耦合与网页声音等价性仍未完成。
 
 | 问题 | 已验证证据 | 剩余缺口 |
 |---|---|---|
@@ -41,6 +41,8 @@ pass12资源存档进一步落地：1105成员MD5全部验证；D4完整50份A�
 
 详细报告：
 
+- [存档刚度到拉伸RHS和完整频率表](pianoteq-stretch-rhs-pass19.md)：存档控制、115个谐波编号、95个约束及平滑、203项RHS、128键表逐位同；不再以捕获RHS或刚度表作计算输入。两个注册表权重、曲线运行模式及平台数学仍外置。
+- [带冲激延迟补偿的平滑](pianoteq-stretch-smoothing-pass19.md)：6double系数、101float字段及delay逐位同，含非FMA/FMA次序与尾部延展。
 - [拉伸矩阵、求解与128键频率表](pianoteq-stretch-system-pass18.md)：107个正弦、41209个矩阵元素、203个解及128个频率逐位同；计算表接入后2520个调律字段仍全同。刚度RHS与注册表权重仍来自捕获。
 - [拉伸系统LU与残差回算](pianoteq-stretch-linear-pass18.md)：41209个LU double、203个pivot、203个解与203个Ax逐位同。
 - [存档到源刚度、失谐和spread](pianoteq-source-controls-pass17.md)：128个中间double、1841个float逐位同，包含105音高三次刚度构建；ageing与系统数学依赖仍明示。
