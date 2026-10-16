@@ -1,6 +1,6 @@
 # Pianoteq 深入分析：问题与验证状态
 
-目标：本机 Pianoteq 9.2.5 ARM64。更新：2026-10-15，pass9。参数保存实验已修复；完整琴槌—琴弦—制音器耦合仍未恢复。
+目标：本机 Pianoteq 9.2.5 ARM64。更新：2026-10-16，pass10。参数保存实验已修复；完整琴槌—琴弦—制音器耦合仍未恢复。
 
 | 问题 | 已验证证据 | 剩余缺口 |
 |---|---|---|
@@ -33,7 +33,12 @@ pass8以单一固定内部断点完成32组复系数、复根、排序和频率/
 
 pass9完成真实无输入块内核的JavaScript重建：128条运行快照，4096末态和8192输出float32全部逐位同，采集PCM与原版相同。另完成13份完整FXP结构和MD5验证，定位六项物理标量的精确4字节窗口；尚未解出完整预设模型表。网页功能检查通过并修复多设备/通道踏板和丢失pointer capture后的挂音；当前网页仍为独立音源，未与Pianoteq逐样本匹配。
 
+pass10新增可执行JS激励谱和耦合极点模块：实际8/8复系数double逐位同，独立N=2/3求根后164个频率/衰减输出逐位同；原生QR算法尚未移植。真实263个L、给定原生H后的512个W乘积逐位同，Math.exp仍有39处末位差。完整FXP详细尾部已按实际reader逐字段消费，42份suffix=0；基础instrument仍有资源依赖，不能由此称预设模型完整。
+
 详细报告：
+
+- [浏览器复系数和极点模块](pianoteq-browser-poles-pass10.md)
+- [真实硬度对数谱、幅度乘积和音频对照](pianoteq-excitation-runtime-pass10.md)
 
 - [JavaScript内核与真实输出重放](pianoteq-javascript-kernel-pass9.md)
 - [实际块递推、FMA顺序和PCM对照](pianoteq-recurrence-runtime-pass9.md)

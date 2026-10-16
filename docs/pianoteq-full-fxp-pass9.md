@@ -62,3 +62,51 @@ python3 scripts/pianoteq-inspect-fxp.py --compare-first \
 ```
 
 本机结构与差分证据保存在 `~/.local/share/just-piano-analysis/full-fxp-structure-pass9.json`。REA原证据：`preset-model-tree-read.json`（`FUN_10055ec14`）、`preset-inner-read.json`（`FUN_100675f1c`）、`preset-core-save.json`（`FUN_100333d8c`）；本轮使用现成反编译，没有启动新Ghidra会话。
+
+## 后续完成：按代码 schema 消费全部详细尾部
+
+本轮随后启动单独 REA/Ghidra 会话（同一 immutable SHA、JVM `-Xmx4G`），展开原生读取器，不再只比较6个窗口。脚本现在从 `olos` 末端逐字段读取，直到 PrsU 的真实末端；**42份本地 FXP 全部零未解析尾部**，其中包括上述13份受控基线/端点。旧 AU 实验的那一份仍被严格拒绝。此处“零尾部”只指 `olos` 后的详细状态；`prom/ryal/olos` 的内部语义与 metadata extra-data 仍有未解码内容。
+
+为避免混用既有报告的编辑根S、运行M、逐音符G，以下把 type-0 `FUN_10055ec14` 的目的对象称为 **A**。所有对象偏移来自该读取函数及其直接子读取器，不是文件固定偏移。
+
+基线实际读取 **114个顶层字段**，嵌套包含：
+
+- **154条曲线，8,751个Y值**；这些曲线均以version `0x8003` 保存。本轮已在本机完整解码X/Y/index序列，公开报告只保留计数和schema。
+- A+0x9a8 子对象由 `FUN_1005f6284` 读取，version10；含5个初始float、8元素向量、4条曲线、一个105项网格及附加曲线/配置。网格每项是float坐标加曲线，坐标从9至113；曲线点数随项变化，最高135。不能据整数坐标就断言这是完整基础模态表。
+- 调律对象、MIDI范围与映射、效果槽、输出位置/混合子记录、字符串对等均按其读取器消费。基线从0x99d读到0x8f33，与PrsU末端和FXP末端精确重合，没有靠搜索下一个块标签跳过未知字节。
+
+上述6项差分现在得到真实字段身份：
+
+| 参数 | 代码schema目的地 |
+|---|---|
+| Damper Position | A+0x1110 float |
+| Damping Duration | A+0x1334 float |
+| String Length | A+0xf40 float |
+| Impedance | A+0x588 子对象 +0 float |
+| Impedance Cutoff | A+0x588 子对象 +4 float |
+| Q Factor | A+0x588 子对象 +8 float |
+
+剔除文件绝对offset元数据之后，对13份已解码对象作递归比较，12份端点各只有对应上述**一个数值**改变；其余标量、所有曲线节点和值、输出配置等解码值均相同。这个验证比只有尾部changed-byte window更强，但仍不是逐样本发声验证。
+
+### 曲线压缩的完整已观察 schema
+
+`FUN_1000b1090` 读32位版本。低位为0..3；`0x8000`标志的现代分支只接受低版本3，另有独立version4分支。未压缩版本依次读float X向量、float Y向量；版本≥2再读uint32 index向量。
+
+现代分支调用 `FUN_1001c4f3c`：
+
+1. 先读1字节flags，只允许0x78中的bit。
+2. bit3：X为空；否则bit4：X只有一个接下来的float；否则先读uint32 count。
+3. 普通count路径，bit5为0时读count个float；bit5为1时读first/step两个float，之后按 **float32逐次加法** 生成X，不用double的 `first+i*step` 替代。
+4. bit6为1时index向量为空；否则每个X读一个uint32 index。
+
+接着 `FUN_1004d61b8` 读uint32 Y总数。每个run先读一个float并追加它；若已达到总数即结束，否则读1字节run标记。高位0表示再读低7位数量的literal float；高位1表示再重复刚读值低7位次。超出总数的run被拒绝。X为空、Y只有一个值是本机实际出现的合法常量表示，不能误报损坏。运行对象后续如何建立索引、插值模式或兼容迁移，并不属于本次仅恢复存档表示的结论。
+
+`FUN_10032b958` 则是version≤2的命名元数据集合：先读A+0x130内部相对+0xf0、+0的两组字符串对，version2再读+0x30，之后+0x60/+0x90/+0xc0/+0x120/+0x150/+0x180/+0x1b0，共10组。每组 `FUN_1000d6af0` 自带version≤1和两个length-prefixed字符串。基线该段124字节，20个字符串全部为空；不能把这一段命名为力学曲线。
+
+### 验证边界和后续用途
+
+`--include-values` 可把所有解码值输出到**本机研究文件**；默认输出只给结构、offset、曲线计数与哈希。完整表已在本机 `full-fxp-values-pass9.json` 保存，没有加入Git仓库。脚本对不同乐器/旧版本/未核对的子对象版本会拒绝，不声称通用解析800个工厂预设。
+
+得到8,751个存档曲线值并不等于已得到基础乐器资源里的全部B向量。基础节点源仍是 `FUN_10059f2cc` 读取的B对象；该reader与这次type0 A reader不同。完整浏览器复刻下一步仍需要将A的精确曲线绑定到已知生成器，并取得/验证B资源和G基础四数组的生产关系。音板网格、A/B算子、边界与观察点也没有因这次存档解析自动获得。
+
+新增REA本地证据：`pass9-archive-readers.json`、`pass9-archive-helpers.json`、`pass9-archive-subobjects.json`、`pass9-archive-effects-prom.json`、`pass9-archive-curvegrid*.json`、`pass9-archive-final-subobjects.json`、`pass9-archive-output-*.json`、`pass9-archive-mic-*.json`。另外为独立求根实现采集的 `pass10-eigensolver*.json` 同会话保留。会话导出 `pass9-archive-evidence-bundle.json`（170条保留记录，非覆盖率），再正常关闭并生成 `pass9-archive-snapshot.json`。
