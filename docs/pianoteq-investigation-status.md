@@ -42,6 +42,7 @@ pass12资源存档进一步落地：1105成员MD5全部验证；D4完整50份A�
 详细报告：
 
 - [存档曲线到真实硬度表的JavaScript验证](pianoteq-archive-hardness-pass13.md)：10个硬度值及5个节点逐位同；FMA次序经真实值及寄存器定义复核，范围限定note69/All=0。
+- [基础B存档解析扩展](pianoteq-base-prefix-pass13.md)：NY/HB分别195/194条曲线；未知suffix仍明确保留，不等于完整模态模型。
 
 - [资源目录、完整工厂预设与基础B](pianoteq-builtin-resources-pass12.md)
 

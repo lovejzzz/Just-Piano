@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 def read_base_prefix(data, start, end, module):
-    """Version89 FUN_10059f2cc path through B+0xfc8; preserves unknown suffix."""
+    """Version89 FUN_10059f2cc path through B+0x1bf4; preserves unknown suffix."""
     def require(value, expected):
         if value != expected:
             raise ValueError('unsupported base-model branch')
@@ -45,6 +45,16 @@ def read_base_prefix(data, start, end, module):
             value = module.read_curve(reader)
         elif kind in ('vi', 'vf'):
             value = module.read_vector(reader, 'I' if kind == 'vi' else 'f')
+        elif kind == 'grid':
+            value = grid(reader)
+        elif kind == 'curve_list':
+            require(reader.u32(), 1)
+            coordinates = module.read_vector(reader)
+            count = reader.u32()
+            if count > 1_000_000:
+                raise ValueError('oversized base curve list')
+            value = {'version': 1, 'coordinates': coordinates,
+                     'curves': [module.read_curve(reader) for _ in range(count)]}
         elif kind == 'release':
             value = module.read_release_config(reader)
         elif kind in ('compound', 'vecpair'):
@@ -82,11 +92,30 @@ def read_base_prefix(data, start, end, module):
         (0xe88, 'c'), (0xed8, 'c'), (0xf28, 'c'), (0xf78, 'c'),
         (0xfc8, 'c'),
     ]
+    schema += [
+        (0x1018, 'grid'), (0x1030, 'c'), (0x1080, 'c'), (0x10d0, 'vf'),
+        (0x10f0, 'c'), (0x1140, 'c'), (0x1190, 'c'), (0x11e0, 'c'),
+        (0x1230, 'c'), (0x1280, 'c'), (0x14e0, 'f'), (0x14b0, 'vf'),
+        (0x12d0, 'c'), (0x1320, 'c'), (0x1370, 'c'), (0x13c0, 'c'),
+        (0x1410, 'c'), (0x14c8, 'vf'), (0x1460, 'c'), (0x1518, 'f'),
+        (0x1520, 'c'), (0x15c0, 'f'), (0x15c4, 'f'), (0x15c8, 'f'),
+        (0x15cc, 'f'), (0x1570, 'c'), (0x15d0, 'f'), (0x15d8, 'c'),
+        (0x1628, 'f'), (0x1630, 'c'), (0x1680, 'f'), (0x1684, 'f'),
+        (0x1788, 'c'), (0x1688, 'c'), (0x17d8, 'c'), (0x1828, 'c'),
+        (0x1878, 'c'), (0x18c8, 'u'), (0x18d0, 'c'), (0x1920, 'f'),
+        (0x1928, 'c'), (0x1978, 'c'), (0x19c8, 'c'), (0x1a18, 'f'),
+        (0x1a50, 'curve_list'), (0x1a80, 'c'), (0x1a1c, 'f'), (0x1a20, 'curve_list'),
+        (0x1ad0, 'c'), (0x1b24, 'f'), (0x1b28, 'f'), (0x1b2c, 'f'),
+        (0x1b30, 'f'), (0x1b40, 'c'), (0x1b34, 'f'), (0x1b38, 'f'),
+        (0x1b3c, 'f'), (0x1b90, 'f'), (0x1b98, 'c'), (0x1be8, 'f'),
+        (0x1bec, 'f'), (0x1bf0, 'f'), (0x1bf4, 'f'),
+    ]
     for offset, kind in schema:
         field(offset, kind)
     return {'version': 89, 'metadata_type': metadata_type, 'strings': strings,
             'metadata_integer': metadata_integer, 'metadata_vector': metadata_vector,
-            'fields': fields, 'next_offset': reader.pos, 'unparsed_suffix_bytes': end - reader.pos}
+            'fields': fields, 'next_offset': reader.pos, 'unparsed_suffix_bytes': end - reader.pos,
+            'next_reader': 'FUN_10099d658(B+0x2528)'}
 
 
 def inspect_bank(data):
