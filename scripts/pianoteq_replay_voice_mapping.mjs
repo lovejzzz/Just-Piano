@@ -2,10 +2,14 @@ import fs from 'node:fs';
 import { mapVoiceSource } from '../dsp/voice-source-mapping.mjs';
 import { selectVoiceModes } from '../dsp/voice-mode-selection.mjs';
 const [capturePath, outputPath, ...options] = process.argv.slice(2);
-let selectionLog;
-if (options.length) {
-  if (options.length !== 2 || options[0] !== '--selection-log') throw new Error('Expected --selection-log capture');
-  selectionLog = JSON.parse(fs.readFileSync(options[1], 'utf8'));
+let selectionLog, postExcitation;
+for (let i = 0; i < options.length; i += 2) {
+  if (!options[i + 1]) throw new Error('Missing report path');
+  if (options[i] === '--selection-log' && !selectionLog) selectionLog = JSON.parse(fs.readFileSync(options[i + 1], 'utf8'));
+  else if (options[i] === '--post-excitation-report' && !postExcitation) postExcitation = JSON.parse(fs.readFileSync(options[i + 1], 'utf8'));
+  else throw new Error('Expected --selection-log or --post-excitation-report');
+}
+if (selectionLog) {
   if (selectionLog.schema !== 1 || selectionLog.point !== '0x100839c50' || selectionLog.errors.length || !selectionLog.records.length)
     throw new Error('Complete threshold log return required');
 }
@@ -13,6 +17,9 @@ const capture = JSON.parse(fs.readFileSync(capturePath, 'utf8'));
 if (capture.schema !== 1 || capture.point !== '0x1009517d8' || capture.errors.length ||
     !capture.records.length || capture.records.length > 16 || (selectionLog && selectionLog.records.length !== capture.records.length))
   throw new Error('Expected complete mapping and matching log captures');
+if (postExcitation && (postExcitation.schema !== 'pianoteq-post-excitation-pass24' || postExcitation.passed !== true ||
+    postExcitation.mismatches !== 0 || postExcitation.predictions?.length !== capture.records.length))
+  throw new Error('Verified matching post-excitation predictions required');
 const checks = [], failures = [], predictions = [];
 const view = new DataView(new ArrayBuffer(4));
 const bits = x => { view.setFloat32(0, x); return view.getUint32(0); };
@@ -30,19 +37,31 @@ function compare(name, predicted, actual) {
 for (const [recordIndex, r] of capture.records.entries()) {
   const [columns, rows, specialA, specialB, referenceRow, lower, upper] = r.header;
   if (specialA || specialB || rows * columns !== r.source_size) throw new Error('Unverified source mode');
+  const source = Object.fromEntries(Object.entries(r.source).map(([key, values]) => [key, [...values]]));
+  let computedFrequencyDecayPrefix = 0;
+  if (postExcitation) {
+    const p = postExcitation.predictions[recordIndex];
+    if (p.header[0] !== columns || p.source.frequency.length !== p.header[1] * columns || p.source.frequency.length > r.source_size)
+      throw new Error('Post-excitation prefix has incompatible dimensions');
+    computedFrequencyDecayPrefix = p.source.frequency.length;
+    for (const key of ['frequency', 'decay']) {
+      compare(`post-excitation-${key}-prefix`, p.source[key], r.source[key].slice(0, computedFrequencyDecayPrefix));
+      source[key].splice(0, computedFrequencyDecayPrefix, ...p.source[key]);
+    }
+  }
   let layout = r.layout, indices = r.voice.index, selection;
   if (selectionLog) {
     const controls = r.selection_controls, log = selectionLog.records[recordIndex];
     if (!controls || bits(log.threshold) !== bits(controls.projectedThreshold)) throw new Error('Threshold identity mismatch');
     selection = selectVoiceModes({ ...controls, bypassAmplitudeFilter: Boolean(controls.bypassAmplitudeFilter),
-      source: r.source, columns, splitRow: lower }, { log2f: x => Math.fround(Math.log2(x)) });
+      source, columns, splitRow: lower }, { log2f: x => Math.fround(Math.log2(x)) });
     compare('threshold-log2', [selection.logThreshold], [log.log2]);
     compare('selected-layout', selection.layout.flat(), r.layout.flat());
     const valid = r.layout.flatMap(([start, , , count]) => Array.from({ length: count }, (_, i) => start + i));
     compare('selected-indices', valid.map(i => selection.indices[i]), valid.map(i => r.voice.index[i]));
     layout = selection.layout; indices = selection.indices;
   }
-  const predicted = mapVoiceSource({ source: r.source, columns, referenceRow, zeroAdjustmentRows: [lower, upper],
+  const predicted = mapVoiceSource({ source, columns, referenceRow, zeroAdjustmentRows: [lower, upper],
     layout, indices });
   // Gaps between groups are not initialized by this gather. Only compare valid
   // lanes and four-lane padding that this native function actually clears.
@@ -52,7 +71,7 @@ for (const [recordIndex, r] of capture.records.entries()) {
   for (const name of ['frequency', 'decay', 'amplitude', 'phase', 'J'])
     compare(name, lanes.map(i => predicted[name][i]), lanes.map(i => r.voice[name][i]));
   compare('referenceDecay', [predicted.referenceDecay], [r.reference_decay]);
-  predictions.push({ layout, selectionDecisions: selection?.decisions, lanes: lanes.map(lane => ({ lane,
+  predictions.push({ layout, computedFrequencyDecayPrefix, selectionDecisions: selection?.decisions, lanes: lanes.map(lane => ({ lane,
     ...Object.fromEntries(['frequency', 'decay', 'amplitude', 'phase', 'J'].map(name => [name, predicted[name][lane]])) })) });
 }
 const report = { schema: 'pianoteq-voice-source-mapping-pass22', passed: checks.every(x => !x.mismatches),
@@ -60,6 +79,7 @@ const report = { schema: 'pianoteq-voice-source-mapping-pass22', passed: checks.
   checks, failures, predictions, postExcitationSourceStillCaptured: true, indexMapStillCaptured: !selectionLog,
   modeSelectionComputed: Boolean(selectionLog), selectionControlsStillCaptured: true,
   scalarLog2VerifiedOnlyAtObservedThreshold: Boolean(selectionLog),
+  postExcitationFrequencyDecayPrefixComputed: Boolean(postExcitation),
   wholeVoiceAudioVerified: false };
 fs.writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({ ...report, predictions: undefined }, null, 2));
