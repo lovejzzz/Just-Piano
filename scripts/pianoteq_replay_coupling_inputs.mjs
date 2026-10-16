@@ -2,7 +2,14 @@
 import fs from 'node:fs';
 import { prepareModalInputs, modePoleInputs } from '../dsp/modal-source.mjs';
 import { archiveCouplingGrid, couplingArguments } from '../dsp/coupling-inputs.mjs';
-const [basePath, sourcePath, powfPath, capturePath, reportPath] = process.argv.slice(2);
+const positional = [];
+let controlsReportPath, tuningReportPath;
+for (let i = 2; i < process.argv.length; i++) {
+  if (process.argv[i] === '--source-controls-report') controlsReportPath = process.argv[++i];
+  else if (process.argv[i] === '--tuning-report') tuningReportPath = process.argv[++i];
+  else positional.push(process.argv[i]);
+}
+const [basePath, sourcePath, powfPath, capturePath, reportPath] = positional;
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
 const base = read(basePath)[0], sourceData = read(sourcePath), oracle = read(powfPath), capture = read(capturePath);
 const source = sourceData.configurations ? { errors: sourceData.errors, records: Object.values(sourceData.configurations) } : sourceData;
@@ -12,6 +19,27 @@ const view = new DataView(new ArrayBuffer(4));
 const bits = value => { view.setFloat32(0, value); return view.getUint32(0); };
 const equal = (a, b) => bits(a) === bits(b);
 const sameArray = (a, b) => a.length === b.length && a.every((v, j) => equal(v, b[j]));
+const physical = new Map(), frequencies = new Map();
+if (controlsReportPath || tuningReportPath) {
+  if (!controlsReportPath || !tuningReportPath) throw new Error('Both physical-controls and tuning reports are required');
+  const controls = read(controlsReportPath), tuning = read(tuningReportPath);
+  if (controls.schema !== 'pianoteq-source-controls-pass17' || controls.passed !== true || controls.failures?.length !== 0 ||
+      controls.archiveCurvesVerified !== true || controls.nativeIntermediateStiffnessDoubleVerified !== true ||
+      controls.nativeDoubleValues !== 128 || controls.nativeDoubleMismatches !== 0 || controls.configurationCount !== 4)
+    throw new Error('Expected verified archive physical-controls report');
+  for (const row of controls.checks.filter(row => !row.tuningOnly)) {
+    if (physical.has(row.note) && JSON.stringify(physical.get(row.note)) !== JSON.stringify(row.prediction))
+      throw new Error('Conflicting physical-control predictions');
+    physical.set(row.note, row.prediction);
+  }
+  if (tuning.schema !== 'pianoteq-source-tuning-pass17' || tuning.passed !== true || tuning.failures?.length !== 0 ||
+      tuning.archivePitchCurveVerified !== true || tuning.floatMismatches !== 0 || tuning.uniqueNotes !== 105 ||
+      tuning.predictedSources?.length !== tuning.uniqueNotes) throw new Error('Expected complete source-tuning report');
+  for (const row of tuning.predictedSources) {
+    if (frequencies.has(row.key) || !Number.isFinite(row.frequency)) throw new Error('Invalid source-tuning prediction');
+    frequencies.set(row.key, row.frequency);
+  }
+}
 const grid = archiveCouplingGrid(base.fields), prepared = new Map(), failures = [], gridChecks = [], expectedKeys = new Set();
 for (const row of source.records) {
   const key = `${row.note_index}:${row.mode}`, config = capture.configurations[key];
@@ -27,7 +55,21 @@ for (const row of source.records) {
     gridValueCount += curve.x.length + curve.y.length;
   }
   gridChecks.push({ key, gridValueCount, curveCount: grid.curves.length });
-  const g = row.G_controls, c = row.cache_controls, v = row.G_vectors, w = row.cache_vectors;
+  let g = row.G_controls, v = row.G_vectors, w = row.cache_vectors;
+  const c = row.cache_controls;
+  if (physical.size) {
+    const values = physical.get(row.note), frequency = frequencies.get(`${row.note_index}:${row.note}`);
+    if (!values || !Number.isFinite(frequency)) throw new Error('Computed source inputs do not cover captured note');
+    const controls = { '0x28': values.stiffness, '0x78': frequency, '0x148': values.spread };
+    for (const [name, value] of Object.entries(controls)) if (!equal(value, g[name]))
+      failures.push({ key, stage: 'computed-G-control', name, prediction: value, actual: g[name] });
+    for (const [name, value] of [['0x40', values.componentStiffness], ['0x120', values.offsets]])
+      if (!sameArray(value, v[name])) failures.push({ key, stage: 'computed-G-vector', name });
+    if (!sameArray(values.frequencyRatios, w['0x1f8'])) failures.push({ key, stage: 'computed-ratios' });
+    g = { ...g, ...controls };
+    v = { ...v, '0x40': values.componentStiffness, '0x120': values.offsets };
+    w = { ...w, '0x1f8': values.frequencyRatios };
+  }
   const native = oracle.records.filter(x => x.note_index === row.note_index && x.cache_mode === row.mode);
   if (native.length !== 1 || !equal(native[0].base, Math.fround(g['0x78'] / 440)) ||
       !equal(native[0].exponent, c['0x1a0']) || bits(native[0].result).toString(16).padStart(8, '0') !== native[0].result_bits)
@@ -69,6 +111,7 @@ for (const record of capture.records) {
 for (const key of expectedKeys) if (!keys.has(key)) failures.push({ key, stage: 'missing-captured-call' });
 const result = { model: base.strings[0], capturedCalls: capture.records.length, inputValues, inputMismatches,
   expectedCalls: expectedKeys.size, archiveGridVerified: true, gridChecks, nativePowfOracleRequired: true, sourceGAndCacheStillCaptured: true,
+  physicalSourceInputsComputed: physical.size > 0, frequencyComputedFromTuning: frequencies.size > 0,
   checks, failures, passed: failures.length === 0 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
 console.log(JSON.stringify({ ...result, checks: undefined }, null, 2));

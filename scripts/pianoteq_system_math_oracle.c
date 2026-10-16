@@ -28,6 +28,11 @@ int main(int argc, char **argv) {
     volatile double y = argc > 3 ? decode(argv[3]) : 0;
     double result;
     if (!strcmp(argv[1], "log2f")) result = log2f((float)x);
+    else if (!strcmp(argv[1], "log10f")) result = log10f((float)x);
+    else if (!strcmp(argv[1], "expf")) result = expf((float)x);
+    else if (!strcmp(argv[1], "exp2f")) result = exp2f((float)x);
+    else if (!strcmp(argv[1], "exp2")) result = exp2(x);
+    else if (!strcmp(argv[1], "log2")) result = log2(x);
     else if (!strcmp(argv[1], "exp")) result = exp(x);
     else if (!strcmp(argv[1], "tan")) result = tan(x);
     else if (!strcmp(argv[1], "pow")) {
