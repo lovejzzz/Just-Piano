@@ -35,6 +35,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "log2")) result = log2(x);
     else if (!strcmp(argv[1], "exp")) result = exp(x);
     else if (!strcmp(argv[1], "tan")) result = tan(x);
+    else if (!strcmp(argv[1], "sin")) result = sin(x);
     else if (!strcmp(argv[1], "pow")) {
         if (argc != 4) return 2;
         result = pow(x, y);

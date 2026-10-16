@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { equalTemperamentBase, stretchFrequency, anchorFrequencyScale, finishTuning } from '../dsp/source-tuning.mjs';
-const [basePath, presetPath, finalPath, stretchedPath, anchorPath, oracle, reportPath] = process.argv.slice(2);
+const [basePath, presetPath, finalPath, stretchedPath, anchorPath, oracle, reportPath, ...options] = process.argv.slice(2);
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
 const base = read(basePath)[0], preset = read(presetPath);
 const final = read(finalPath), stretched = read(stretchedPath), anchor = read(anchorPath);
@@ -10,12 +10,24 @@ for (const data of [final, stretched, anchor]) if (!data.records.length || data.
 if (final.point !== '0x1008a3c60' || stretched.point !== '0x1009626b4' || anchor.point !== '0x1004c3898' ||
     final.configurations.length !== 1 || stretched.configurations.length !== 1) throw new Error('Unexpected capture stages');
 const cfg = stretched.configurations[0], b = new Map(base.fields.map(x => [x.object_offset, x.value]));
+let stretchTable = cfg.stretch_table, stretchTableComputedFromSystem = false;
+if (options.length) {
+  if (options.length !== 2 || options[0] !== '--stretch-report') throw new Error('Expected --stretch-report path');
+  const report = read(options[1]);
+  if (report.schema !== 'pianoteq-stretch-system-pass18' || report.passed !== true ||
+      report.predictedTable?.length !== 128 || !report.predictedTable.every(Number.isFinite) ||
+      !report.checks.some(x => x.name === 'frequency-table' && x.count === 128 && x.bitExact === true && x.mismatches === 0))
+    throw new Error('Verified computed stretch table required');
+  stretchTable = report.predictedTable;
+  stretchTableComputedFromSystem = true;
+}
 const a = new Map(preset.decoded_tail.fields.map(x => [x.object_offset, x.value]));
 const tuning = a.get(0x318), pitchCurve = a.get(0x3b0), observedCurve = cfg.pitch_edits;
 const word = new DataView(new ArrayBuffer(8));
 const bits = value => { word.setFloat64(0, value); return word.getBigUint64(0).toString(16).padStart(16, '0'); };
 const decode = text => { word.setBigUint64(0, BigInt('0x' + text)); return word.getFloat64(0); };
 const same = (x, y) => bits(Math.fround(x)) === bits(Math.fround(y));
+if (!stretchTable.every((x, i) => same(x, cfg.stretch_table[i]))) throw new Error('Computed stretch table differs from tuning capture');
 if (!same(b.get(0x1b34), cfg.tuning_controls['0x20']) || cfg.tuning_controls['0x280'] !== 0 ||
     cfg.tuning_integers['0x190'] !== 1 ||
     pitchCurve.x.length !== observedCurve.x.length || pitchCurve.y.length !== observedCurve.y.length ||
@@ -41,7 +53,7 @@ for (const record of final.records) {
   if (prepared.has(key)) continue;
   const baseline = equalTemperamentBase(record.note, tuning, math);
   const stretch = stretchFrequency({ note: record.note, noteIndex: record.note_index, baseFrequency: baseline,
-    stretchTable: cfg.stretch_table, modelReferenceHz: b.get(0x1b34),
+    stretchTable, modelReferenceHz: b.get(0x1b34),
     registryPitchScale: cfg.registry_constants.pitch_scale, registryReferenceNote: cfg.registry_constants.reference_note }, math);
   prepared.set(key, { baseline, stretch });
 }
@@ -91,7 +103,8 @@ for (const record of stretched.records) {
 if (stretchedKeys.size !== prepared.size) throw new Error('Stretched capture has missing notes');
 const result = { schema: 'pianoteq-source-tuning-pass17', uniqueNotes: prepared.size, finalRecords: final.records.length, stretchedRecords: stretched.records.length,
   floatValues, floatMismatches, calculatedAnchorScale: scale, anchorInputVerified: true,
-  archivePitchCurveVerified: true, stretchTableProducerReconstructed: false, nativeMathOracleRequired: true,
+  archivePitchCurveVerified: true, stretchTableProducerReconstructed: false, stretchTableComputedFromSystem,
+  stretchRhsStillCaptured: true, nativeMathOracleRequired: true,
   predictedSources: [...prepared].map(([key, value]) => ({ key, frequency: value.output.frequency })),
   nativeUniqueRequests: nativeCalls.size, checks, oracleCalls: [...nativeCalls.values()], failures, passed: failures.length === 0 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
