@@ -1,6 +1,15 @@
 // 657dfc/667fc4, inspected vector counts divisible by four; coefficient production is external.
 import {fma32} from './modal-kernel.mjs';
 const f=Math.fround,clipWord=new DataView(new ArrayBuffer(4));clipWord.setUint32(0,0x219392ef);const threshold=clipWord.getFloat32(0);
+// 3ca148 coefficient refresh after its control selection and decay limiting.
+// mode fields are storage offsets, not inferred physical parameter names.
+export function globalModeCoefficientArguments(timeScale,fields){
+ const values=[timeScale,...[12,16,20,24,32].map(o=>fields['0x'+o.toString(16)])];
+ if(!values.every(Number.isFinite))throw new Error('Invalid global coefficient source fields');
+ const [dt,a,b,c,d,decay]=values,t=f(-f(dt*decay)),scale=f(t+1);
+ const dc=f(d*scale),cc=f(c*scale);
+ return [f(b),fma32(a,cc,-f(b*dc)),f(dc*-2),f(f(t+t)+1)];
+}
 export class GlobalModalRecurrence64 {
  constructor(config){
   const n=config.vectorCount,s=config.initial;
@@ -10,6 +19,11 @@ export class GlobalModalRecurrence64 {
  setCoefficients(values){
   if(values.length!==this.vectorCount*16||!values.every(Number.isFinite))throw new Error('Invalid global modal coefficient table');
   this.coefficients=Float32Array.from(values);
+ }
+ setModeCoefficients(index,values){
+  if(!Number.isInteger(index)||index<0||index>=this.vectorCount*4||values.length!==4||!values.every(Number.isFinite))throw new Error('Invalid global modal coefficient write');
+  const offset=Math.floor(index/4)*16+index%4;
+  for(let c=0;c<4;c++)this.coefficients[offset+c*4]=c<2?values[c]:-values[c];
  }
  process64(input,before){
   if(input.length!==64||before.length!==64)throw new Error('64 global modal samples required');
