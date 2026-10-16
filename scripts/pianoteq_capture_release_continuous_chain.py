@@ -12,14 +12,37 @@ from pianoteq_capture_coefficients import capture_record
 ROOT=Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
 WINDOW_BLOCKS=int(os.environ.get('PIANOTEQ_CONTINUOUS_BLOCKS','8'));assert 1<=WINDOW_BLOCKS<=512
 WINDOW_END=64*WINDOW_BLOCKS
-ALL_VOICES=os.environ.get('PIANOTEQ_ALL_VOICES','0')=='1'
+CONSUMER_DELAY=os.environ.get('PIANOTEQ_CONSUMER_DELAY','0')=='1'
+ALL_VOICES=CONSUMER_DELAY or os.environ.get('PIANOTEQ_ALL_VOICES','0')=='1'
 DISPATCH=ALL_VOICES or os.environ.get('PIANOTEQ_CAPTURE_DISPATCH','0')=='1'
 POINTS={'before':0x10035ef10,'weights':0x100695108,'final':0x100864d28,'envelopeResult':0x100472fd0,'copy':0x1004604d4,'coefficients':0x1006e5360}
 if DISPATCH:POINTS['coefficients']=0x100472f50
 records=[];errors=[];hooks={};voices={};owners={};initialized=set();pending={};envelope_pending={};envelope_completed={};sample_counters={};blocks=0;duplicates=0;last_seen={};starts=0;updates=0;final_calls=0;spectrum_calls=0;copies=0;coefficients=0;complete=False
+transitions=[]
 
 def save():
- (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'workerOutputs':ALL_VOICES,'windowBlocks':None if ALL_VOICES else WINDOW_BLOCKS,'fixedSites':True,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']==('envelopeResult' if ALL_VOICES else 'copy') and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+ (ROOT/'runtime.json').write_text(json.dumps({'schema':1,'dispatchControls':DISPATCH,'workerOutputs':ALL_VOICES,'windowBlocks':None if ALL_VOICES else WINDOW_BLOCKS,'fixedSites':not CONSUMER_DELAY,'consumerDelay':CONSUMER_DELAY,'transitions':transitions,'siteCount':6,'records':records,'errors':errors,'starts':starts,'spectrumCount':spectrum_calls,'finalCount':final_calls,'copyCount':copies,'initializations':len(initialized),'envelopeBlocks':blocks,'duplicateEnvelopeReturns':duplicates,'envelopePending':len(envelope_pending),'coefficientCount':coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']==('envelopeResult' if ALL_VOICES else 'copy') and 'render' in r for r in records),'pending':len(pending),'complete':complete,'activeSites':sum(h.IsEnabled() for h in hooks.values())},indent=2,allow_nan=False))
+def delay_states(frame,h,include_ring):
+ count=scalar(frame,h+0x2b40,'Q');assert 0<=count<=3
+ result=[]
+ for group in range(count):
+  d=h+0x2b48+72*group;length,elapsed=unpack(frame,d,'II');assert length<=8192
+  row={'length':length,'elapsed':elapsed,'writeGain':scalar(frame,d+8),'dryGain':scalar(frame,d+12),'target':scalar(frame,d+16),'multiplier':scalar(frame,d+20),'remaining':scalar(frame,d+24,'I')}
+  if include_ring:row['ring']=list(unpack(frame,scalar(frame,d+0x20,'Q'),'f'*length)) if length else []
+  result.append(row)
+ return result
+
+def consumer_controls(frame,h):
+ return {'spread':scalar(frame,h+0x128),'mute':bool(scalar(frame,h+0xc68,'Q')),'bleedFlag':scalar(frame,h+0x2b00,'B'),'bleedGain':scalar(frame,h+0x2b10)}
+
+def activate_consumer(frame):
+ assert CONSUMER_DELAY and final_calls==5 and spectrum_calls==10 and not transitions
+ t=frame.GetThread().GetProcess().GetTarget();debugger=t.GetDebugger();old=hooks.pop('weights');old_id=old.GetID();assert t.BreakpointDelete(old_id);del POINTS['weights']
+ address=0x100460908;result=__import__('lldb').SBCommandReturnObject();debugger.GetCommandInterpreter().HandleCommand(f'breakpoint set --hardware --address {address:#x} --shlib "Pianoteq 9"',result);assert result.Succeeded(),result.GetError()
+ h=t.GetBreakpointAtIndex(t.GetNumBreakpoints()-1);h.SetScriptCallbackFunction(__name__+'.observed');h.SetAutoContinue(True);hooks['consumer']=h;POINTS['consumer']=address
+ assert t.GetNumBreakpoints()==len(hooks)==6 and all(b.IsEnabled() and b.IsHardware() for b in hooks.values())
+ transitions.append({'afterInitializations':final_calls,'weightsSeen':spectrum_calls,'removedWeightId':old_id,'consumerId':h.GetID(),'consumerAddress':hex(address),'activeSites':6})
+
 def skipped_state(frame,v):
  o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
  layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
@@ -95,6 +118,8 @@ def observed(frame,location,_):
    records.append({'stage':stage,'thread':thread,'epoch':voices[voice],'voice':hex(voice),'counter':scalar(frame,voice+0x6c,'I'),
     'release':scalar(frame,voice+0x2f24),'modalPosition':scalar(frame,voice+0xab0),
     'producerActual':{'repeatFlag':scalar(frame,voice+0x2ff0,'B'),'age':scalar(frame,voice+0x2ffc),'oldVelocity':scalar(frame,voice+0x3000),'attenuation':scalar(frame,voice+0x2ff8),'history':list(unpack(frame,voice+0x3010,'f'*n)) if n else []}})
+   if CONSUMER_DELAY:
+    r=records[-1];r['consumerPre']={'controls':consumer_controls(frame,voice),'delays':delay_states(frame,voice,r['counter']==0 or r['counter']%(128*64)==0)}
    if not ALL_VOICES and voices[voice]==0 and 0<=records[-1]['counter']<WINDOW_END:
     v=voice+0x168;o=scalar(frame,v,'Q');groups=scalar(frame,o+0xa8,'Q');assert 0<groups<=3
     layout=[list(unpack(frame,o+0xb0+16*i,'IIII')) for i in range(groups)]
@@ -126,6 +151,7 @@ def observed(frame,location,_):
     'selectionControls':{**p['selectionSource'],'alignment':scalar(frame,scalar(frame,v,'Q')+0xe8,'I'),'bypassAmplitudeFilter':bool(scalar(frame,v+0x718,'B')&1),'amplitudeThreshold':scalar(frame,v+0x774),'projectedThreshold':scalar(frame,v+0x778)},
     'positionInputs':{'position':scalar(frame,v+0x8d4),'referenceFrequency':scalar(frame,v+0x918),'rolloff':scalar(frame,v+0x908),'cutoffIndex':scalar(frame,v+0x928,'I')},
     'target':target});final_calls+=1
+   if CONSUMER_DELAY and final_calls==5:activate_consumer(frame)
   elif stage=='coefficients':
    v=register(frame,'x19');voice=v-0x168
    if voice not in voices:return False
@@ -137,6 +163,13 @@ def observed(frame,location,_):
     assert flag in (0,1) and factor==1 and phase==0
     r=records[-1];r['dispatch']={'required':flag==1,'flag':flag,'phase':phase,'factor':factor,'initial':scalar(frame,v+0x18,'B'),'committedU':scalar(frame,v+0x8c8)}
     if r['counter']>0 and (ALL_VOICES or r['epoch']==0 and r['counter']<=WINDOW_END) and not r['dispatch']['required']:r['skippedState']=skipped_state(frame,v)
+  elif stage=='consumer':
+   h=register(frame,'x19');assert h in voices;counter=scalar(frame,h+0x6c,'I');matrix=register(frame,'x23');count=scalar(frame,matrix,'Q');assert count==3
+   channels=[]
+   for i in range(count):
+    descriptor=matrix+8+56*i;rows,stride,n,sample_stride=unpack(frame,descriptor,'IIII');assert rows==1 and n==64
+    channels.append(list(unpack(frame,scalar(frame,descriptor+16,'Q'),'f'*n)))
+   records.append({'stage':stage,'epoch':voices[h],'voice':hex(h),'counter':counter,'channels':channels,'controls':consumer_controls(frame,h),'delays':delay_states(frame,h,counter%(128*64)==0)})
   else:
    v=register(frame,'x19');voice=v-0x168
    if voice not in voices:return False
@@ -180,6 +213,13 @@ def finish():
    assert [r['counter'] for r in decisions]==list(range(0,len(decisions)*64,64))
    assert [r['counter'] for r in rendered]==list(range(64,(len(rendered)+1)*64,64)) and all('render' in r and 'postState' in r for r in rendered)
    assert [r['target']['sample_counter'] for r in records if r['stage']=='refresh' and r['epoch']==epoch]==[r['counter'] for r in decisions if r['counter']>0 and r['dispatch']['required']]
+  if CONSUMER_DELAY:
+   assert len(transitions)==1 and transitions[0]['activeSites']==6
+   for epoch in range(5):
+    copies_for_voice=[r['counter'] for r in records if r['stage']=='copy' and r['epoch']==epoch]
+    observed=[r['counter'] for r in records if r['stage']=='consumer' and r['epoch']==epoch]
+    assert copies_for_voice and copies_for_voice[0]==0 and observed and all(age%64==0 for age in observed) and all(b==a+64 for a,b in zip(observed,observed[1:]))
+    assert observed[-1]>=copies_for_voice[-1] and (epoch!=4 or observed[0]==0)
   for h in hooks.values():h.SetEnabled(False)
   complete=True;save();return
  assert [r['counter'] for r in records if r['stage']=='copy' and 'render' in r]==list(range(0,WINDOW_END,64))
