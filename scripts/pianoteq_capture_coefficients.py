@@ -26,6 +26,54 @@ def save():
     }, indent=2))
 
 
+def capture_record(frame):
+    v = frame.FindRegister('x24').GetValueAsUnsigned() - 0x18
+    o = scalar(frame, v, 'Q')
+    groups = scalar(frame, o + 0xa8, 'Q')
+    assert 0 < groups <= 8
+    pointers = {name: scalar(frame, v + offset, 'Q') for name, offset in {
+        'frequency': 0x20, 'modal_decay': 0x48, 'J': 0x1b0, 'K': 0xe8,
+        'S': 0x110, 'sin_inverse': 0x138, 'R': 0x160,
+        'energy': 0x188, 'position_weight': 0x788,
+    }.items()}
+    pointers['P'] = scalar(frame, o + 0x58, 'Q')
+    pointers['Q'] = scalar(frame, o + 0x80, 'Q')
+    # Verified stack slot used to restore x2 in the exp coefficient loop.
+    fp = frame.FindRegister('x29').GetValueAsUnsigned()
+    pointers['effective_decay'] = scalar(frame, fp - 0x210, 'Q')
+    coefficients = scalar(frame, o + 8, 'Q')
+    record = {
+        'stage': 'released' if scalar(frame, v + 0x7e4) > 0 else 'held',
+        'sample_counter': scalar(frame, v + 0x10, 'I'),
+        'P_pointer': pointers['P'],
+        'thread': frame.GetThread().GetThreadID(), 'V': hex(v),
+        'initial_flag': scalar(frame, v + 0x18, 'B'),
+        'layout_flag': scalar(frame, o + 0xe0, 'B'),
+        'input_mode': scalar(frame, o + 0xf0, 'I'),
+        'energy_layout': scalar(frame, o + 0xe4, 'I'),
+        'prune_threshold': scalar(frame, v + 0x774),
+        'keep_slots': scalar(frame, v + 0x718, 'B'),
+        'block_length_V768': scalar(frame, v + 0x768, 'i'),
+        'block_factor_V810': scalar(frame, v + 0x810, 'I'),
+        'controls': {hex(offset): scalar(frame, v + offset) for offset in (
+            0xc, 0x780, 0x784, 0x7b0, 0x7e0, 0x7e4, 0x7e8, 0x7ec, 0x7f0,
+            0x7f4, 0x7f8, 0x7fc, 0x800, 0x804)},
+        'groups': [], 'lanes': [],
+    }
+    for group in range(groups):
+        start, padded, capacity, count = unpack(frame, o + 0xb0 + 16 * group, 'IIII')
+        assert 0 <= start < 8192 and 0 <= count <= 8192 - start
+        record['groups'].append([start, padded, capacity, count])
+        for lane in range(start // 4 * 4, (start + count + 3) // 4 * 4):
+            values = {name: scalar(frame, address + lane * 4) for name, address in pointers.items()}
+            index = (lane // 4) * 8 + lane % 4
+            values.update({'lane': lane, 'group': group, 'valid': start <= lane < start + count,
+                           'A': scalar(frame, coefficients + index * 4),
+                           'B': scalar(frame, coefficients + (index + 4) * 4)})
+            record['lanes'].append(values)
+    return record
+
+
 def observed(frame, bp, _):
     try:
         v = frame.FindRegister('x24').GetValueAsUnsigned() - 0x18
@@ -33,44 +81,7 @@ def observed(frame, bp, _):
         limit = 40 if stage == 'released' else 8
         if sum(r['stage'] == stage for r in records) >= limit:
             return False
-        o = scalar(frame, v, 'Q')
-        groups = scalar(frame, o + 0xa8, 'Q')
-        assert 0 < groups <= 8
-        pointers = {name: scalar(frame, v + offset, 'Q') for name, offset in {
-            'frequency': 0x20, 'modal_decay': 0x48, 'K': 0xe8,
-            'S': 0x110, 'sin_inverse': 0x138, 'R': 0x160,
-            'energy': 0x188, 'position_weight': 0x788,
-        }.items()}
-        pointers['P'] = scalar(frame, o + 0x58, 'Q')
-        pointers['Q'] = scalar(frame, o + 0x80, 'Q')
-        # Verified stack slot used to restore x2 in the exp coefficient loop.
-        fp = frame.FindRegister('x29').GetValueAsUnsigned()
-        pointers['effective_decay'] = scalar(frame, fp - 0x210, 'Q')
-        coefficients = scalar(frame, o + 8, 'Q')
-        record = {
-            'stage': stage,
-            'thread': frame.GetThread().GetThreadID(), 'V': hex(v),
-            'initial_flag': scalar(frame, v + 0x18, 'B'),
-            'layout_flag': scalar(frame, o + 0xe0, 'B'),
-            'input_mode': scalar(frame, o + 0xf0, 'I'),
-            'block_length_V768': scalar(frame, v + 0x768, 'i'),
-            'block_factor_V810': scalar(frame, v + 0x810, 'I'),
-            'controls': {hex(offset): scalar(frame, v + offset) for offset in (
-                0xc, 0x780, 0x784, 0x7b0, 0x7e0, 0x7e4, 0x7e8, 0x7ec, 0x7f0,
-                0x7f4, 0x7f8, 0x7fc, 0x800, 0x804)},
-            'groups': [], 'lanes': [],
-        }
-        for group in range(groups):
-            start, padded, capacity, count = unpack(frame, o + 0xb0 + 16 * group, 'IIII')
-            assert 0 <= start < 8192 and 0 <= count <= 8192 - start
-            record['groups'].append([start, padded, capacity, count])
-            for lane in range(start // 4 * 4, (start + count + 3) // 4 * 4):
-                values = {name: scalar(frame, address + lane * 4) for name, address in pointers.items()}
-                index = (lane // 4) * 8 + lane % 4
-                values.update({'lane': lane, 'group': group, 'valid': start <= lane < start + count,
-                               'A': scalar(frame, coefficients + index * 4),
-                               'B': scalar(frame, coefficients + (index + 4) * 4)})
-                record['lanes'].append(values)
+        record = capture_record(frame)
         records.append(record)
         save()
         return False
