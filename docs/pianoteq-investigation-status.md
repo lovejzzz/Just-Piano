@@ -130,3 +130,7 @@ pass4 证据已导出为 `pass4-evidence-bundle.json` 与 `pass4-snapshot.json`�
 
 
 pass5新增REA响应与旧证据合并导出为 `pass5-evidence-bundle.json`、`pass5-snapshot.json`（156条保留记录，条数不代表物理模型完整度）。三个新音频目录的68、73、45个文件已由主线程独立重算SHA-256，全部匹配。原始调试失败日志是 `pass5-debugger-launch.log`。本轮文档及原始证据未被当成网页引擎的已验证复刻实现。
+
+## pass38：宽度参数 A/B/A 实际音频对照
+
+同一 running 官方实例中顺序保存 .5/.25/.5，三份均在新进程恢复215项参数。两份基准PCM逐字节相同，宽度修改音频稳定复现pass37结果。已排除本次实验中的一般保存流程差异；底层宽度计算与最终网页声音尚未完成。见 [pass38 对照](pianoteq-width-control-pass38.md)。
