@@ -49,7 +49,7 @@ export class PartitionedConvolution64 {
  }
  run(){
   if(this.nextChannel)throw new Error('Partial input block at scheduling');
-  const products=[],outputs=new Map();
+  const products=[],outputs=new Map(),readoutBlocks=new Map();
   for(const [kind,index,lag] of this.plan){
    if(kind===0){
     const ring=this.inputs[index];if(!ring)throw new Error('Missing transform ring');
@@ -72,10 +72,11 @@ export class PartitionedConvolution64 {
     if(!out.empty){
      const inverse=inverseReal128(out.data),mixed=normalizedOverlap128(inverse,out.history);
      outputs.set(out.fft.object,{object:out.fft.object,inverse,...mixed});out.history=mixed.tail;
-    }else out.history=new Float32Array(64);
+     readoutBlocks.set(out.fft.object,mixed.output);
+    }else {readoutBlocks.set(out.fft.object,out.history.slice());out.history=new Float32Array(64);}
     out.empty=true;
    }else throw new Error('Unknown convolution command');
   }
-  return {products,outputs};
+  return {products,outputs,readoutBlocks};
  }
 }
