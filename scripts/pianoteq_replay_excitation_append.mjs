@@ -3,10 +3,17 @@ import { selectSupportRows, supportLogAmplitudes, appendExcitationSupport, appen
 import { randomizeRepeatedExcitation, updateRepeatedSupportHistory } from '../dsp/excitation-repeat.mjs';
 const [spectrumPath, hardnessPath, tablePath, beforePath, appendedPath, finalPath, reportPath, ...options] = process.argv.slice(2);
 const read = p => JSON.parse(fs.readFileSync(p, 'utf8'));
-let repeatBefore, repeatAfter, historyBefore, historyAfter;
-if (options.length) {
-  if (options.length !== 5 || options[0] !== '--repeat-captures') throw new Error('Expected --repeat-captures randomBefore randomAfter historyBefore historyAfter');
-  [repeatBefore, repeatAfter, historyBefore, historyAfter] = options.slice(1).map(read);
+let repeatBefore, repeatAfter, historyBefore, historyAfter, supportModel;
+while (options.length) {
+  const option = options.shift();
+  if (option === '--support-report') {
+    supportModel = read(options.shift());
+    if (supportModel.schema !== 'pianoteq-support-archive-pass33' || !supportModel.passed || supportModel.mismatches)
+      throw new Error('Verified archive support generation required');
+    continue;
+  }
+  if (option !== '--repeat-captures' || options.length < 4) throw new Error('Expected --repeat-captures four paths or --support-report path');
+  [repeatBefore, repeatAfter, historyBefore, historyAfter] = options.splice(0, 4).map(read);
   for (const [capture, point] of [[repeatBefore, '0x100695860'], [repeatAfter, '0x100695940'],
     [historyBefore, '0x100695940'], [historyAfter, '0x100696024']])
     if (capture.schema !== 1 || capture.point !== point || capture.errors.length || !capture.records.length)
@@ -40,16 +47,23 @@ for (const [index, p] of spectrum.predictions.entries()) {
   const a = before.records[index], b = appended.records[index], c = final.records[index], h = hardness.predictions[index], t = table.records[index];
   if ([a, b, c, h, t].some(r => r.note !== p.note || r.mode !== p.mode) || JSON.stringify(a.header) !== JSON.stringify(p.header))
     throw new Error('Source identity differs');
+  let tables = a.tables;
+  if (supportModel) {
+    const q = supportModel.predictions.filter(r => r.note === p.note).at(-1);
+    if (!q) throw new Error('Missing calculated support tables');
+    for (const key of Object.keys(q.tables)) compare(`${index}-archive-support-${key}`, q.tables[key], a.tables[key]);
+    tables = q.tables;
+  }
   for (const key of ['frequency', 'decay', 'amplitude', 'phase']) compare(`${index}-weighted-${key}`, p.source[key], a.source[key]);
   if (!p.preWeightSource) throw new Error('Computed pre-weight source required; regenerate spectrum report');
   const indices = p.mode === 0 && t.extraControls.direction === 0 ? selectSupportRows({ header: p.header, source: p.preWeightSource,
-    frequencies: a.tables.frequencies, referenceFrequency: a.referenceFrequencies[0] }) : [];
+    frequencies: tables.frequencies, referenceFrequency: a.referenceFrequencies[0] }) : [];
   compare(`${index}-support-indices`, indices, a.indices, true);
   const primaryHardness = p.hardness?.primary ?? h.primary;
   const logAmplitudes = supportLogAmplitudes({ primary: primaryHardness, spectrum: p, coordinates: t.coordinates,
-    baseTable: t.baseTable, indices, tables: a.tables, logOffset: a.controls.logOffset });
+    baseTable: t.baseTable, indices, tables, logOffset: a.controls.logOffset });
   compare(`${index}-support-log`, logAmplitudes, a.logAmplitudes);
-  let result = appendExcitationSupport({ ...a, source: p.source, header: p.header, indices, logAmplitudes });
+  let result = appendExcitationSupport({ ...a, tables, source: p.source, header: p.header, indices, logAmplitudes });
   compare(`${index}-appended-header`, result.appendedHeader, b.header, true);
   for (const key of ['frequency', 'decay', 'amplitude', 'phase']) compare(`${index}-appended-${key}`, result.source[key], b.source[key]);
   if (a.controls.repeatFlag === 1 && a.controls.attenuation > 0) {
@@ -88,13 +102,13 @@ for (const [index, p] of spectrum.predictions.entries()) {
   }
   if (a.secondIndices.length) {
     const secondIndices = selectSupportRows({ header: p.header, source: p.preWeightSource,
-      frequencies: a.tables.secondFrequencies, referenceFrequency: a.secondReferenceFrequencies[0] });
+      frequencies: tables.secondFrequencies, referenceFrequency: a.secondReferenceFrequencies[0] });
     compare(`${index}-second-support-indices`, secondIndices, a.secondIndices, true);
     const secondLogAmplitudes = supportLogAmplitudes({ primary: primaryHardness, spectrum: p, coordinates: t.coordinates,
       baseTable: t.baseTable, indices: secondIndices,
-      tables: { lowLog: a.tables.secondLowLog, highLog: a.tables.secondHighLog }, logOffset: 0 });
+      tables: { lowLog: tables.secondLowLog, highLog: tables.secondHighLog }, logOffset: 0 });
     compare(`${index}-second-support-log`, secondLogAmplitudes, a.secondLogAmplitudes);
-    result = appendSecondExcitationSupport(result, { ...a, secondIndices, secondLogAmplitudes });
+    result = appendSecondExcitationSupport(result, { ...a, tables, secondIndices, secondLogAmplitudes });
   }
   compare(`${index}-final-header`, result.header, c.header, true);
   for (const key of ['frequency', 'decay', 'amplitude', 'phase']) compare(`${index}-final-${key}`, result.source[key], c.source[key]);
@@ -107,6 +121,7 @@ const report = { schema: 'pianoteq-excitation-append-pass30', passed: checks.eve
   comparedValues: checks.reduce((n, c) => n + c.count, 0), mismatches: checks.reduce((n, c) => n + c.mismatches, 0),
   checks, failures, predictions, weightedSourceCalculated: true, supportLogAmplitudesCalculated: true,
   supportIndicesStillCaptured: false, modelTablesAndControlsStillCaptured: true,
+  supportTablesStillCaptured: !supportModel, rawSupportTablesFromArchive: Boolean(supportModel),
   repeatHistoryVerified: Boolean(repeatBefore), carriedHistoryUpdates: historyIndex,
   nativeScalarExp2Log10AndCosfImplemented: false,
   secondSupportFamilyVerified: before.records.some(r => r.secondIndices.length > 0),
