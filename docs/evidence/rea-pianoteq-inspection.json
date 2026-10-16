@@ -1,0 +1,217 @@
+{
+  "tool": "rea-agents 6.5.0 inspect-macho",
+  "evidence_id": "ev_a6a9d1c6294825f1e8e3105e70ef8d524f448a090068b1fba2abb2d61a2e06b9",
+  "subject": {
+    "name": "Pianoteq 9",
+    "digest": {
+      "sha256": "fb13e0e4dd5a3b5138fb4b2cd2f1d055dcb21128a8316308cbbc28cff6436b90"
+    },
+    "local_path": "/Applications/Pianoteq 9/Pianoteq 9.app/Contents/MacOS/Pianoteq 9",
+    "format": "mach-o-universal",
+    "architecture": "arm64"
+  },
+  "observations": {
+    "format": "mach-o",
+    "selected_architecture": {
+      "name": "arm64",
+      "container_file_offset": 14368768
+    },
+    "architectures": {
+      "items": [
+        {
+          "name": "x86_64",
+          "cpu_type": "CPU_TYPE_X86_64",
+          "cpu_subtype": "CPU_SUBTYPE_X86_64_ALL",
+          "file_offset": 16384,
+          "size": 14351568,
+          "alignment": 16384
+        },
+        {
+          "name": "arm64",
+          "cpu_type": "CPU_TYPE_ARM64",
+          "cpu_subtype": "CPU_SUBTYPE_ARM64_ALL",
+          "file_offset": 14368768,
+          "size": 12979200,
+          "alignment": 16384
+        }
+      ],
+      "total": 2,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "dependencies": {
+      "items": [
+        {
+          "path": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "5026.5.4",
+          "compatibility_version": "150.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "5026.5.4",
+          "compatibility_version": "300.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Accelerate.framework/Versions/A/Accelerate",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "4.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "170.0.0",
+          "compatibility_version": "2.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "24.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "275.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "61901.120.67",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1405.120.5",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreAudioKit.framework/Versions/A/CoreAudioKit",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/AudioUnit.framework/Versions/A/AudioUnit",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1000.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "373.2.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "69.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1195.14.4",
+          "compatibility_version": "1.2.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/StoreKit.framework/Versions/A/StoreKit",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "379.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/usr/lib/libc++.1.dylib",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "2100.43.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/usr/lib/libSystem.B.dylib",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1356.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "2685.60.104",
+          "compatibility_version": "45.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "66.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1965.5.1",
+          "compatibility_version": "64.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "7.0.0",
+          "compatibility_version": "1.0.1"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "1226.0.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "877.4.0",
+          "compatibility_version": "1.0.0"
+        },
+        {
+          "path": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "734.4.0",
+          "compatibility_version": "1.2.0"
+        },
+        {
+          "path": "/usr/lib/libobjc.A.dylib",
+          "kind": "LC_LOAD_DYLIB",
+          "current_version": "228.0.0",
+          "compatibility_version": "1.0.0"
+        }
+      ],
+      "total": 27,
+      "exhaustive": true,
+      "limitations": []
+    },
+    "limitations": [
+      "Imports and exports combine dyld_info and nm; stripped or toolchain-hidden symbols may be absent.",
+      "vtool output is retained as provenance but only otool build metadata is normalized."
+    ]
+  },
+  "scope": "Read-only structural inspection. No DSP algorithm recovery or preset extraction. No algorithm-equivalence claim."
+}

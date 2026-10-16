@@ -19,10 +19,17 @@ const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
 // Inharmonicity coefficient across the keyboard (log-interpolated).
 function inharmonicity(m) {
-  const pts = [[21, -3.6], [40, -4.0], [64, -3.6], [88, -2.9], [108, -2.3]];
+  const pts = [
+    [21, -3.6],
+    [40, -4.0],
+    [64, -3.6],
+    [88, -2.9],
+    [108, -2.3],
+  ];
   for (let i = 1; i < pts.length; i++) {
     if (m <= pts[i][0]) {
-      const [m0, b0] = pts[i - 1], [m1, b1] = pts[i];
+      const [m0, b0] = pts[i - 1],
+        [m1, b1] = pts[i];
       const t = (m - m0) / (m1 - m0);
       return Math.pow(10, b0 + (b1 - b0) * Math.max(0, t));
     }
@@ -66,25 +73,77 @@ class JustPianoProcessor extends AudioWorkletProcessor {
     this.soft = 0;
     this.counter = 0;
     this.p = {
-      hardness: 0.5,   // hammer hardness 0..1
-      unison: 0.5,     // unison detune 0..1
-      curve: 1.0,      // velocity exponent
-      stretch: 1.0,    // octave stretching amount
-      noise: 0.5,      // hammer noise 0..1
+      hardness: 0.5, // hammer hardness 0..1
+      unison: 0.5, // unison detune 0..1
+      curve: 1.0, // velocity exponent
+      stretch: 1.0, // octave stretching amount
+      resonance: 0.32,
+      decay: 1,
+      stiffness: 1,
+      strike: 0.125,
+      noise: 0.5, // hammer noise 0..1
     };
+    // Feed-forward resonant string bank: no output is fed back into the voices.
+    // Each mode is a stable complex pole driven by the bridge signal. Pedal lifts
+    // increase ring time; closed dampers leave only a short body response.
+    this.resonators = Array.from({ length: 24 }, (_, i) => {
+      const f = mtof(36 + i * 2);
+      const w = (2 * Math.PI * f) / sampleRate;
+      return {
+        re: 0,
+        im: 0,
+        cos: Math.cos(w),
+        sin: Math.sin(w),
+        open: Math.exp(-6.91 / ((2.2 - i * 0.045) * sampleRate)),
+        closed: Math.exp(-6.91 / (0.08 * sampleRate)),
+      };
+    });
+    this.resonanceGain = this.p.resonance;
     this.port.onmessage = (e) => this.onMessage(e.data);
   }
 
   onMessage(msg) {
     switch (msg.type) {
-      case 'on': this.noteOn(msg.note, msg.vel); break;
-      case 'off': this.noteOff(msg.note); break;
-      case 'sustain': this.sustain = !!msg.on; this.updateDampers(); break;
-      case 'soft': this.soft = msg.value; break;
-      case 'param': this.p[msg.key] = msg.value; break;
-      case 'allOff':
-        for (const v of this.voices) if (v.active) { v.keyDown = false; v.dying = true; v.fadeCoef = Math.exp(-6.91 / (0.15 * sampleRate)); }
+      case "on":
+        this.noteOn(msg.note, msg.vel);
+        break;
+      case "off":
+        this.noteOff(msg.note);
+        break;
+      case "sustain":
+        this.sustain = !!msg.on;
+        this.updateDampers();
+        break;
+      case "soft":
+        this.soft = Math.max(0, Math.min(1, Number(msg.value) || 0));
+        break;
+      case "param": {
+        const ranges = {
+          hardness: [0, 1],
+          unison: [0, 1],
+          curve: [0.5, 2],
+          stretch: [0, 2],
+          noise: [0, 1],
+          resonance: [0, 1],
+          decay: [0.4, 1.8],
+          stiffness: [0.2, 2],
+          strike: [0.08, 0.2],
+        };
+        const range = ranges[msg.key];
+        if (range && Number.isFinite(msg.value))
+          this.p[msg.key] = Math.max(range[0], Math.min(range[1], msg.value));
+        break;
+      }
+      case "allOff":
+        for (const v of this.voices)
+          if (v.active) {
+            v.keyDown = false;
+            v.dying = true;
+            v.fadeCoef = Math.exp(-6.91 / (0.15 * sampleRate));
+          }
         this.sustain = false;
+        this.soft = 0;
+        for (const r of this.resonators) r.re = r.im = 0;
         break;
     }
   }
@@ -109,7 +168,7 @@ class JustPianoProcessor extends AudioWorkletProcessor {
     if (a <= 0) return;
     v.nAmp = Math.max(v.nAmp, a);
     v.nDec = Math.exp(-1 / (0.03 * sampleRate));
-    v.lpC = 1 - Math.exp(-2 * Math.PI * 500 / sampleRate);
+    v.lpC = 1 - Math.exp((-2 * Math.PI * 500) / sampleRate);
   }
 
   allocVoice() {
@@ -119,18 +178,25 @@ class JustPianoProcessor extends AudioWorkletProcessor {
     let bestScore = Infinity;
     for (const v of this.voices) {
       const score = v.level * (v.keyDown ? 4 : 1);
-      if (score < bestScore) { bestScore = score; best = v; }
+      if (score < bestScore) {
+        bestScore = score;
+        best = v;
+      }
     }
     return best;
   }
 
   noteOn(m, vel) {
+    if (!Number.isInteger(m) || m < 21 || m > 108 || !Number.isFinite(vel))
+      return;
     if (vel <= 0) return this.noteOff(m);
     const sr = sampleRate;
     // The hammer restrikes the same strings: let the old sound fall away fast.
     for (const v of this.voices) {
       if (v.active && v.note === m && !v.dying) {
-        v.dying = true; v.keyDown = false; v.damped = true;
+        v.dying = true;
+        v.keyDown = false;
+        v.damped = true;
         v.fadeCoef = Math.exp(-6.91 / (0.09 * sr));
       }
     }
@@ -143,39 +209,51 @@ class JustPianoProcessor extends AudioWorkletProcessor {
     const d = m - 69;
     const stretchCents = p.stretch * (d > 0 ? 0.0075 * d * d : -0.011 * d * d);
     const f0 = mtof(m) * Math.pow(2, stretchCents / 1200);
-    const B = inharmonicity(m);
+    const B = inharmonicity(m) * p.stiffness;
 
     const strings = m < 34 ? 1 : m < 46 ? 2 : 3;
     const seed = Math.sin(m * 12.9898) * 43758.5453;
     const rnd = seed - Math.floor(seed);
-    const detune = strings > 1 ? p.unison * (0.35 + 0.9 * rnd) * (strings === 3 ? 1 : 0.7) : 0;
-    const up = Math.pow(2, detune / 1200), down = Math.pow(2, -detune / 1200);
+    const detune =
+      strings > 1
+        ? p.unison * (0.35 + 0.9 * rnd) * (strings === 3 ? 1 : 0.7)
+        : 0;
+    const up = Math.pow(2, detune / 1200),
+      down = Math.pow(2, -detune / 1200);
 
     // Hammer: strike position and felt low-pass.
-    const strike = 0.115 + 0.02 * rnd;
-    const fc = f0 * (1.2 + (2.5 + 16 * hard) * Math.pow(vv, 1.3)) + 150 + 900 * hard * vv;
+    const strike = p.strike + 0.02 * (rnd - 0.5);
+    const fc =
+      f0 * (1.2 + (2.5 + 16 * hard) * Math.pow(vv, 1.3)) +
+      150 +
+      900 * hard * vv;
 
     // Losses: slow aftersound T60 and a faster prompt sound.
-    const T60 = Math.max(5, 42 * Math.exp(-(m - 21) * 0.036));
+    const T60 = p.decay * Math.max(5, 42 * Math.exp(-(m - 21) * 0.036));
     const base = 6.91 / T60;
 
     const nyq = 0.45 * sr;
-    let k = 0, energy = 0;
+    let k = 0,
+      energy = 0;
     const amps = [];
     for (let n = 1; n <= MAX_PARTIALS; n++) {
       const fn = n * f0 * Math.sqrt(1 + B * n * n);
       if (fn * up >= nyq) break;
       const comb = Math.abs(Math.sin(n * Math.PI * strike)) + 0.06;
       const lp = 1 / Math.sqrt(1 + Math.pow(fn / fc, 4));
-      const A = comb * lp / Math.pow(n, 0.55);
+      const A = (comb * lp) / Math.pow(n, 0.55);
       if (n > 4 && A < 2e-3) break;
-      const slow = base * (1 + 0.06 * (n - 1)) + 1.5e-7 * fn * fn;
+      const slow = base * (1 + 0.06 * (n - 1)) + (1.5e-7 * fn * fn) / p.decay;
       const fast = slow * 2.8 + 1.2;
       amps.push([fn, A, slow, fast]);
       energy += A * A;
     }
     const norm = 1 / Math.sqrt(energy || 1);
-    const gain = 0.22 * Math.pow(vv, 1.15) * (1 - 0.25 * this.soft) * (0.55 + 0.45 * Math.pow(vv, 0.5));
+    const gain =
+      0.22 *
+      Math.pow(vv, 1.15) *
+      (1 - 0.25 * this.soft) *
+      (0.55 + 0.45 * Math.pow(vv, 0.5));
     for (const [fn, A, slow, fast] of amps) {
       const a = A * norm * gain;
       // Prompt sound: one polarization, detuned up, decays fast.
@@ -193,17 +271,19 @@ class JustPianoProcessor extends AudioWorkletProcessor {
     v.fadeCoef = 1;
     const tRel = 0.85 * Math.exp(-(m - 21) / 42);
     v.relCoef = Math.exp(-6.91 / (tRel * sr));
-    const contactMs = (0.7 + 3.2 * (1 - vv) * (1 - 0.45 * hard)) * (m < 55 ? 1.5 : 1);
+    const contactMs =
+      (0.7 + 3.2 * (1 - vv) * (1 - 0.45 * hard)) * (m < 55 ? 1.5 : 1);
     v.att = 0;
     v.attInc = 1 / Math.max(1, contactMs * 0.001 * sr);
     // Hammer/key thump: low-passed noise burst.
     v.nAmp = 0.05 * Math.pow(vv, 1.6) * p.noise * (m < 60 ? 1 : 0.7);
     v.nDec = Math.exp(-1 / (0.011 * sr));
-    v.lpC = 1 - Math.exp(-2 * Math.PI * (180 + 1400 * vv * (0.5 + hard)) / sr);
+    v.lpC =
+      1 - Math.exp((-2 * Math.PI * (180 + 1400 * vv * (0.5 + hard))) / sr);
     v.lp = 0;
     const pos = 0.5 + 0.55 * ((m - 21) / 87 - 0.5);
-    v.gl = Math.cos(pos * Math.PI / 2) * 1.414;
-    v.gr = Math.sin(pos * Math.PI / 2) * 1.414;
+    v.gl = Math.cos((pos * Math.PI) / 2) * 1.414;
+    v.gr = Math.sin((pos * Math.PI) / 2) * 1.414;
     v.level = gain;
     v.age = 0;
     v.stamp = ++this.counter;
@@ -212,7 +292,7 @@ class JustPianoProcessor extends AudioWorkletProcessor {
   setOsc(v, i, f, rate, amp) {
     const sr = sampleRate;
     const g = Math.exp(-rate / sr);
-    const w = 2 * Math.PI * f / sr;
+    const w = (2 * Math.PI * f) / sr;
     v.cr[i] = g * Math.cos(w);
     v.ci[i] = g * Math.sin(w);
     v.re[i] = amp;
@@ -237,25 +317,39 @@ class JustPianoProcessor extends AudioWorkletProcessor {
     const N = L.length;
     for (const v of this.voices) {
       if (!v.active) continue;
-      const re = v.re, im = v.im, cr = v.cr, ci = v.ci, K = v.k;
+      const re = v.re,
+        im = v.im,
+        cr = v.cr,
+        ci = v.ci,
+        K = v.k;
       const rc = (v.damped ? v.relCoef : 1) * v.fadeCoef;
-      let env = v.env, att = v.att;
+      let env = v.env,
+        att = v.att;
       const attInc = v.attInc;
-      let nAmp = v.nAmp, lp = v.lp;
-      const nDec = v.nDec, lpC = v.lpC, gl = v.gl, gr = v.gr;
+      let nAmp = v.nAmp,
+        lp = v.lp;
+      const nDec = v.nDec,
+        lpC = v.lpC,
+        gl = v.gl,
+        gr = v.gr;
       let peak = 0;
       for (let i = 0; i < N; i++) {
         let s = 0;
         for (let k = 0; k < K; k++) {
-          const r = re[k], q = im[k];
+          const r = re[k],
+            q = im[k];
           re[k] = r * cr[k] - q * ci[k];
           const nq = r * ci[k] + q * cr[k];
           im[k] = nq;
           s += nq;
         }
-        if (att < 1) { att += attInc; if (att > 1) att = 1; s *= att * att; }
+        if (att < 1) {
+          att += attInc;
+          if (att > 1) att = 1;
+          s *= att * att;
+        }
         if (nAmp > 1e-6) {
-          lp += lpC * ((Math.random() * 2 - 1) - lp);
+          lp += lpC * (Math.random() * 2 - 1 - lp);
           s += lp * nAmp;
           nAmp *= nDec;
         }
@@ -266,13 +360,38 @@ class JustPianoProcessor extends AudioWorkletProcessor {
         const a = y < 0 ? -y : y;
         if (a > peak) peak = a;
       }
-      v.env = env; v.att = att; v.nAmp = nAmp; v.lp = lp;
+      v.env = env;
+      v.att = att;
+      v.nAmp = nAmp;
+      v.lp = lp;
       v.level = peak;
       v.age++;
-      if (v.age > 8 && peak < 5e-6) { v.active = false; v.note = -1; }
+      if (v.age > 8 && peak < 5e-6) {
+        v.active = false;
+        v.note = -1;
+      }
+    }
+    for (let i = 0; i < N; i++) {
+      const bridge = (L[i] + R[i]) * 0.5;
+      let resonance = 0;
+      for (const r of this.resonators) {
+        const pole = this.sustain ? r.open : r.closed;
+        const re = r.re,
+          im = r.im;
+        // Normalize drive by loss so a sustained tone cannot grow unbounded.
+        r.re = pole * (re * r.cos - im * r.sin) + bridge * (1 - pole);
+        r.im = pole * (re * r.sin + im * r.cos);
+        resonance += r.re;
+      }
+      this.resonanceGain += 0.001 * (this.p.resonance - this.resonanceGain);
+      const tail = resonance * this.resonanceGain * 0.6;
+      // Gentle output saturation gives extreme clusters bounded headroom before
+      // the downstream room and compressor. Small signals remain near-linear.
+      L[i] = Math.tanh((L[i] + tail) * 0.6);
+      if (R !== L) R[i] = Math.tanh((R[i] + tail) * 0.6);
     }
     return true;
   }
 }
 
-registerProcessor('just-piano', JustPianoProcessor);
+registerProcessor("just-piano", JustPianoProcessor);

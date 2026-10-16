@@ -1,76 +1,313 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Just Piano</title>
-  <meta name="description" content="A modeled acoustic piano in your browser, with MIDI keyboard support.">
-  <meta name="theme-color" content="#14110f">
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-  <main class="app">
-    <header class="top">
-      <h1 class="brand">Just Piano</h1>
-      <div class="midi">
-        <span class="dot" id="midiDot" aria-hidden="true"></span>
-        <label for="midiIn" class="visually-hidden">MIDI input</label>
-        <select id="midiIn" disabled>
-          <option value="">MIDI: not connected</option>
-        </select>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Just Piano — A room for sound</title>
+    <meta
+      name="description"
+      content="An independent physically inspired piano. Original voicings, expressive MIDI, and a quiet room to play."
+    />
+    <meta name="theme-color" content="#111615" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <a class="brand" href="./">just piano<span class="brand-dot">.</span></a
+        ><span class="edition">THE MODELED COLLECTION / 01</span
+        ><button id="startBtn" class="power" type="button">
+          <span class="dot" id="audioDot"></span
+          ><span id="audioLabel">Enable audio</span>
+        </button>
+      </header>
+      <div class="workspace">
+        <aside class="library">
+          <div class="eyebrow">YOUR INSTRUMENT</div>
+          <h2>Find your voice.</h2>
+          <p class="library-intro">One piano. Different possibilities.</p>
+          <div
+            id="presets"
+            class="preset-list"
+            aria-label="Original piano presets"
+          ></div>
+          <div class="library-foot">
+            <span class="tiny-line"></span>
+            <p>Made of motion.<br />Every note synthesized live.</p>
+            <span class="tag">INDEPENDENT MODAL ENGINE</span>
+          </div>
+        </aside>
+        <section class="instrument" aria-label="Instrument and voicing">
+          <div class="stage">
+            <div class="stage-copy">
+              <div class="eyebrow">
+                <span class="live-dot"></span> ORIGINAL VOICING
+                <span id="presetNumber">01 / 06</span>
+              </div>
+              <h1 id="presetTitle">Nocturne Grand</h1>
+              <p id="presetDescription">
+                A warm, intimate grand. For the hours that belong to you.
+              </p>
+              <span class="sound-tag" id="presetTag"
+                >WARM · INTIMATE · LYRICAL</span
+              >
+            </div>
+            <div class="piano-art" aria-hidden="true">
+              <svg viewBox="0 0 760 450" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="case" x1="0" y1="0" x2="1" y2="1">
+                    <stop stop-color="#42443e" />
+                    <stop offset=".35" stop-color="#141a18" />
+                    <stop offset=".8" stop-color="#080c0b" />
+                    <stop offset="1" stop-color="#30332c" />
+                  </linearGradient>
+                  <linearGradient id="wood" x2=".7" y2="1">
+                    <stop stop-color="#9d7650" />
+                    <stop offset=".5" stop-color="#4d3926" />
+                    <stop offset="1" stop-color="#241e15" />
+                  </linearGradient>
+                  <linearGradient id="lid" x2=".8" y2="1">
+                    <stop stop-color="#43473e" />
+                    <stop offset=".35" stop-color="#202822" />
+                    <stop offset="1" stop-color="#090e0c" />
+                  </linearGradient>
+                  <linearGradient id="ivory" x2="0" y2="1">
+                    <stop stop-color="#e5dbc4" />
+                    <stop offset="1" stop-color="#9b9a89" />
+                  </linearGradient>
+                  <radialGradient id="floor">
+                    <stop stop-color="#ab9567" stop-opacity=".2" />
+                    <stop offset="1" stop-color="#141c18" stop-opacity="0" />
+                  </radialGradient>
+                  <filter id="shadow">
+                    <feGaussianBlur stdDeviation="13" />
+                  </filter>
+                </defs>
+                <ellipse
+                  cx="410"
+                  cy="371"
+                  rx="300"
+                  ry="68"
+                  fill="url(#floor)"
+                />
+                <ellipse
+                  cx="424"
+                  cy="358"
+                  rx="221"
+                  ry="32"
+                  fill="#000"
+                  opacity=".7"
+                  filter="url(#shadow)"
+                />
+                <g transform="translate(88 22) rotate(-9 300 220)">
+                  <path
+                    d="M178 245L185 356L198 359L204 246M448 219L446 334L457 333L472 215M311 137L315 249L327 249L332 136"
+                    fill="#0a0e0c"
+                    stroke="#424238"
+                    stroke-width="2"
+                  />
+                  <path
+                    d="M151 211L267 94Q334 22 432 55Q543 85 536 145Q532 191 469 213L347 288L155 253Z"
+                    fill="url(#case)"
+                    stroke="#79715a"
+                    stroke-width="2"
+                  />
+                  <path
+                    d="M165 211L276 100Q335 35 429 67Q523 94 524 141Q516 179 459 200L343 268Z"
+                    fill="url(#wood)"
+                    stroke="#ba9560"
+                    stroke-width="2"
+                  />
+                  <g
+                    id="strings"
+                    opacity=".5"
+                    stroke="#d6b975"
+                    stroke-width=".7"
+                  ></g>
+                  <path
+                    d="M276 100L343 268M344 65L388 242M418 63L442 211M165 211L505 114"
+                    fill="none"
+                    stroke="#a5834c"
+                    stroke-width="7"
+                  />
+                  <path
+                    d="M158 203L274 87Q338 21 429 52Q524 82 533 127L469 17Q384 -24 300 15L152 139Z"
+                    fill="url(#lid)"
+                    stroke="#5c6050"
+                    stroke-width="2"
+                  />
+                  <path
+                    d="M159 198L159 143L468 21"
+                    fill="none"
+                    stroke="#c7bc91"
+                    stroke-opacity=".28"
+                  />
+                  <path d="M474 178L480 63" stroke="#b99c65" stroke-width="3" />
+                  <path
+                    d="M151 211L347 269L335 303L139 245Z"
+                    fill="#070b09"
+                    stroke="#4b4d40"
+                  />
+                  <path
+                    d="M148 219L341 276L332 296L140 240Z"
+                    fill="url(#ivory)"
+                  />
+                  <g id="artKeys"></g>
+                  <path
+                    d="M140 244L333 301"
+                    stroke="#857a5c"
+                    stroke-width="2"
+                  />
+                  <path
+                    d="M279 297L280 338L304 343"
+                    fill="none"
+                    stroke="#4a4231"
+                    stroke-width="4"
+                  />
+                  <path
+                    d="M287 340l13 3m-4-6l13 3m-4-6l13 3"
+                    stroke="#ae9866"
+                    stroke-width="4"
+                  />
+                </g>
+              </svg>
+            </div>
+            <div class="stage-bottom">
+              <span><span class="live-dot"></span> 88 KEYS · NO SAMPLES</span
+              ><button id="demo" type="button">
+                ▷ &nbsp; Listen to this piano</button
+              ><span class="stage-index">EST. IN THE QUIET</span>
+            </div>
+          </div>
+          <section class="controls" aria-label="Sound controls">
+            <div class="controls-heading">
+              <span class="eyebrow">SHAPE THE SOUND</span
+              ><button id="reset" type="button" class="text-button">
+                Reset voicing ↺
+              </button>
+            </div>
+            <div class="control-grid">
+              <label class="ctl"
+                ><span>Hammer <output id="hardnessValue"></output></span
+                ><input
+                  type="range"
+                  id="hardness"
+                  min="0"
+                  max="1"
+                  step=".01"
+                  value=".5"
+                /><small>Soft felt → bright attack</small></label
+              >
+              <label class="ctl"
+                ><span>Unison <output id="unisonValue"></output></span
+                ><input
+                  type="range"
+                  id="unison"
+                  min="0"
+                  max="1"
+                  step=".01"
+                  value=".5"
+                /><small>Pure → gently detuned</small></label
+              >
+              <label class="ctl"
+                ><span>Resonance <output id="resonanceValue"></output></span
+                ><input
+                  type="range"
+                  id="resonance"
+                  min="0"
+                  max="1"
+                  step=".01"
+                  value=".3"
+                /><small>Sympathetic strings</small></label
+              >
+              <label class="ctl"
+                ><span>Decay <output id="decayValue"></output></span
+                ><input
+                  type="range"
+                  id="decay"
+                  min=".4"
+                  max="1.8"
+                  step=".01"
+                  value="1"
+                /><small>Close → lingering</small></label
+              >
+              <label class="ctl"
+                ><span>Room <output id="reverbValue"></output></span
+                ><input
+                  type="range"
+                  id="reverb"
+                  min="0"
+                  max="1"
+                  step=".01"
+                  value=".3"
+                /><small>A little space to breathe</small></label
+              >
+              <label class="ctl"
+                ><span>Touch <output id="curveValue"></output></span
+                ><input
+                  type="range"
+                  id="curve"
+                  min=".5"
+                  max="2"
+                  step=".01"
+                  value="1"
+                /><small>Light → weighted</small></label
+              >
+            </div>
+          </section>
+        </section>
       </div>
-    </header>
-
-    <section class="controls" aria-label="Sound controls">
-      <label class="ctl">
-        <span>Volume</span>
-        <input type="range" id="volume" min="0" max="1" step="0.01" value="0.8">
-      </label>
-      <label class="ctl">
-        <span>Brightness</span>
-        <input type="range" id="hardness" min="0" max="1" step="0.01" value="0.5">
-      </label>
-      <label class="ctl">
-        <span>Unison</span>
-        <input type="range" id="unison" min="0" max="1" step="0.01" value="0.5">
-      </label>
-      <label class="ctl">
-        <span>Touch</span>
-        <input type="range" id="curve" min="0.5" max="2" step="0.01" value="1">
-      </label>
-      <label class="ctl">
-        <span>Reverb</span>
-        <input type="range" id="reverb" min="0" max="1" step="0.01" value="0.3">
-      </label>
-      <div class="ctl buttons">
-        <button type="button" id="sustain" aria-pressed="false">Sustain</button>
-        <div class="transpose" role="group" aria-label="Transpose">
-          <button type="button" id="tDown" aria-label="Transpose down">−</button>
-          <output id="tVal" aria-live="polite">0</output>
-          <button type="button" id="tUp" aria-label="Transpose up">+</button>
+      <section class="performance" aria-label="Performance controls">
+        <div class="midi">
+          <span class="dot" id="midiDot" aria-hidden="true"></span
+          ><label for="midiIn" class="visually-hidden">MIDI input</label
+          ><select id="midiIn" disabled>
+            <option value="">MIDI · enable audio to connect</option>
+          </select>
         </div>
-      </div>
-    </section>
-
-    <section class="kbd-wrap" id="kbdWrap" aria-label="Piano keyboard">
-      <div class="kbd" id="kbd"></div>
-    </section>
-
-    <p class="hint">
-      Play with a MIDI keyboard, the mouse or touch, or your computer keys
-      <kbd>A</kbd>–<kbd>'</kbd> (<kbd>Z</kbd>/<kbd>X</kbd> shift octave, hold <kbd>Space</kbd> for sustain).
-    </p>
-  </main>
-
-  <div class="start" id="start">
-    <button type="button" id="startBtn">
-      <span class="start-title">Just Piano</span>
-      <span class="start-sub">Tap to start</span>
-    </button>
-  </div>
-
-  <script src="app.js"></script>
-</body>
+        <div class="performance-right">
+          <button type="button" id="sustain" aria-pressed="false">
+            Sustain <span>SPACE</span>
+          </button>
+          <div class="transpose" role="group" aria-label="Transpose">
+            <span>Transpose</span
+            ><button type="button" id="tDown" aria-label="Transpose down">
+              −</button
+            ><output id="tVal" aria-live="polite">0</output
+            ><button type="button" id="tUp" aria-label="Transpose up">+</button>
+          </div>
+          <label class="volume"
+            >Volume<input
+              type="range"
+              id="volume"
+              min="0"
+              max="1"
+              step=".01"
+              value=".8" /></label
+          ><button type="button" id="panic" title="Release all notes">
+            All notes off
+          </button>
+        </div>
+      </section>
+      <section class="kbd-wrap" id="kbdWrap" aria-label="Piano keyboard">
+        <div class="keyboard-felt"></div>
+        <div class="kbd" id="kbd"></div>
+      </section>
+      <footer>
+        <p>
+          Make yourself at home. <kbd>A</kbd>–<kbd>'</kbd> to play
+          <span>·</span> <kbd>Z</kbd> / <kbd>X</kbd> octave <span>·</span>
+          <kbd>Space</kbd> sustain
+        </p>
+        <span id="status" role="status">Audio is off · enable to play</span>
+      </footer>
+    </main>
+    <script src="presets.js"></script>
+    <script src="app.js"></script>
+  </body>
 </html>
