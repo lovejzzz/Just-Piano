@@ -1,4 +1,4 @@
-// macOS arm64 libsystem_m sinf fast finite range, inspected on build 25F80.
+// macOS arm64 libsystem_m sinf/cosf fast finite range, inspected on build 25F80.
 // Arguments at |x| >= 120 and nonfinite inputs are deliberately unsupported.
 import { fma64 } from './modal-poles.mjs';
 import { fma32 } from './modal-kernel.mjs';
@@ -32,4 +32,13 @@ export function nativeScalarSin(value) {
   const reduced=fma64(-n,halfPi,value);
   const result=(n&1) ? cosinePolynomial(reduced) : sinePolynomial(reduced);
   return f((n>>1)&1 ? -result : result);
+}
+export function nativeScalarCos(value) {
+ value=Math.abs(f(value));
+ if(!Number.isFinite(value)||value>=120)throw new RangeError('Outside inspected scalar cosf fast range');
+ if(value<2**-12)return f(f(2**26-value)*2**-26);
+ if(value<f(Math.PI/4))return f(cosinePolynomial(value));
+ const n=roundEven(value*scale),reduced=fma64(-n,halfPi,value);
+ const result=(n&1)?sinePolynomial(reduced):cosinePolynomial(reduced);
+ return f(((n+1)>>1)&1?-result:result);
 }
