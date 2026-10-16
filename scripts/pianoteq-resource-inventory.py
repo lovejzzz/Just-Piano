@@ -11,8 +11,34 @@ import struct
 from pathlib import Path
 
 
+def read_base_metadata_collection(reader, module):
+    """FUN_1005c5ec0 -> versioned FUN_10032e5f0 lists of identity records."""
+    count = reader.u32()
+    if count > 1_000_000:
+        raise ValueError('oversized base metadata collection')
+    lists = []
+    for _ in range(count):
+        start, version = reader.pos, reader.u32()
+        if version > 1:
+            raise ValueError('unsupported base metadata identity-list version')
+        record_count = reader.u32()
+        if record_count > 1_000_000:
+            raise ValueError('oversized base metadata identity list')
+        records = []
+        for _ in range(record_count):
+            record_version = reader.u32()
+            if record_version > 1:
+                raise ValueError('unsupported base metadata identity-entry version')
+            records.append({'version': record_version,
+                            'strings': [reader.string() for _ in range(3)],
+                            'scalar': module.read_float(reader)})
+        lists.append({'version': version, 'offset': start, 'end_offset': reader.pos,
+                      'records': records})
+    return lists
+
+
 def read_base_continuation(reader, module, base):
-    """Observed v89 modern subreaders through B+1c58; fail closed on other versions."""
+    """Observed v89 subreaders through B+1c58; fail closed on other versions."""
     m, r = module, reader
     # mar_param uses float-pointer indices, so each stored destination offset is 4*i.
 
@@ -42,10 +68,12 @@ def read_base_continuation(reader, module, base):
 
     def control_2a38(r):
         v = r.u32()
-        check(v == 10)
+        check(v in (9, 10))
         result = {'version': v, 'scalars': [m.read_float(r), m.read_float(r)], 'curves': [m.read_curve(r) for _ in range(4)], 'scalar148': m.read_float(r), 'integer14c': r.u32(), 'scalar154': m.read_float(r), 'curve158': m.read_curve(r), 'curve1f8': m.read_curve(r)}
         result['curves248'] = [m.read_curve(r) for _ in range(3)]
-        result['curve1a8'] = m.read_curve(r)
+        result['curve1a8'] = m.read_curve(r) if v >= 10 else None
+        if v == 9:
+            result['native_default_curve1a8'] = 0.0
         result['scalar150'] = m.read_float(r)
         result['curve_list478'] = curve_list(r)
         result['curves338'] = [m.read_curve(r) for _ in range(4)]
@@ -55,7 +83,7 @@ def read_base_continuation(reader, module, base):
     def mar_param(r):
         start = r.pos
         v = r.u32()
-        check(v == 35)
+        check(v in (34, 35))
         fields = []
 
         def F(i, k):
@@ -108,7 +136,11 @@ def read_base_continuation(reader, module, base):
         F(549, 'f')
         F(556, 'vf')
         F(562, 'vf')
-        F(550, 'vf')
+        if v >= 35:
+            F(550, 'vf')
+        else:
+            fields.append({'object_offset': 2200, 'kind': 'native_default',
+                           'offset': r.pos, 'end_offset': r.pos, 'value': [9.0, 1.0]})
         check(len(fields[-3]['value']) == 2 and len(fields[-2]['value']) == 2 and (len(fields[-1]['value']) == 2))
         for i in [568, 588, 608]:
             F(i, 'c')
@@ -395,7 +427,7 @@ def read_base_suffix(reader, module, base):
 
 
 def read_base_prefix(data, start, end, module):
-    """Version89 prefix; 13 verified modern model identities consume the full B archive."""
+    """Version89 prefix; all 58 verified factory B records consume to their declared ends."""
     def require(value, expected):
         if value != expected:
             raise ValueError('unsupported base-model branch')
@@ -415,7 +447,7 @@ def read_base_prefix(data, start, end, module):
     strings = [reader.string() for _ in range(11)]
     metadata_integer = reader.u32()
     metadata_vector = module.read_vector(reader, 'I')
-    require(reader.u32(), 0)  # Only the observed empty nested metadata collection.
+    metadata_collection = read_base_metadata_collection(reader, module)
     fields = []
 
     def field(offset, kind):
@@ -497,15 +529,65 @@ def read_base_prefix(data, start, end, module):
         field(offset, kind)
     base = {'version': 89, 'metadata_type': metadata_type, 'strings': strings,
             'metadata_integer': metadata_integer, 'metadata_vector': metadata_vector,
+            'metadata_collection': metadata_collection,
             'fields': fields, 'next_offset': reader.pos, 'unparsed_suffix_bytes': end - reader.pos,
             'next_reader': 'FUN_10099d658(B+0x2528)'}
-    # Explicitly verified modern subordinate versions; other models retain a partial prefix.
-    modern_identities = {
-        'bechsteindg', 'bluethner', 'vc280boesendorfer', 'steinwayny', 'd4',
-        'grotrian', 'k2', 'kawaisk-ex', 'modelb', 'ant.petrof', 'mist.petrof',
-        'steingraeber', 'yc5',
+    # Explicitly verified factory identities; unknown model identities retain a partial prefix.
+    complete_identities = {
+        'alhambra',
+        'ant.petrof',
+        'bechsteindg',
+        'besendorfer',
+        'bluethner',
+        'broadwood',
+        'cbechstein',
+        'celesta',
+        'celticharp',
+        'cl1',
+        'd4',
+        'dohnal',
+        'electra',
+        'frenzel',
+        'giusti',
+        'glocken',
+        'grotrian',
+        'hang',
+        'hapi',
+        'harp',
+        'ipleyel',
+        'k2',
+        'kalimba',
+        'kawaisk-ex',
+        'marimba',
+        'mist.petrof',
+        'mkii',
+        'modelb',
+        'pianetn',
+        'pianett',
+        'pschmidt',
+        'r2',
+        'ruckers',
+        'sawtooth',
+        'serard',
+        'space8',
+        'steeldrum',
+        'steingraeber',
+        'steinwayny',
+        'steinwayq',
+        'streicher',
+        'su118',
+        'toypiano',
+        'tripleharp',
+        'v1',
+        'v2',
+        'vc280boesendorfer',
+        'virginal',
+        'w1',
+        'weimes',
+        'xylo',
+        'yc5',
     }
-    if strings[0] in modern_identities:
+    if strings[0] in complete_identities:
         read_base_continuation(reader, module, base)
         return read_base_suffix(reader, module, base)
     return base
@@ -560,7 +642,11 @@ def inspect_bank(data):
                         if field['kind'] == 'matrix':
                             row['row_lengths'] = [len(item) for item in value]
                         arrays.append(row)
-                models.append({'base_prefix': {**base_summary, 'array_inventory': arrays, 'end_offset': base['next_offset'], 'unparsed_suffix_bytes': base['unparsed_suffix_bytes']}, 'offset': begin, 'bytes': length, 'identity': identity,
+                models.append({'base_prefix': {**base_summary, 'array_inventory': arrays,
+                                  'metadata_identity_list_count': len(base['metadata_collection']),
+                                  'metadata_identity_record_count': sum(len(item['records']) for item in base['metadata_collection']),
+                                  'metadata_identity_lists': [{'offset': item['offset'], 'end_offset': item['end_offset'], 'count': len(item['records'])} for item in base['metadata_collection']],
+                                  'end_offset': base['next_offset'], 'unparsed_suffix_bytes': base['unparsed_suffix_bytes']}, 'offset': begin, 'bytes': length, 'identity': identity,
                                'source': source, 'model_reader_offset': model_start,
                                'model_version': version, 'end_offset': payload.pos})
             if payload.pos != payload.end:
