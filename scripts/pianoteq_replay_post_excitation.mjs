@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import { postExcitationTables } from '../dsp/post-excitation.mjs';
-const [beforePath, afterPath, reportPath] = process.argv.slice(2);
+const [beforePath, afterPath, reportPath, ...options] = process.argv.slice(2);
 const read = p => JSON.parse(fs.readFileSync(p, 'utf8'));
+let excitation;
+if (options.length) {
+  if (options.length !== 2 || options[0] !== '--excitation-report') throw new Error('Expected --excitation-report path');
+  excitation = read(options[1]);
+  if (excitation.schema !== 'pianoteq-excitation-append-pass30' || !excitation.passed || excitation.mismatches)
+    throw new Error('Verified computed excitation report required');
+}
 const before = read(beforePath), after = read(afterPath);
 if (before.schema !== 1 || after.schema !== 1 || before.point !== '0x100716588' || after.point !== '0x10071658c' ||
     before.stage !== 'before' || after.stage !== 'after' || before.errors.length || after.errors.length ||
@@ -10,6 +17,8 @@ if (before.schema !== 1 || after.schema !== 1 || before.point !== '0x100716588' 
 const view = new DataView(new ArrayBuffer(4));
 const bits = x => { view.setFloat32(0, x); return view.getUint32(0); };
 const checks = [], failures = [], predictions = [];
+const primary = excitation?.predictions.filter(p => p.mode === 0);
+if (primary && primary.length !== before.records.length) throw new Error('Computed primary source count differs');
 function compare(name, predicted, actual) {
   if (predicted.length !== actual.length || !Array.from(actual).every(Number.isFinite)) throw new Error(`Incomplete ${name}`);
   let mismatches = 0;
@@ -28,7 +37,17 @@ for (const [index, a] of before.records.entries()) {
       JSON.stringify(a.curves) !== JSON.stringify(b.curves) || JSON.stringify(a.G) !== JSON.stringify(b.G) ||
       JSON.stringify(a.shared) !== JSON.stringify(b.shared) || JSON.stringify(a.combinationRows) !== JSON.stringify(b.combinationRows))
     throw new Error('Source mode or controls changed across capture');
-  const p = postExcitationTables({ source: a.source, amplitudeStorage: a.amplitudeStorage, columns: a.header[0],
+  let source = a.source, amplitudeStorage = a.amplitudeStorage;
+  if (primary) {
+    const q = primary[index];
+    if (q.note !== a.note || JSON.stringify(q.header) !== JSON.stringify(a.header)) throw new Error('Computed excitation identity differs');
+    for (const key of ['frequency', 'decay', 'amplitude', 'phase']) compare(`${index}-computed-excitation-${key}`, q.source[key], a.source[key]);
+    source = q.source;
+    amplitudeStorage = [...source.amplitude];
+    while (amplitudeStorage.length % 4) amplitudeStorage.push(0);
+    compare(`${index}-computed-excitation-padding`, amplitudeStorage, a.amplitudeStorage);
+  }
+  const p = postExcitationTables({ source, amplitudeStorage, columns: a.header[0],
     combinationRows: a.combinationRows, combinationCount: a.combinationCount, combinationStart: a.combinationStart,
     weightCurve: a.curves['0x1028'], decayCurve: a.curves['0x1078'], velocity: a.host['0x78'], hostCount: a.hostCount,
     combinationCutoff: a.shared['0x158'], velocityGainDb: a.G['0x10cc'], combinationGain: a.G['0x10c8'],
@@ -43,7 +62,8 @@ for (const [index, a] of before.records.entries()) {
 }
 const report = { schema: 'pianoteq-post-excitation-pass24', passed: checks.every(x => !x.mismatches),
   comparedValues: checks.reduce((n, x) => n + x.count, 0), mismatches: checks.reduce((n, x) => n + x.mismatches, 0),
-  checks, failures, predictions, inputExcitationTablesStillCaptured: true, runtimeControlsAndCurvesStillCaptured: true,
+  checks, failures, predictions, inputExcitationTablesStillCaptured: !excitation,
+  inputExcitationFromComputedReport: Boolean(excitation), upstreamRawSourcesStillCaptured: true, runtimeControlsAndCurvesStillCaptured: true,
   nativeMathOracleRequired: false, browserPowVerifiedOnlyThroughObservedFloatOutputs: true,
   fullPostExcitationSourceChainVerified: false, wholeVoiceAudioVerified: false };
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');

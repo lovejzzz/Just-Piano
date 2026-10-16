@@ -91,7 +91,7 @@ const report = { schema: 'pianoteq-voice-source-mapping-pass22', passed: checks.
   comparedFloatValues: checks.reduce((n, x) => n + x.count, 0), mismatches: checks.reduce((n, x) => n + x.mismatches, 0),
   checks, failures, predictions, postExcitationSourceStillCaptured: !finalExcitation, indexMapStillCaptured: !selectionLog,
   finalSourceTablesCalculated: Boolean(finalExcitation), initialExcitationInputsStillCaptured: true,
-  secondaryExcitationStillCaptured: true, initialRandomStateStillCaptured: true,
+  secondaryExcitationStillCaptured: finalExcitation?.secondaryExcitationStillCaptured !== false, initialRandomStateStillCaptured: true,
   modeSelectionComputed: Boolean(selectionLog), selectionControlsStillCaptured: true,
   scalarLog2VerifiedOnlyAtObservedThreshold: Boolean(selectionLog),
   postExcitationFrequencyDecayPrefixComputed: Boolean(postExcitation),

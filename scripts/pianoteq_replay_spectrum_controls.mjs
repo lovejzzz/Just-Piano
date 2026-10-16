@@ -62,7 +62,7 @@ for (const [index, p] of hardness.predictions.entries()) {
   const logSpectrum = buildLogSpectrum({ ...c, count: b.count, coordinates: b.coordinates, baseTable: b.baseTable, extraTable });
   compare(`${index}-log-spectrum`, logSpectrum, b.actual.logSpectrum);
   const expWeights = nativeExpWeights(logSpectrum);
-  let source, header;
+  let source, header, preWeightSource;
   if (before) {
     const x = before.records[index], y = after.records[index];
     if (x.note !== p.note || y.note !== p.note || x.mode !== p.mode || y.mode !== p.mode ||
@@ -82,12 +82,14 @@ for (const [index, p] of hardness.predictions.entries()) {
         compare(`${index}-prepared-${key}`, prepared.source[key], x.table.source[key]);
       inputSource = prepared.source;
     }
+    preWeightSource = Object.fromEntries(Object.entries(inputSource).map(([key, values]) => [key, Array.from(values)]));
     source = { ...inputSource, amplitude: Array.from(inputSource.amplitude, (a, i) => applyModalWeight(a, expWeights[Math.floor(i / columns)])) };
     for (const key of ['frequency', 'decay', 'amplitude', 'phase'])
       compare(`${index}-weighted-${key}`, source[key], y.table.source[key]);
   }
   predictions.push({ note: p.note, mode: p.mode, ...c, extraTable: [...extraTable], logSpectrum: [...logSpectrum],
-    expWeights: [...expWeights], ...(source ? { header, source } : {}) });
+    expWeights: [...expWeights], ...(source ? { header, preWeightSource,
+      source: Object.fromEntries(Object.entries(source).map(([key, values]) => [key, Array.from(values)])) } : {}) });
 }
 const report = { schema: 'pianoteq-spectrum-controls-pass29', passed: checks.every(c => !c.mismatches),
   comparedFloatValues: checks.reduce((n, c) => n + c.count, 0), mismatches: checks.reduce((n, c) => n + c.mismatches, 0),

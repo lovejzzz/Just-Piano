@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import { mergeExcitationSources, varyExcitationPhases } from '../dsp/final-excitation.mjs';
-const [postPath, secondaryPath, mergedPath, phasedPath, reportPath] = process.argv.slice(2);
+const [postPath, secondaryPath, mergedPath, phasedPath, reportPath, ...options] = process.argv.slice(2);
 const read = p => JSON.parse(fs.readFileSync(p, 'utf8'));
+let excitation;
+if (options.length) {
+  if (options.length !== 2 || options[0] !== '--excitation-report') throw new Error('Expected --excitation-report path');
+  excitation = read(options[1]);
+  if (excitation.schema !== 'pianoteq-excitation-append-pass30' || !excitation.passed || excitation.mismatches)
+    throw new Error('Verified computed excitation report required');
+}
 const post = read(postPath), secondary = read(secondaryPath), merged = read(mergedPath), phased = read(phasedPath);
 if (post.schema !== 'pianoteq-post-excitation-pass24' || post.passed !== true || post.mismatches !== 0 || !post.predictions?.length)
   throw new Error('Verified post-excitation predictions required');
@@ -10,6 +17,8 @@ for (const [capture, stage, point] of [[secondary, 'secondary', '0x10071677c'], 
       capture.records.length !== post.predictions.length || capture.records.length > 16)
     throw new Error('Complete matching final-excitation stage captures required');
 const checks = [], failures = [], predictions = [];
+const calculatedSecondary = excitation?.predictions.filter(p => p.mode === 1);
+if (calculatedSecondary && calculatedSecondary.length !== post.predictions.length) throw new Error('Computed secondary count differs');
 const view = new DataView(new ArrayBuffer(4));
 const bits = x => { view.setFloat32(0, x); return view.getUint32(0); };
 function compare(name, predicted, actual, integer = false) {
@@ -27,8 +36,17 @@ for (const [index, p] of post.predictions.entries()) {
   const a = secondary.records[index], b = merged.records[index], c = phased.records[index];
   if ([a, b, c].some(r => r.note !== p.note || JSON.stringify(r.controls) !== JSON.stringify(a.controls)) ||
       JSON.stringify(p.header) !== JSON.stringify(a.header)) throw new Error('Source identity or controls differ');
-  const m = mergeExcitationSources({ primary: p.source, primaryHeader: p.header, secondary: a.secondary.source,
-    secondaryHeader: a.secondary.header, secondaryStorage: a.secondary.amplitudeStorage, controls: a.controls });
+  let secondarySource = a.secondary.source, secondaryHeader = a.secondary.header, secondaryStorage = a.secondary.amplitudeStorage;
+  if (calculatedSecondary) {
+    const q = calculatedSecondary[index];
+    if (q.note !== p.note || JSON.stringify(q.header) !== JSON.stringify(secondaryHeader)) throw new Error('Computed secondary identity differs');
+    for (const key of ['frequency', 'decay', 'amplitude', 'phase']) compare(`${index}-computed-secondary-${key}`, q.source[key], secondarySource[key]);
+    secondarySource = q.source; secondaryHeader = q.header; secondaryStorage = [...q.source.amplitude];
+    while (secondaryStorage.length % 4) secondaryStorage.push(0);
+    compare(`${index}-computed-secondary-padding`, secondaryStorage, a.secondary.amplitudeStorage);
+  }
+  const m = mergeExcitationSources({ primary: p.source, primaryHeader: p.header, secondary: secondarySource,
+    secondaryHeader, secondaryStorage, controls: a.controls });
   compare(`${index}-primary-scaled`, m.scaledPrimary.amplitude, a.source.amplitude);
   for (const key of ['frequency', 'decay', 'phase']) compare(`${index}-primary-${key}`, m.scaledPrimary[key], a.source[key]);
   for (const key of ['frequency', 'decay', 'amplitude', 'phase']) compare(`${index}-merged-${key}`, m.source[key], b.source[key]);
@@ -47,7 +65,8 @@ for (const [index, p] of post.predictions.entries()) {
 }
 const report = { schema: 'pianoteq-final-excitation-pass25', passed: checks.every(x => !x.mismatches),
   comparedValues: checks.reduce((n, x) => n + x.count, 0), mismatches: checks.reduce((n, x) => n + x.mismatches, 0),
-  checks, failures, predictions, initialExcitationInputsStillCaptured: true, secondaryExcitationStillCaptured: true,
+  checks, failures, predictions, initialExcitationInputsStillCaptured: true, secondaryExcitationStillCaptured: !excitation,
+  secondaryExcitationFromComputedReport: Boolean(excitation),
   initialRandomStateStillCaptured: true, runtimeControlsStillCaptured: true, finalSourceTablesCalculated: true,
   wholeVoiceAudioVerified: false };
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
