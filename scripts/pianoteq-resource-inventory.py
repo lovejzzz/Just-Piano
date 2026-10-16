@@ -252,8 +252,150 @@ def read_base_continuation(reader, module, base):
     return extend(base, r)
 
 
+def read_base_suffix(reader, module, base):
+    """Modern v89 tail from B+1c88 to the declared model record end."""
+    m, r = (module, reader)
+
+    def check(condition):
+        if not condition:
+            raise ValueError('unsupported base suffix branch or shape')
+
+    def curve_list(r):
+        version = r.u32()
+        check(version == 1)
+        coordinates = m.read_vector(r)
+        count = r.u32()
+        check(count <= 1000000)
+        return {'version': version, 'coordinates': coordinates, 'curves': [m.read_curve(r) for _ in range(count)]}
+
+    def after_modal(b, r):
+
+        def F(o, k):
+            start = r.pos
+            if k == 'vf':
+                v = m.read_vector(r)
+            elif k == 'u':
+                v = r.u32()
+            elif k == 'f':
+                v = m.read_float(r)
+            elif k == 'c':
+                v = m.read_curve(r)
+            b['fields'].append({'object_offset': o, 'kind': k, 'offset': start, 'end_offset': r.pos, 'value': v})
+        for o in [7304, 7328, 7352, 7376, 7400, 7424, 7448, 7472, 7496, 7520]:
+            F(o, 'vf')
+        F(7544, 'u')
+        F(7552, 'vf')
+        check(len(b['fields'][-1]['value']) == 2)
+        F(7576, 'f')
+        F(7580, 'f')
+        F(7584, 'c')
+        F(7664, 'c')
+        F(7744, 'f')
+        b.update(next_offset=r.pos, unparsed_suffix_bytes=r.end - r.pos, next_reader='FUN_1002d9a1c(B+0x1e48)')
+        return b
+
+    def remaining(b, r):
+
+        def f():
+            return m.read_float(r)
+
+        def vf():
+            return m.read_vector(r)
+
+        def c():
+            return m.read_curve(r)
+
+        def seq(fun):
+            n = r.u32()
+            check(n <= 1000000)
+            return [fun() for _ in range(n)]
+
+        def element70():
+            v = r.u32()
+            check(v <= 1)
+            z = {'version': v, 'vector0': vf(), 'curve18': c()}
+            check(len(z['vector0']) == 2)
+            check(len(z['curve18']['y']) // max(1, len(z['curve18']['x'])) == 3)
+            return z
+
+        def p1e98():
+            v = r.u32()
+            check(v == 2)
+            z = {'version': v, 'curve0': c()}
+            v = r.u32()
+            check(v <= 1)
+            z['sub50'] = {'version': v, 'integer': r.u32(), 'mode': r.u32()}
+            check(z['sub50']['mode'] == 0)
+            z['sub50']['floats'] = [f(), f()]
+            z['curve60'] = c()
+            return z
+
+        def element7bf():
+            v = r.u32()
+            check(v <= 1)
+            z = {'version': v, 'integer20': r.u32(), 'vector28': m.read_vector(r, 'I')}
+            v = r.u32()
+            check(v <= 2)
+            z['sub0'] = {'version': v, 'records': seq(element4b4b)}
+            if v >= 2:
+                z['sub0']['integer18'] = r.u32()
+            return z
+
+        def element8ecc():
+            v = r.u32()
+            check(v <= 1)
+            return {'version': v, 'scalar0': f(), 'vector8': vf(), 'vector20': vf(), 'scalar38': f()}
+
+        def element4b4b():
+            v = r.u32()
+            check(v <= 1)
+            z = {'version': v, 'integer0': r.u32(), 'floats4': [f(), f()], 'integerc': r.u32(), 'vector10': vf(), 'scalar28': f(), 'vector30': vf(), 'floats48': [f(), f()], 'records50': seq(element8ecc)}
+            check(len(z['records50']) == len(z['vector10']))
+            return z
+
+        def p2100():
+            v = r.u32()
+            check(v == 3)
+            return {'version': v, 'curves': [c() for _ in range(8)], 'curve_list280': curve_list(r), 'scalar2b0': f()}
+
+        def F(o, k, fun):
+            start = r.pos
+            v = fun()
+            b['fields'].append({'object_offset': o, 'kind': k, 'offset': start, 'end_offset': r.pos, 'value': v})
+            return v
+        F(7752, 'records70ac44', lambda: seq(element70))
+        F(7800, 'f', f)
+        F(7804, 'f', f)
+        F(7808, 'records7bf110', lambda: seq(element7bf))
+        for o in [7832, 8008, 8184]:
+            F(o, 'p12a5e8', p1e98)
+        F(7776, 'records70ac44', lambda: seq(element70))
+        F(8448, 'p02efc4', p2100)
+        F(9232, 'curve_list', lambda: curve_list(r))
+        F(9152, 'vf', vf)
+        for o in [9280, 9284, 9144]:
+            F(o, 'f', f)
+        F(9180, 'u', r.u32)
+        F(9288, 'c', c)
+        F(9184, 'curve_list', lambda: curve_list(r))
+        F(9176, 'u', r.u32)
+        F(4328, 'u', r.u32)
+        F(5352, 'curve_list', lambda: curve_list(r))
+        F(9368, 'f', f)
+        F(9372, 'u', r.u32)
+        F(9376, 'vf', vf)
+        F(9400, 'f', f)
+        F(9432, 'c', c)
+        b.update(next_offset=r.pos, unparsed_suffix_bytes=r.end - r.pos, next_reader='end of FUN10059f2cc')
+        return b
+    after_modal(base, r)
+    remaining(base, r)
+    check(r.pos == r.end)
+    return base
+
+
 def read_base_prefix(data, start, end, module):
-    """Version89 prefix; verified D4 models continue through B+0x1c58."""
+    """Version89 prefix; 13 verified modern model identities consume the full B archive."""
     def require(value, expected):
         if value != expected:
             raise ValueError('unsupported base-model branch')
@@ -357,9 +499,15 @@ def read_base_prefix(data, start, end, module):
             'metadata_integer': metadata_integer, 'metadata_vector': metadata_vector,
             'fields': fields, 'next_offset': reader.pos, 'unparsed_suffix_bytes': end - reader.pos,
             'next_reader': 'FUN_10099d658(B+0x2528)'}
-    # Deeper subreader versions are verified only for these two built-in models.
-    if strings[0] in ('steinwayny', 'd4'):
-        return read_base_continuation(reader, module, base)
+    # Explicitly verified modern subordinate versions; other models retain a partial prefix.
+    modern_identities = {
+        'bechsteindg', 'bluethner', 'vc280boesendorfer', 'steinwayny', 'd4',
+        'grotrian', 'k2', 'kawaisk-ex', 'modelb', 'ant.petrof', 'mist.petrof',
+        'steingraeber', 'yc5',
+    }
+    if strings[0] in modern_identities:
+        read_base_continuation(reader, module, base)
+        return read_base_suffix(reader, module, base)
     return base
 
 
