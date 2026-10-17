@@ -13,8 +13,8 @@ const baseFields=[field(0x2548,model),field(0x1b40,{x:[],y:[]}),field(0x1b98,cur
 const presetFields=[field(0x1398,0),field(0xf40,10),field(0xf48,curve(1)),field(0x470,{a:1,b:1,c:0,curves_ab:[curve(1),curve(0)],curve_c:curve(0)}),
  field(0x318,{kind:1,controls:[1,0],values:Array.from({length:12},(_,i)=>(i+1)*100),midi:{float:440,flag:70,notes:[60,69],map:[]}}),
  field(0x3b0,curve(0)),field(0x46c,0),field(0x458,0),field(0x400,{index:12,curve:curve(1)}),field(0x588,{curves:[curve(1),curve(1),curve(1)],scalars:[1,1,1]})];
-baseFields.push(field(0x158,0),field(0x18d0,curve(0)),field(0x1c88,Array(127).fill(1)),field(0x1ca0,Array(127).fill(0)),field(0x17d8,curve(1)),field(0x1828,curve(10000)),field(0x1878,curve(2000)),field(0x18c8,0));
-presetFields.push(field(0xd80,1),field(0xd30,curve(0)),field(0x8a0,1),field(0x8a8,curve(1)),field(0x1024,1),field(0x1020,1));
+baseFields.push(field(0x158,0),field(0x1018,{rows:[]}),field(0x18d0,curve(0)),field(0x1c88,Array(127).fill(1)),field(0x1ca0,Array(127).fill(0)),field(0x17d8,curve(1)),field(0x1828,curve(10000)),field(0x1878,curve(2000)),field(0x18c8,0));
+presetFields.push(field(0x9a8,{version:10,vector:Array(8).fill(0),grid:[]}),field(0xd80,1),field(0xd30,curve(0)),field(0x8a0,1),field(0x8a8,curve(1)),field(0x1024,1),field(0x1020,1));
 const weightArgs={note:69,runtimeCurveModes:Object.fromEntries(['B17d8','A8a8','B1828','B1878','Ad30','B18d0'].map(k=>[k,scalar]))};
 const args={baseFields,presetFields,sourceCurveModes,stretchCurveMode:scalar,pitchCurveMode:scalar,
  registry:{middleWeight:2,gramScale:1,pitchScale:1,referenceNote:69,anchorMultiplier:1}};
@@ -26,6 +26,8 @@ assert.deepEqual(archiveNoteWeightControls(context,weightArgs).controls,{s0:1,s1
 presetFields.find(x=>x.object_offset===0x8a0).value=2;
 assert.equal(archiveNoteWeightControls(context,weightArgs).controls.s1,1);
 const weightSourceArgs={...weightArgs,harmonicEdits:[0],weightOffset:0};
+const computedWeightSourceArgs={...weightArgs,harmonicCurveModes:{preset:[],base:[]},weightOffset:0};
+assert.equal(archiveNoteSourceWeights(context,computedWeightSourceArgs).harmonicEditsComputed,true);
 const originalWeights=archiveNoteSourceWeights(context,weightSourceArgs);
 assert.deepEqual(originalWeights.output,[1,1,1]);
 presetFields.find(x=>x.object_offset===0xd30).value=curve(6);
@@ -37,9 +39,11 @@ const note=archiveNoteSourceInputs(context,noteArgs);assert.equal(note.prepared.
 assert.deepEqual(Array.from(note.modal.coordinates),[1,2,3]);assert.equal(note.harmonicWeightsComputed,false);
 const tables=prepareArchiveIndependentTables(context,{...noteArgs,weights:[1,1,1],integerScale:1,phaseConstant:Math.PI,jitterAmount:0,sampleRate:48000,frequencyCutoff:2000,
  impedanceRuntime:{mode:0,runtimeCurveMode:'linear-clamp',phaseCurveMode:scalar,frequencyCurveModes:[scalar],polarRadius:1}});
-const spectrumTables=prepareArchiveIndependentTables(context,{...noteArgs,weightSource:weightSourceArgs,integerScale:1,phaseConstant:Math.PI,jitterAmount:0,sampleRate:48000,frequencyCutoff:2000,
+const spectrumTables=prepareArchiveIndependentTables(context,{...noteArgs,weightSource:computedWeightSourceArgs,integerScale:1,phaseConstant:Math.PI,jitterAmount:0,sampleRate:48000,frequencyCutoff:2000,
  impedanceRuntime:{mode:0,runtimeCurveMode:'linear-clamp',phaseCurveMode:scalar,frequencyCurveModes:[scalar],polarRadius:1}});
 assert.equal(spectrumTables.archiveSpectrumComputed,true);
+assert.equal(spectrumTables.harmonicWeightsComputed,true);
+assert.equal(spectrumTables.harmonicEditsExplicit,false);
 assert.deepEqual(spectrumTables.normalizedAmplitude,tables.normalizedAmplitude);
 assert.deepEqual(spectrumTables.frequency,tables.frequency);
 assert.throws(()=>prepareArchiveIndependentTables(context,{...noteArgs,weights:[1,1,1],weightSource:weightSourceArgs,integerScale:1,phaseConstant:Math.PI,impedanceRuntime:{}}),/not both/);

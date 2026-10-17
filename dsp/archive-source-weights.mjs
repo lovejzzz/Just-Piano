@@ -1,4 +1,5 @@
 // 5c38dc builds I+80 from A+d30; 1c54d0..5598 loads B1c88/B1ca0.
+import {archiveHarmonicEdits} from './archive-harmonic-edits.mjs';
 import {nativeScalarLogf} from './native-scalar-log.mjs';
 import {nativeDoubleLog} from './native-double-log.mjs';
 import {nativeDoubleExp} from './native-double-exp.mjs';
@@ -46,9 +47,12 @@ export function archiveWeightSpectrumInputs({baseFields,presetFields,note,noteIn
     base_curve:runtimeCurve(field(baseFields,0x18d0),runtimeCurveModes?.B18d0,false),
     G_controls:{'0x28':f(stiffness),'0x78':f(frequency),'0xd8':scalar(0x1c88),'0xf0':scalar(0x1ca0)}};
 }
-export function constructArchiveSourceWeights({harmonicEdits,weightOffset,...args}){
+export function constructArchiveSourceWeights({harmonicEdits,harmonicCurveModes,weightOffset,...args}){
+  if(harmonicEdits!==undefined&&harmonicCurveModes!==undefined)throw new RangeError('Choose computed or explicit harmonic edits, not both');
+  const harmonic=harmonicEdits===undefined?archiveHarmonicEdits({...args,runtimeCurveModes:harmonicCurveModes}):undefined;
+  const edits=harmonic?harmonic.values:harmonicEdits;
   const input=archiveWeightSpectrumInputs(args);
-  const calculated=sourceWeights({...input,harmonic_edits:harmonicEdits,weightOffset},{log:nativeDoubleLog,exp:nativeDoubleExp});
-  return {...calculated,input,archiveSpectrumComputed:true,harmonicEditsExplicit:true,registryOffsetExplicit:true,
+  const calculated=sourceWeights({...input,harmonic_edits:edits,weightOffset},{log:nativeDoubleLog,exp:nativeDoubleExp});
+  return {...calculated,input,harmonicEdits:edits.slice(),harmonicAudit:harmonic,archiveSpectrumComputed:true,harmonicEditsExplicit:!harmonic,harmonicEditsComputed:!!harmonic,registryOffsetExplicit:true,
     completeWeightInputsComputed:false,completeVoiceVerified:false};
 }

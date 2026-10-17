@@ -97,7 +97,7 @@ export function prepareArchiveIndependentTables(context,{note,noteIndex=note,amp
   const phaseOffsets=phaseOffsetControls===undefined?undefined:{coordinates:modal.coordinates,controls:phaseOffsetControls,phaseConstant};
   const tables=prepareEndpointSourceTables({prepared:source.prepared,independentSource,phaseOffsets});
   return {...tables,archivePhysicalSourceComputed:true,archiveTuningComputed:true,archiveAmplitudeSourceComputed:true,
-    harmonicWeightsComputed:false,archiveSpectrumComputed:spectrum!==undefined,harmonicEditsExplicit:spectrum!==undefined,registryConstantsExplicit:true};
+    harmonicWeightsComputed:spectrum?.harmonicEditsComputed===true,archiveSpectrumComputed:spectrum!==undefined,harmonicEditsExplicit:spectrum?.harmonicEditsExplicit===true,registryConstantsExplicit:true};
 }
 
 export function archiveNoteWeightControls(context,{note,runtimeCurveModes}) {
@@ -105,10 +105,10 @@ export function archiveNoteWeightControls(context,{note,runtimeCurveModes}) {
   return archiveWeightControls({baseFields:own.baseFields,presetFields:own.presetFields,note,runtimeCurveModes});
 }
 
-export function archiveNoteSourceWeights(context,{note,noteIndex=note,runtimeCurveModes,harmonicEdits,weightOffset}) {
+export function archiveNoteSourceWeights(context,{note,noteIndex=note,runtimeCurveModes,harmonicEdits,harmonicCurveModes,weightOffset}) {
   const own=state(context),tuning=archiveTunedNote(context,{note,noteIndex});
   if(!own.physicalCache.has(note))own.physicalCache.set(note,archiveSourceControls({baseFields:own.baseFields,presetFields:own.presetFields,
     note,runtimeCurveModes:own.sourceCurveModes,math:nativeSourceMath}));
   return constructArchiveSourceWeights({baseFields:own.baseFields,presetFields:own.presetFields,note,noteIndex,runtimeCurveModes,
-    frequency:tuning.frequency,stiffness:own.physicalCache.get(note).stiffness,harmonicEdits,weightOffset});
+    frequency:tuning.frequency,stiffness:own.physicalCache.get(note).stiffness,harmonicEdits,harmonicCurveModes,weightOffset});
 }
