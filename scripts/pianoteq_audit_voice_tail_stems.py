@@ -12,11 +12,13 @@ def main():
     parser.add_argument('capture', type=Path)
     parser.add_argument('directory', type=Path)
     parser.add_argument('report', type=Path)
+    parser.add_argument('--stage', choices=('audioTail', 'time'), default='audioTail')
     args = parser.parse_args()
     data = json.loads(args.capture.read_text())
     manifest = json.loads((args.directory / 'manifest.json').read_text())
-    assert data['complete'] and not data['errors'] and data['voiceTailEnvelopes']
-    assert manifest['endpoint'] == 'audioTail' and manifest['computedSamples']
+    assert data['complete'] and not data['errors']
+    assert data.get('activeTimeComponent') if args.stage == 'time' else data.get('voiceTailEnvelopes')
+    assert manifest['endpoint'] == args.stage and manifest['computedSamples']
     assert not manifest['normalization'] and manifest['finalStereo'] is False
     assert manifest['matrixKinds'] == ['group', 'auxiliary']
     assert manifest['terminalInitialEnvelopeStateObserved'] is False
@@ -29,7 +31,9 @@ def main():
         key = epoch, kind, row
         assert key in expected_keys and key not in seen
         seen.add(key)
-        targets = [r for r in data['records'] if r['stage'] == 'audioTail' and r['epoch'] == epoch]
+        targets = [r for r in data['records'] if r['stage'] == args.stage and r['epoch'] == epoch]
+        if args.stage == 'time':
+            assert len(targets) == data['windowBlocks'] and manifest['boundedComponent'] and manifest['observedAudioInput']
         assert targets and targets[0]['counter'] == entry['firstComparedCounter'] == 0
         assert all(r['counter'] == 64*i for i, r in enumerate(targets))
         payload = bytearray()
@@ -43,9 +47,10 @@ def main():
         assert hashlib.sha256(actual).hexdigest() == entry['pcmSha256']
         totals[kind] += len(actual)//4
     assert seen == expected_keys
-    result = dict(passed=True, nativeStage='audioTail', files=len(seen),
+    result = dict(passed=True, nativeStage=args.stage, files=len(seen),
                   comparedFloat32Samples=sum(totals.values()), matrixSamples=totals,
-                  allVoiceStartsAtZero=True, finalStereo=False,
+                  allVoiceStartsAtZero=True, finalStereo=False, boundedComponent=args.stage == 'time',
+                  expDoubleCandidateUsed=manifest.get('expDoubleCandidateUsed', False),
                   auxiliaryEntryObserved=manifest['terminalAuxiliaryEntryObserved'],
                   initialTimeStateObserved=manifest['terminalInitialTimeStateObserved'],
                   observedModelAndControlInputsRemain=True)

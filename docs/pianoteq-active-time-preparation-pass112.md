@@ -12,7 +12,7 @@
 
 三份真实WAV已生成。严格A/A对照失败：9792个交错样本不同，最大24-bit整数差1，首差frame26148，RMS差2.4098382594068048e-8。A/B有229827个交错样本不同、最大差1566787、首差frame4804、RMS差0.022780309863934558。脚本如实以causalControlPassed=false、exit1结束，不把参数保存和大幅音频变化冒充严格因果控制通过。
 
-这是活动时间包络场景的候选预设准备。尚未直接观察这些预设的H+3064及时间包络入口/返回，因此不能仅凭参数名和听感宣称活动算法已经验证。下一步用同次原生字段与采样验证实际启用、样本计数、double倍率和组/辅助输出。中断后97704进程已不存在，GUI自身退出码不可得；未重启它。
+准备阶段尚未直接观察这些预设的H+3064及时间包络入口/返回。后续[pass113](pianoteq-active-time-envelope-pass113.md)以.25预设实际观察到H+3064=0，时长来自G+1208，验证了5185采样点及活动组/辅助输出；并非此前候选的声部覆盖路径。该组件结果不改变本轮严格A/A失败。中断后97704进程已不存在，GUI自身退出码不可得；未重启它。
 
 私有证据：rpc-pass112-time-envelope/initial-parameters.json、prepared-parameters.json、harness-provenance.json、aba/report.json及三份FXP/WAV。商业预设和音频不提交。
 
@@ -20,4 +20,4 @@
 
 pianoteq_test_commit_continuous_chain.mjs新增原子progress.json：基线和每例必须在真实子进程终止、退出码及数值/拒绝条件核对后才落盘。记录输入捕获、archive源、Continue审计、Node版本及实际递归导入代码摘要；恢复时逐例重验报告摘要、预测摘要和原退出状态。未确认完成的残留报告会以unfinished名称保留后重跑，不被当作成功。记录了真实失败的journal会拒绝自动继续。
 
---resume不接受没有journal的旧不完整目录，实际拒绝已核对。新测试在pass110-tail-chain-negatives-durable-d从C原始捕获启动，基线已重新验证并逐例保存，尚未完成全部用例。新机制没有降低原测试的退出码或数值成功条件；完整正向恢复验证仍待本轮测试完成后进行。
+--resume不接受没有journal的旧不完整目录，实际拒绝已核对。新测试在pass110-tail-chain-negatives-durable-d从C原始捕获重新运行，基线14212052项零差异，73项用例全部符合预期并逐例保存，进程exit0。随后--resume对已完成结果重新核验并exit0（cases=73、allExpected=true）。未降低原测试的退出码或数值成功条件；中途未落盘用例隔离分支尚无实际执行证明。

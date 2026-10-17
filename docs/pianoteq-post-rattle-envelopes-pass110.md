@@ -26,7 +26,7 @@ A进程80061已在采集断言后清理并正常exit0，捕获不完整，不能
 
 ## 时间包络的源设置线索（静态）
 
-REA读取715f98的完整指令确认7181d8–718298：H+3064非零时覆盖G+1208；若H+2ff4>0则选择G+120c。G+1204非零、选出的时长非零或G+1210<10任一成立时启用。样本数使用FCVTZU截断f32(时长×采样率)，不同于前面组包络的ceil规则。非零时长的attackRate=系统double exp(-0.9942522733438669/样本数)，value初始化1、counter初始化0；零时长使用常量向量，不能仅由伪代码推测所有字段。
+REA读取715f98的完整指令确认7181d8–718298：H+3064非零时覆盖G+1208；若H+2ff4>0则选择G+120c。G+1204非零、选出的时长非零或G+1210<10任一成立时启用。样本数使用FCVTZU截断f32(时长×采样率)，不同于前面组包络的ceil规则。非零时长的attackRate=系统double exp(-0.9942522733438669/样本数)，decayRate初始化1、counter初始化0；递推value未在该初始化片段写入（pass113已以活动字段实测纠正偏移）；零时长使用常量向量，不能仅由伪代码推测所有字段。
 
 相关指令证据ev_3aac4b4fa95db52443d5c0cf1f2826288197d26e4c8f229b718dbf296bb30185。1c5320已有证据显示G+1208来自存档对象1470的scalar与第一曲线之和（另有阈值/范围处理），G+120c来自第二scalar与第二曲线，G+1210默认为10。35ed60将按键效果模块+698传至新声部H+3064，但受模块+690对象的启用位控制。因此需要通过正常参数路径准备能真正启用此分支的预设，不能把地址名称或合成测试当作动态证据。
 
@@ -78,4 +78,7 @@ Rattle部分2552292项零差异，333次触发、40752个变化主组采样及73
 
 C完整原生WAV仍严格失败：148224帧相同，但62348个交错采样不同，最大24-bit整数差5，首差异frame14989，归一化RMS差6.488028840691472e-8。组件通过不覆盖此失败。完整立体声和网页仍未接通。
 
-原C反向测试在会话中断后未生成最终结果，不计为通过；新增逐例持久记录后，使用原始C捕获在durable-d目录重新启动，仍未完成全部用例。私有证据：pass110-tail-chain-c-report.json、pass110-tail-chain-c.log、pass110-voice-tail-stems-c/、pass110-voice-tail-stems-c-audit.json、pass110-c-audio-audit.json、pass110-tail-chain-negatives-c/。
+原C反向测试在会话中断后未生成最终结果，不计为通过；新增逐例持久记录后，使用原始C捕获在durable-d目录重新运行，73项均符合预期，进程正常exit0。完成后再次以--resume校验全部记录、摘要和退出状态，正常exit0，返回cases=73、allExpected=true；这不证明中途未落盘用例的隔离恢复分支已实际执行。私有证据：pass110-tail-chain-c-report.json、pass110-tail-chain-c.log、pass110-voice-tail-stems-c/、pass110-voice-tail-stems-c-audit.json、pass110-c-audio-audit.json、pass110-tail-chain-negatives-c/。
+
+
+后续活动时间包络验证见[pass113](pianoteq-active-time-envelope-pass113.md)：确认G+1208源选择及非零起音计算，不能把该独立组件运行拼接成C同次全链证明。扩展音轨验收器后，C的30条audioTail音轨再次验收1272576个float32采样字节同。
