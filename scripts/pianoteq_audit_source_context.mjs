@@ -5,9 +5,10 @@ import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import { archiveExcitationMixCoefficients, mixExcitationComponents } from '../dsp/excitation-component-mix.mjs';
 import {archiveNeighborControls, mixNeighborExcitation} from '../dsp/excitation-neighbor-controls.mjs';
+import {archiveExcitationDecayControls, excitationDecayFromControls, scaleExcitationDecay} from '../dsp/excitation-decay-controls.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
-let presetPair, mixArchive, neighborOracle;
+let presetPair, mixArchive, neighborOracle, decaySource;
 for (let i = 0; i < options.length;) {
   const option = options[i++], first = options[i++];
   if (option === '--neighbor-math-oracle' && first && !neighborOracle) {neighborOracle = first; continue;}
@@ -15,9 +16,11 @@ for (let i = 0; i < options.length;) {
   if (!first || !second) throw new Error('Each option requires two arguments');
   if (option === '--preset-pair' && !presetPair) presetPair = [first, second];
   else if (option === '--mix-archive' && !mixArchive && /^\d+$/.test(second)) mixArchive = [first, Number(second)];
+  else if (option === '--decay-source' && !decaySource && second === 'ordinary-host-zero') decaySource = first;
   else throw new Error('Expected unique --preset-pair first.json second.json or --mix-archive banks.json index');
 }
 if (neighborOracle && !mixArchive) throw new Error('Neighbor preparation requires explicit mix archive');
+if (decaySource && !mixArchive) throw new Error('Decay preparation requires explicit base archive');
 const captureBytes = fs.readFileSync(capturePath), candidateBytes = fs.readFileSync(candidatePath);
 const capture = JSON.parse(captureBytes), candidate = JSON.parse(candidateBytes);
 if (!capture.complete || capture.errors?.length !== 0 || !capture.records?.length || candidate.verifiedStagesPassed !== true ||
@@ -45,6 +48,8 @@ if (mixArchive) {
   if (!mixBank?.fields) throw new Error('Explicit decoded base-model index required');
   mixArchiveSha256 = sha(bytes);
 }
+const decayPresetBytes = decaySource ? fs.readFileSync(decaySource) : undefined;
+const decayPreset = decayPresetBytes ? JSON.parse(decayPresetBytes) : undefined;
 const word = new DataView(new ArrayBuffer(4));
 const bits = x => { word.setFloat32(0, x); return word.getUint32(0); };
 function fingerprint(values) {
@@ -78,10 +83,13 @@ for (const record of capture.records) {
   const neighbor = neighborControls ? mixNeighborExcitation({amplitude: mix.amplitude, phase: predicted.phase, columns: predicted.cols},
     {...neighborControls, floor: input.controls.blendFloor, blend: input.controls.inputBlend,
       mix: Math.max(Math.fround(input.controls.blendFloor), Math.fround(input.controls.inputBlend))}) : undefined;
+  const decayControls = decayPreset ? archiveExcitationDecayControls(mixBank, decayPreset, input.note, {runtimeCurveMode: 'linear-clamp'}) : undefined;
+  const decayModel = decayControls ? excitationDecayFromControls(decayControls, input.controls.velocity, {hostMode: 0, noteBranch: 'ordinary'}) : undefined;
+  const decay = decayModel ? scaleExcitationDecay(predicted.decay, decayModel.gain) : undefined;
   const arrays = {}, tableHashes = {}, columnHashes = {};
   for (const [name, field] of [['frequency', 'frequency'], ['decay', 'decay'], ['amplitude', 'normalizedAmplitude'], ['phase', 'phase']]) {
     const actual = input.source[name], calculated = name === 'amplitude' && mix ? (neighbor?.amplitude ?? mix.amplitude)
-      : name === 'phase' && neighbor ? neighbor.phase : predicted[field];
+      : name === 'phase' && neighbor ? neighbor.phase : name === 'decay' && decay ? decay : predicted[field];
     if (actual?.length !== calculated.length || !actual.every(Number.isFinite)) throw new Error('Complete native source arrays required');
     const perColumn = Array(predicted.cols).fill(0); let count = 0;
     for (let i = 0; i < actual.length; i++) {
@@ -100,6 +108,7 @@ for (const record of capture.records) {
   hashes.get(key).push({epoch: record.epoch, hashes: tableHashes, columnHashes});
   checks.push({epoch: record.epoch, mode: input.mode, rows: predicted.rows, columns: predicted.cols, arrays,
     neighbor: neighbor && {controls: neighborControls, amplitudeGain: neighbor.amplitudeGain, phaseDelta: neighbor.phaseDelta},
+    decay: decayModel && {controls: decayControls, model: decayModel},
     mix: mix && {coefficients: mix.coefficients, blend: mix.blend, control: mix.control, weight: mix.weight, upper: mix.upper}});
 }
 if (checks.length !== capture.spectrumCount || !checks.length || epochs.size !== capture.starts || [...epochs.values()].some(n => n !== predictions.size))
@@ -131,6 +140,9 @@ const result = {passed: mismatches === 0, compatible: mismatches === 0, bindingA
   neighborControlsComputedFromArchive: Boolean(neighborOracle), neighborSystemMathRequired: Boolean(neighborOracle),
   neighborOracleSha256: neighborOracle ? sha(fs.readFileSync(neighborOracle)) : undefined,
   neighborMathCalls: [...mathCalls.values()], decayPreparationReconstructed: false,
+  decayPreparationComputedForSuppliedBranch: Boolean(decayPreset),
+  decayControlsComputedFromArchive: Boolean(decayPreset), decayPresetSha256: decayPresetBytes ? sha(decayPresetBytes) : undefined,
+  decayRuntimeBranchSupplied: decayPreset ? 'ordinary-host-zero' : undefined, decayRuntimeBranchNewlyObserved: false,
   substitutedIntoVoice: false, sameRunModelGenerationVerified: false, finalStereoVerified: false};
 fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
 console.log(JSON.stringify({...result, failures: undefined, checks: undefined, stability: stability.map(({rows, ...r}) => r)}));
