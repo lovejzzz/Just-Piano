@@ -55,3 +55,11 @@ B完整WAV同为148224帧，但44903个交错采样不同、最大整数差2，�
 确认B终止后，C将主线程恢复限定为consumer、consumerPost、consumerCross、audioGain、audioEntry、audioReturn、audioAfterGains、audioTail。每个角色正常观察后立即被替换，固定copy/before/final及工作点不进入此主线程分支，验证器也拒绝这些角色冒充新主线程观察。旧pass108的36503次替换及2次真实工作线程读取回归通过，伪造主线程角色拒绝。此修改尚需C实际验证，未宣称底层调试问题根因解决。
 
 C位于debug-pass110-tail-envelope-c，采集器重新冻结。驱动每40秒完成一次安全检查后，才检查stop-driver文件并决定继续；如需停止，可在下一边界返回提示符，不必在槽替换途中中断。新完整捕获、主线程恢复实际覆盖、严格全链及音频结果仍待完成。
+
+## 组与辅助信号的独立音轨验收准备
+
+终端导出现在分别写入五声部×（三个组+三路辅助）共30条float32 mono音轨，真实比较端点仍为audioTail。辅助音频入口是观察输入，之后包络处理与状态推进由计算提供；manifest保留此边界及时间初态仍观察的标志，不称为独立立体声。
+
+新增独立Python验收器pianoteq_audit_voice_tail_stems.py，逐块从原生channels及auxiliary.values重建预期PCM，读取真实RIFF/fmt/fact/data，核对全部30种身份、从counter0的连续覆盖、原始float32字节及摘要。新分支的真实正向验收仍待C完成，未以合成文件冒充音频证据。
+
+共享导出器的旧Rattle路径回归已经完成：从原先通过报告重新导出15条真实组音轨，独立旧Python验收器核对636288个float32采样字节同，端点audioReturn不变（pass110-stem-writer-legacy-rattle-audit.json）。未修改正在采集的任何既有Python脚本；新验收器是未被采集器导入的新文件。
