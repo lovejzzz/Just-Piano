@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {nativeComplexDivide,nativeComplexReciprocal} from '../dsp/native-complex-reciprocal.mjs';
+import {extractSmallEigenvalues,solveNativeQuadratic} from '../dsp/native-small-eigen.mjs';
+import {coupledModes} from '../dsp/modal-poles.mjs';
+assert.deepEqual(nativeComplexDivide(4,2,2,-1),{real:1.2,imaginary:1.6});
+for(const [r,i] of [[1,2],[-3,4],[Number.MIN_VALUE,1],[1,-0]])assert.deepEqual(nativeComplexDivide(1,0,r,i),nativeComplexReciprocal(r,i));
+assert.deepEqual(extractSmallEigenvalues({values:[3,-2],order:1,tolerance:0}).roots,[3,-2]);
+const q=solveNativeQuadratic([1,0,-3,0,2,0],{tolerance:0});
+assert.deepEqual(q.companion,[3,-0,1,0,-2,0,0,0]);assert.deepEqual(q.roots,[2,0,1,0]);
+assert.deepEqual(extractSmallEigenvalues({values:[0,0,1,0,1,0,0,0],order:2,tolerance:0}).roots,[1,0,-1,0]);
+assert.deepEqual(extractSmallEigenvalues({values:[0,0,1,0,-1,0,0,0],order:2,tolerance:0}).roots,[0,1,0,-1]);
+const split=extractSmallEigenvalues({values:[1,0,0,0,7,1,2,0],order:2,tolerance:Number.EPSILON});assert.deepEqual(split.blocks,[1,1]);assert.deepEqual(split.roots,[1,0,2,0]);
+const old=Object.fromEntries(['sin','cos','hypot','log','exp','pow'].map(k=>[k,Math[k]]));
+try{for(const k in old)Math[k]=()=>{throw new Error('Independent solver fallback forbidden');};assert.deepEqual(solveNativeQuadratic([1,0,-3,0,2,0],{tolerance:0}).roots,[2,0,1,0]);}finally{Object.assign(Math,old);}
+const args={p:100,q:50,mode:1,center:440,decay_floor_ratio:1e6,rootAlgorithm:'native-quadratic-block',rootTolerance:0};
+const native=coupledModes([440,441],args);assert.equal(native.solver.algorithm,'recovered-native-quadratic-block');assert.equal(native.frequency.length,2);assert.ok(native.frequency.every(Number.isFinite));
+assert.throws(()=>coupledModes([440,441,442],args),/quadratic/);
+assert.throws(()=>coupledModes([440,441],{...args,rootAlgorithm:'unknown'}),/Unknown/);
+assert.throws(()=>solveNativeQuadratic([1,0,-3,0,2,0]),/tolerance/);
+assert.throws(()=>solveNativeQuadratic([1,0,-3,0,0,0],{tolerance:0}),/quadratic/);
+assert.throws(()=>solveNativeQuadratic([Number.MIN_VALUE,0,1,0,1,0],{tolerance:0}),/trimming/);
+assert.throws(()=>solveNativeQuadratic([1,0,1,0,Number.MIN_VALUE,0],{tolerance:0}),/trimming/);
+assert.throws(()=>nativeComplexDivide(1,0,0,0),/nonzero/);
+console.log('Native finite division, small complex blocks, companion layout, explicit pole dispatch and unsupported branch guards passed');

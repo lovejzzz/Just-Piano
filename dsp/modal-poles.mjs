@@ -2,6 +2,7 @@
 // Durand–Kerner implementation, NOT the native 484ce4 eigensolver.
 import {fma64} from './native-double-fma.mjs';
 export {fma64} from './native-double-fma.mjs';
+import {solveNativeQuadratic} from './native-small-eigen.mjs';
 import {singleComponentPole} from './single-component-pole.mjs';
 function multiplyLinear(a, [constant, slope]) {
   const result = Array(a.length + 1).fill(0);
@@ -108,6 +109,10 @@ export function rootsToFrequencyDecay(rootsInterleaved, center, floorRatio) {
 export function coupledModes(lambda, parameters) {
   if (lambda.length === 1) return singleComponentPole(parameters);
   const built = buildCoupledCoefficients(lambda, parameters);
-  const solved = solveCoupledPolynomial(built.coefficients);
+  const algorithm=parameters.rootAlgorithm??'independent-durand-kerner';
+  if(!['independent-durand-kerner','native-quadratic-block'].includes(algorithm))throw new RangeError('Unknown pole root algorithm');
+  const solved = algorithm==='native-quadratic-block'
+    ? solveNativeQuadratic(built.coefficients,{tolerance:parameters.rootTolerance})
+    : solveCoupledPolynomial(built.coefficients);
   return { ...rootsToFrequencyDecay(solved.roots, parameters.center, parameters.decay_floor_ratio), ...built, solver: solved };
 }

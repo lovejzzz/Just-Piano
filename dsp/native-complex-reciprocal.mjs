@@ -36,3 +36,16 @@ export function nativeComplexReciprocal(real,imaginary){
   const im=fma64(0,c,-d)/denominator;
   return {real:scale(re,-exponent),imaginary:scale(im,-exponent)};
 }
+
+// General finite-numerator branch of the same __divdc3 instruction sequence.
+// Zero/nonfinite denominators and nonfinite numerators require other branches.
+export function nativeComplexDivide(a,b,real,imaginary){
+  if(![a,b,real,imaginary].every(Number.isFinite)||(real===0&&imaginary===0))
+    throw new RangeError('Finite numerator and finite nonzero complex denominator required');
+  const exponent=exponentOf(Math.max(Math.abs(real),Math.abs(imaginary)));
+  const c=scale(real,-exponent),d=scale(imaginary,-exponent);
+  const denominator=fma64(c,c,d*d);
+  const re=fma64(a,c,b*d)/denominator;
+  const im=fma64(b,c,-(a*d))/denominator;
+  return {real:scale(re,-exponent),imaginary:scale(im,-exponent)};
+}
