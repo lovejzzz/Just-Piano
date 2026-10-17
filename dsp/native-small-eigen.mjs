@@ -1,7 +1,7 @@
 // 6f30a0: extraction of 1x1 or 2x2 complex blocks, before general QR port.
 // Matrix values are column-major interleaved complex doubles.
 import {fma64} from './native-double-fma.mjs';
-import {nativeComplexDivide} from './native-complex-reciprocal.mjs';
+import {constructNativeCompanion} from './native-qr-foundation.mjs';
 const multiply=(ar,ai,br,bi)=>[fma64(ar,br,-(ai*bi)),fma64(ai,br,ar*bi)];
 function blockSqrt(real,imaginary){
   if(real===0){const x=Math.sqrt((imaginary>=0?imaginary:-imaginary)*.5);return [x,imaginary>=0?x:-x];}
@@ -35,14 +35,7 @@ export function solveNativeQuadratic(coefficients,{tolerance}={}){
   if(coefficients?.length!==6||![...coefficients,tolerance].every(Number.isFinite)||tolerance<0||
      (coefficients[0]===0&&coefficients[1]===0)||(coefficients[4]===0&&coefficients[5]===0))
     throw new RangeError('Finite nonzero-leading/constant quadratic and explicit tolerance required');
-  if(fma64(coefficients[0],coefficients[0],coefficients[1]*coefficients[1])===0||
-     fma64(coefficients[4],coefficients[4],coefficients[5]*coefficients[5])===0)
-    throw new RangeError('Native coefficient trimming underflow branch is not implemented');
-  const a=nativeComplexDivide(-coefficients[2],-coefficients[3],coefficients[0],coefficients[1]);
-  const b=nativeComplexDivide(-coefficients[4],-coefficients[5],coefficients[0],coefficients[1]);
-  // 8d6d74/78 advance by order*16: coefficients occupy the first row
-  // in this column-major view; 8d6d9c/da0 put +1 at the subdiagonal.
-  const companion=[a.real,a.imaginary,1,0,b.real,b.imaginary,0,0];
+  const companion=Array.from(constructNativeCompanion(coefficients).values);
   return {...extractSmallEigenvalues({values:companion,order:2,tolerance}),companion,
     algorithm:'recovered-native-quadratic-block',generalQrVerified:false};
 }
