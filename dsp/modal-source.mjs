@@ -1,6 +1,7 @@
 // Source-table preparation recovered from 1026dc / 194870 / 182960 / 7a4014.
 // Callers supply model tables and unrecovered transcendental/config values.
 import {nativeScalarPowf} from './native-scalar-pow.mjs';
+import {nativeDoublePow} from './native-double-pow.mjs';
 import { fma64 } from './modal-poles.mjs';
 const f32 = Math.fround;
 
@@ -141,4 +142,29 @@ export function sourcePhaseTable(rows, columns, amount, phaseConstant) {
     output[j] = f32(scale * centered);
   }
   return output;
+}
+
+// Construct the source tables from upstream computed poles/weights. All model
+// controls and registry constants remain explicit; no captured target is read.
+export function constructModalSource({frequency, rawDecay, weights, columns,
+  addedDecay, shape, eta, integerScale, phaseAmount, phaseConstant, referenceFrequency},
+  {pow = nativeDoublePow} = {}) {
+  if (!Number.isInteger(columns) || columns < 1 || !frequency?.length ||
+      frequency.length % columns || rawDecay?.length !== frequency.length ||
+      !weights?.length || weights.length < frequency.length / columns || typeof pow !== 'function' ||
+      ![...frequency, ...rawDecay, ...weights, addedDecay, shape, eta, integerScale,
+        phaseAmount, phaseConstant, referenceFrequency].every(Number.isFinite) || referenceFrequency <= 0)
+    throw new RangeError('Complete finite modal source matrices and explicit controls required');
+  const rows = frequency.length / columns, decay = new Float32Array(frequency.length), amplitude = new Float32Array(frequency.length);
+  for (let row = 0; row < rows; row++) {
+    const start = row * columns;
+    const source = sourceAmplitudeRow(rawDecay.slice(start, start + columns), weights[row],
+      {addedDecay, shape, eta, integerScale, pow});
+    decay.set(source.decay, start); amplitude.set(source.amplitude, start);
+  }
+  const normalization = normalizeSourceAmplitudes(amplitude);
+  return {rows, columns, frequency: Float32Array.from(frequency), rawDecay: Float32Array.from(rawDecay), decay, amplitude,
+    phase: sourcePhaseTable(rows, columns, phaseAmount, phaseConstant),
+    normalizedAmplitude: normalization.values, normalizationMaximum: normalization.maximum, normalizationScale: normalization.scale,
+    referenceIndex: referenceModeIndex(frequency, columns, referenceFrequency)};
 }
