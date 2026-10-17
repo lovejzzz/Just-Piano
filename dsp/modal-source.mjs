@@ -62,7 +62,7 @@ export function prepareModalInputs({ frequency, offsets, offsetExponent, stiffne
         stiffness: componentB, offsets: scaledOffsets.slice(j, j + 1), spread: spreadVector.slice(j, j + 1) });
     }
   }
-  return { scaledOffsets, spreadVector, endpoints, blend, nativeOffsetScale: f32(offsetScale), offsetScaleComputed };
+  return { scaledOffsets, spreadVector, endpoints, blend, fundamental:frequency, nativeOffsetScale: f32(offsetScale), offsetScaleComputed };
 }
 
 export function modePoleInputs({ reference, base, stiffness, mode, offsets, spread }) {
