@@ -1,6 +1,7 @@
 // Recovered archive-to-control arithmetic for the observed ARM64 build.
 // Archive compression flags do not establish runtime log-X/special modes.
 import { fma32 } from './modal-kernel.mjs';
+import {clampHammerHardnessTable} from './hammer-all-hardness.mjs';
 const fl = Math.fround;
 
 export function linearModelCurve(curve, input, { runtimeMode } = {}) {
@@ -52,7 +53,7 @@ export function archiveHardnessAt69({ baseFields, presetFields, note, runtimeMod
   const groupValues = [1, 2, 3].map((i) => fl(fl(h.scalars[i]) * scalarCurve(h.curves[i])));
   const multipliers = [groupValues[0], groupValues[0], groupValues[1], groupValues[2], groupValues[2]];
   const tables = [0xc58, 0xe38].map((offset) =>
-    multipliers.map((gain, k) => fl(gain * scalarCurve(base.get(offset + 0x50 * k)))));
+    clampHammerHardnessTable(multipliers.map((gain, k) => fl(gain * scalarCurve(base.get(offset + 0x50 * k))))));
   const knots = evaluate(base.get(0xde8));
   if (knots.length !== 5) throw new RangeError('Five hardness knots required');
   return { note, groupValues, all, knots, tables };
