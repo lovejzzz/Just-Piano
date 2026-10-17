@@ -1,5 +1,6 @@
 import {rattleDispatchRoute} from '../dsp/rattle-dispatch-control.mjs';
 const addresses={before:0x10035ef10,weights:0x100695108,final:0x100864d28,envelopeResult:0x100472fd0,copy:0x1004604d4,coefficients:0x100472f50,rattleSource:0x10085ed9c,rattleEntry:0x100278154,rattleBuffer:0x1004601a0,rattleReady:0x1004601ac,rattleSkip:0x10085ede4,rattleCommit:0x10051182c,consumer:0x100460908,consumerPost:0x100460a4c,consumerCross:0x100460acc};
+const mainRecoveryRoles=new Set(['consumer','consumerPost','consumerCross','audioGain','audioEntry','audioReturn','audioAfterGains','audioTail']);
 const gateRoles={entry:'rattleEntry',buffer:'rattleBuffer',ready:'rattleReady'};
 const routeRoles={buffer:'rattleBuffer',ready:'rattleReady',skip:'rattleSkip',commit:'rattleCommit'};
 export function observationResumeKeys(records,resumes){
@@ -101,7 +102,7 @@ function validateEarlyCommitSlots(data,resumes){
   if(r.site.delivery==='stopped-frame'){
    const key=`${r.thread}:${r.site.id}:${r.site.stopId}`,event=recovered.get(i+1);
    if(!event||stoppedFrames.get(key)!==r.site.reason||!stoppedFrames.has(key)||event.thread!==r.thread||event.stage!==r.stage||event.epoch!==r.epoch||event.counter!==(r.counter??null)||event.stopId!==r.site.stopId)throw new Error('Unproven stopped frame observation');
-   if(event.worker?!(data.readStoppedWorkerFrames&&['coefficients','envelopeResult'].includes(role)):!(data.readStoppedMainFrames&&!['coefficients','envelopeResult'].includes(role)&&r.thread===data.records.find(r=>r.stage==='before').thread))throw new Error('Unproven stopped frame role');
+   if(event.worker?!(data.readStoppedWorkerFrames&&['coefficients','envelopeResult'].includes(role)):!(data.readStoppedMainFrames&&mainRecoveryRoles.has(role)&&r.thread===data.records.find(r=>r.stage==='before').thread))throw new Error('Unproven stopped frame role');
    recovered.delete(i+1);
   }else if(recovered.has(i+1))throw new Error('Stopped-worker provenance missing');
   if(s.id===null){if(seenIds.has(r.site.id))throw new Error('Reused early slot ID');s.id=r.site.id;seenIds.add(s.id);}

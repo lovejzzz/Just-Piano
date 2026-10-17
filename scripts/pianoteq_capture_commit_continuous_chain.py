@@ -21,6 +21,9 @@ POLL_WORKER=os.environ.get('PIANOTEQ_READ_STOPPED_WORKERS')=='1'
 assert not POLL_WORKER or DEFER
 POLL_MAIN=os.environ.get('PIANOTEQ_READ_STOPPED_MAIN')=='1'
 assert not POLL_MAIN or DEFER
+# Only roles replaced after every delivered observation. Fixed copy/before/final
+# may remain parked across other threads' stops and must not be read again.
+MAIN_RECOVERY_ROLES={'consumer','consumerPost','consumerCross','audioGain','audioEntry','audioReturn','audioAfterGains','audioTail'}
 AUDIO=os.environ.get('PIANOTEQ_VOICE_RATTLE_AUDIO')=='1'
 assert not AUDIO or EARLY and DEFER
 TAIL=os.environ.get('PIANOTEQ_VOICE_TAIL_ENVELOPES')=='1'
@@ -265,7 +268,7 @@ def resume_owned_stops(debugger):
   if POLL_MAIN and main_thread is not None:
    thread=process.GetThreadByID(main_thread);assert thread.IsValid()
    frame=thread.GetFrameAtIndex(0);pc=frame.GetPCAddress().GetFileAddress()
-   name=next((k for k,v in base.POINTS.items() if pc==v and k not in ('coefficients','envelopeResult')),None)
+   name=next((k for k,v in base.POINTS.items() if pc==v and k in MAIN_RECOVERY_ROLES),None)
    if name is not None:
     seen=last_seen.get(main_thread);hook=hooks[name]
     delivered=seen and seen['stopId']==process.GetStopID() and seen['id']==hook.GetID() and seen['fileAddress']==pc
