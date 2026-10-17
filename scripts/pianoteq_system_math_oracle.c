@@ -23,12 +23,13 @@ static void print_bits(double value) {
 }
 
 int main(int argc, char **argv) {
-    if (argc == 2 && !strcmp(argv[1], "hypotf-bulk")) {
+    if (argc == 2 && (!strcmp(argv[1], "hypotf-bulk") || !strcmp(argv[1], "atan2f-bulk"))) {
         uint32_t a, b, output;
         while (scanf("%x %x", &a, &b) == 2) {
             float x, y, value;
             memcpy(&x, &a, 4); memcpy(&y, &b, 4);
-            value = hypotf(x, y); memcpy(&output, &value, 4);
+            value = !strcmp(argv[1], "atan2f-bulk") ? atan2f(x, y) : hypotf(x, y);
+            memcpy(&output, &value, 4);
             printf("%08x\n", output);
         }
         return ferror(stdin) || ferror(stdout) ? 3 : 0;

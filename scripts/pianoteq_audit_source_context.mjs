@@ -10,9 +10,11 @@ import {archiveFrequencyVariationControls, rewindExcitationRandom, secondaryFreq
 import {ExcitationManagerRandom} from '../dsp/excitation-manager-random.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
-let presetPair, mixArchive, neighborOracle, decaySource, frequencySource;
+let presetPair, mixArchive, neighborOracle, decaySource, frequencySource, nativeNeighborMath = false;
 for (let i = 0; i < options.length;) {
-  const option = options[i++], first = options[i++];
+  const option = options[i++];
+  if (option === '--native-neighbor-math' && !nativeNeighborMath) {nativeNeighborMath = true; continue;}
+  const first = options[i++];
   if (option === '--neighbor-math-oracle' && first && !neighborOracle) {neighborOracle = first; continue;}
   const second = options[i++];
   if (!first || !second) throw new Error('Each option requires two arguments');
@@ -22,7 +24,9 @@ for (let i = 0; i < options.length;) {
   else if (option === '--frequency-source' && !frequencySource && first === '1' && ['captured-post-jitter-state', 'manager-reset-seed-zero'].includes(second)) frequencySource = second;
   else throw new Error('Expected unique --preset-pair first.json second.json or --mix-archive banks.json index');
 }
-if (neighborOracle && !mixArchive) throw new Error('Neighbor preparation requires explicit mix archive');
+if (nativeNeighborMath && neighborOracle) throw new Error('Choose native neighbor math or an explicit diagnostic oracle');
+const neighborEnabled = nativeNeighborMath || Boolean(neighborOracle);
+if (neighborEnabled && !mixArchive) throw new Error('Neighbor preparation requires explicit mix archive');
 if (decaySource && !mixArchive) throw new Error('Decay preparation requires explicit base archive');
 if (frequencySource && !mixArchive) throw new Error('Frequency preparation requires explicit base archive');
 const captureBytes = fs.readFileSync(capturePath), candidateBytes = fs.readFileSync(candidatePath);
@@ -85,8 +89,8 @@ for (const record of capture.records) {
     ...archiveExcitationMixCoefficients(mixBank, input.note, {runtimeMode: 'linear-clamp'}),
     velocity: input.controls?.velocity, attenuation: input.controls?.attenuation,
     blendFloor: input.controls?.blendFloor, inputBlend: input.controls?.inputBlend }) : undefined;
-  const neighborControls = neighborOracle ? archiveNeighborControls(mixBank, input.note,
-    {runtimeMode: 'linear-clamp', atan2f: nativeMath('atan2f')}) : undefined;
+  const neighborControls = neighborEnabled ? archiveNeighborControls(mixBank, input.note,
+    nativeNeighborMath ? {runtimeMode: 'linear-clamp'} : {runtimeMode: 'linear-clamp', atan2f: nativeMath('atan2f')}) : undefined;
   const neighbor = neighborControls ? mixNeighborExcitation({amplitude: mix.amplitude, phase: predicted.phase, columns: predicted.cols},
     {...neighborControls, floor: input.controls.blendFloor, blend: input.controls.inputBlend,
       mix: Math.max(Math.fround(input.controls.blendFloor), Math.fround(input.controls.inputBlend))}) : undefined;
@@ -171,8 +175,8 @@ const result = {passed: mismatches === 0 && randomStateMismatches === 0, compati
   amplitudeMixComputedFromArchive: Boolean(mixBank), mixArchiveSha256,
   mixArchiveIndex: mixArchive?.[1], mixRuntimeCurveModeSupplied: mixBank ? 'linear-clamp' : undefined,
   mixRuntimeCurveModeNewlyObserved: false, interveningSourceTransformsFullyReconstructed: false,
-  neighborControlsComputedFromArchive: Boolean(neighborOracle), neighborSystemMathRequired: Boolean(neighborOracle),
-  neighborNativeHypotfImplemented: Boolean(neighborOracle),
+  neighborControlsComputedFromArchive: Boolean(neighborEnabled), neighborSystemMathRequired: Boolean(neighborOracle),
+  neighborNativeHypotfImplemented: Boolean(neighborEnabled), neighborNativeAtan2fImplemented: nativeNeighborMath,
   neighborOracleSha256: neighborOracle ? sha(fs.readFileSync(neighborOracle)) : undefined,
   neighborMathCalls: [...mathCalls.values()], decayPreparationReconstructed: false,
   decayPreparationComputedForSuppliedBranch: Boolean(decayPreset),

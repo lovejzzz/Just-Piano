@@ -16,6 +16,9 @@ export function bindPreparedSources(bytes, captureSha256) {
       report.sameRunModelGenerationVerified !== false || report.finalStereoVerified !== false || report.substitutedIntoVoice !== false ||
       report.correctionFitApplied !== false || report.checks?.length !== 10)
     throw new Error('Complete capture-bound computed source report with explicit observed dependencies required');
+  if (report.neighborNativeAtan2fImplemented === true && (report.neighborSystemMathRequired !== false ||
+      report.neighborNativeHypotfImplemented !== true || report.neighborMathCalls?.length !== 0))
+    throw new Error('Native neighbor math metadata contradicts external dependencies');
   if (forwardRandom && (report.managerConfigurationSeedSupplied !== 0 || report.managerEventBranchSupplied !== 'velocity-randomization-enabled' ||
       report.managerDraws !== 10 || report.randomStateComparedWords !== 20 || report.randomStateMismatches !== 0 ||
       report.managerRuntimeConditionsNewlyObserved !== false || report.managerRandomStateChecks?.length !== 5))
@@ -60,6 +63,7 @@ export function bindPreparedSources(bytes, captureSha256) {
       managerConditionsSupplied: forwardRandom ? {configurationSeed: 0, eventBranch: 'velocity-randomization-enabled', newlyObserved: false} : undefined,
       neighborSystemMathRequired: report.neighborSystemMathRequired,
       neighborNativeHypotfImplemented: report.neighborNativeHypotfImplemented === true,
+      neighborNativeAtan2fImplemented: report.neighborNativeAtan2fImplemented === true,
       runtimeBranchSupplied: report.decayRuntimeBranchSupplied, wholeEngineEquivalent: false},
     consume(record) {
       const key = `${record.epoch}:${record.input.mode}`, row = entries.get(key);
