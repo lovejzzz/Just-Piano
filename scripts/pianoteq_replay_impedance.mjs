@@ -1,12 +1,15 @@
+import {nativeDoubleExp} from '../dsp/native-double-exp.mjs';
 // Usage: node SCRIPT before.json after.json radius.json native-math-oracle [report.json] [--additional-return after2.json]
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { modalImpedance, couplingJitterFactors } from '../dsp/modal-impedance.mjs';
 import { impedanceControls } from '../dsp/impedance-controls.mjs';
 const argumentsOnly = [], additionalReturnPaths = [];
+let nativeDoubleExpMode=false;const computedDoubleExpCalls=[];
 let sourcePolesPath, sourceControlsPath, baseModelsPath, presetPath, couplingInputReportPath, baseModelIndex = 0;
 for (let i = 2; i < process.argv.length; i++) {
-  if (process.argv[i] === '--additional-return') {
+  if(process.argv[i]==='--native-double-exp'){if(nativeDoubleExpMode)throw new Error('Duplicate native double exp option');nativeDoubleExpMode=true;}
+  else if (process.argv[i] === '--additional-return') {
     if (!process.argv[i + 1]) throw new Error('Missing additional return capture path');
     additionalReturnPaths.push(process.argv[++i]);
   } else if (process.argv[i] === '--source-poles') sourcePolesPath = process.argv[++i];
@@ -41,6 +44,10 @@ const cache = new Map(), oracleCalls = [];
 const math = Object.fromEntries(['log2f', 'exp', 'sincos', 'tan', 'pow', 'log'].map(name => [name, (...values) => {
   const inputs = values.map(bits), key = [name, ...inputs].join(':');
   if (!cache.has(key)) {
+   if(nativeDoubleExpMode&&name==='exp'){
+    if(values.length!==1)throw new Error('One double exp argument required');
+    const predicted=nativeDoubleExp(values[0]);cache.set(key,predicted);computedDoubleExpCalls.push({operation:name,inputs,outputs:[bits(predicted)]});
+   }else{
     const run = spawnSync(oracle, [name, ...inputs], { encoding: 'utf8' });
     if (run.status !== 0) throw new Error(`Host math oracle failed: ${run.stderr}`);
     const outputs = run.stdout.trim().split(/\s+/);
@@ -49,6 +56,7 @@ const math = Object.fromEntries(['log2f', 'exp', 'sincos', 'tan', 'pow', 'log'].
     const decoded = outputs.map(decode);
     cache.set(key, name === 'sincos' ? { sin: decoded[0], cos: decoded[1] } : decoded[0]);
     oracleCalls.push({ operation: name, inputs, outputs });
+   }
   }
   return cache.get(key);
 }]));
@@ -179,6 +187,7 @@ const result = {
   controlsAndCurvesComputedFromArchives: Boolean(baseModel), archiveModel: baseModel?.strings?.[0],
   archiveDistinctConfigurations: archivePrepared.size, archiveDistinctControlValues: archivePrepared.size * 4,
   archiveDistinctPhaseValues: [...archivePrepared.values()].reduce((n, source) => n + source.phaseCurve.x.length + source.phaseCurve.y.length, 0),
+  nativeDoubleExpComputed:nativeDoubleExpMode,computedDoubleExpCalls,computedDoubleExpUniqueCalls:computedDoubleExpCalls.length,mathExpDifferencesOnComputedCalls:computedDoubleExpCalls.filter(c=>bits(Math.exp(decode(c.inputs[0])))!==c.outputs[0]).length,
   platformTranscendentalOracleRequired: true, oracleUniqueCalls: oracleCalls.length,
   jitterValues, jitterMismatches, couplingJitterVerified: jitterValues > 0 && jitterMismatches === 0,
   mathOperations: [...new Set(oracleCalls.map(row => row.operation))], dependencyDifferences,

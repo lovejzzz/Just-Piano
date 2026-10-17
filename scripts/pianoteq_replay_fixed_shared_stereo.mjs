@@ -1,3 +1,4 @@
+import {nativeDoubleExp} from '../dsp/native-double-exp.mjs';
 // Experimental fixed-site whole-clip verifier. Observed source/control boundaries remain explicit.
 // Same-run time-envelope -> spatial tail; upstream audio is still observed.
 import fs from 'node:fs';
@@ -21,10 +22,13 @@ if(diagnosticRejectedCapture)flags.splice(flags.indexOf('--diagnostic-rejected-c
 const terminalOptions=flags.filter(x=>x.startsWith('--archive-terminal-source='));
 if(terminalOptions.length>1)throw new Error('One archive terminal source required');
 const terminalArchive=terminalOptions.length?JSON.parse(fs.readFileSync(terminalOptions[0].slice('--archive-terminal-source='.length))):null;
-const option=flags.includes('--exp-candidate')?'--exp-candidate':null,extra=flags.filter(x=>x.startsWith('--archive-time-source=')),pcmOptions={};
-for(const flag of flags){if(flag==='--exp-candidate'||flag.startsWith('--archive-time-source=')||flag.startsWith('--archive-terminal-source='))continue;const i=flag.indexOf('=');const key=flag.slice(0,i),value=flag.slice(i+1);if(i<0||!['--observed-wav','--reference-wav','--output-wav'].includes(key)||pcmOptions[key]||!value)throw new Error('Invalid full-stereo option');pcmOptions[key]=value;}
+const nativeDoubleExpMode=flags.includes('--native-double-exp');
+if(flags.filter(x=>['--native-double-exp','--exp-candidate'].includes(x)).length!==1)throw new Error('Select exactly one exponential implementation');
+let nativeDoubleExpCalls=0;const timeExp=x=>{if(nativeDoubleExpMode){nativeDoubleExpCalls++;return nativeDoubleExp(x);}return Math.exp(x);};
+const option=nativeDoubleExpMode?'--native-double-exp':flags.includes('--exp-candidate')?'--exp-candidate':null,extra=flags.filter(x=>x.startsWith('--archive-time-source=')),pcmOptions={};
+for(const flag of flags){if(flag==='--native-double-exp'||flag==='--exp-candidate'||flag.startsWith('--archive-time-source=')||flag.startsWith('--archive-terminal-source='))continue;const i=flag.indexOf('=');const key=flag.slice(0,i),value=flag.slice(i+1);if(i<0||!['--observed-wav','--reference-wav','--output-wav'].includes(key)||pcmOptions[key]||!value)throw new Error('Invalid full-stereo option');pcmOptions[key]=value;}
 if(!pcmOptions['--observed-wav']||!pcmOptions['--reference-wav'])throw new Error('Full native/reference WAVs required');
-if(!capturePath||!auditPath||!reportPath||option!=='--exp-candidate'||extra.length>1||extra.length&&!extra[0].startsWith('--archive-time-source='))throw new Error('Usage: complete-component.json owned-resumes.jsonl new-report.json --exp-candidate [--archive-time-source=decoded-source.json]');
+if(!capturePath||!auditPath||!reportPath||!['--exp-candidate','--native-double-exp'].includes(option)||extra.length>1||extra.length&&!extra[0].startsWith('--archive-time-source='))throw new Error('Usage: complete-component.json owned-resumes.jsonl new-report.json (--native-double-exp | --exp-candidate) [--archive-time-source=decoded-source.json]');
 const archive=extra.length?JSON.parse(fs.readFileSync(extra[0].slice('--archive-time-source='.length))):null;
 if(archive){
  if(archive.schema!==1||archive.presetSha256!==crypto.createHash('sha256').update(fs.readFileSync(archive.presetPath)).digest('hex'))throw new Error('Verified archive time preset required');
@@ -129,7 +133,7 @@ function source(r){
  const enabled=s.globalDelay!==0||selected!==0||s.globalEnd<10?1:0;
  if(!enabled||selected<0||s.globalDelay!==0||s.globalEnd<10)throw new Error('Unverified time initialization branch');
  const samples=Math.trunc(Math.fround(selected*Math.fround(s.sampleRate)));if(samples>0xffffffff)throw new Error('Time duration outside uint32');
- const time={...r.initialTime,enabled,delay:0,attack:samples,decay:0,counter:0,attackRate:samples?Math.exp(-0.9942522733438669/samples):0,decayRate:1};
+ const time={...r.initialTime,enabled,delay:0,attack:samples,decay:0,counter:0,attackRate:samples?timeExp(-0.9942522733438669/samples):0,decayRate:1};
  let terminalModel=null;
  if(terminalArchive){
   if(!r.terminalModelSources)throw new Error('Actual same-run terminal model inputs required');
@@ -231,5 +235,5 @@ for(let i=0;i<pcm.length;i+=3){if(pcm.readIntLE(i,3)!==nativePcm.readIntLE(i,3))
 if(pcmOptions['--output-wav']){const h=Buffer.alloc(44);h.write('RIFF');h.writeUInt32LE(pcm.length+36,4);h.write('WAVEfmt ',8);h.writeUInt32LE(16,16);h.writeUInt16LE(1,20);h.writeUInt16LE(2,22);h.writeUInt32LE(48000,24);h.writeUInt32LE(288000,28);h.writeUInt16LE(6,32);h.writeUInt16LE(24,34);h.write('data',36);h.writeUInt32LE(pcm.length,40);fs.writeFileSync(pcmOptions['--output-wav'],Buffer.concat([h,pcm]),{flag:'wx'});}
 const diagnosticSameRunMathMatches=!mismatches&&!pcmDifferences&&!pcmCalibrationDifferences;
 const sameRunPassed=captureAccepted&&diagnosticSameRunMathMatches;
-const report={passed:sameRunPassed&&!referencePcmDifferences,sameRunPassed,captureAccepted,diagnosticRejectedCapture,driverFailureCount:driverFailures.length,diagnosticSameRunMathMatches,checks,mismatches,doubleChecks,fullPcmFrames:pcm.length/6,pcmDifferences,referencePcmDifferences,pcmCalibrationDifferences,kernelSpectra,headProducts,tailProducts,voiceBlocks,routedVoiceBlocks,unroutedVoiceBlocks,skippedVoiceExits,primaryActiveBlocks,secondaryActiveBlocks,postAttackBlocks,sleepAllInactive,sleepMixed,globalFrames:globalFrame,initialCacheHeadObserved:true,initialSilentOutputsAssumedAndCheckedAtCabinet:true,terminalModelFieldsGenerated:!!terminalArchive,terminalModels,terminalDecayRowAndFrequencyObserved:!!terminalArchive,lateDurationOverridesProduced:false,cabinetDescriptorObservedInRecords:data.records.filter(r=>r.stage==='cabinet').every(r=>r.sourceDescriptor!==undefined),cabinetDescriptorAssertedByFrozenCollector:true,cabinetSampleBufferIdentityCarried:true,observedVoiceInput:true,observedModelAndEnableInputs:true,observedSpatialCoefficients:true,observedGlobalInputAndFeedback:true,observedIrSourceAndPlans:true,expDoubleCandidateUsed:true,fullVoiceSourceComputed:false,finalStereoAudioVerified:sameRunPassed&&!referencePcmDifferences,failures};
+const report={passed:sameRunPassed&&!referencePcmDifferences,sameRunPassed,captureAccepted,diagnosticRejectedCapture,driverFailureCount:driverFailures.length,diagnosticSameRunMathMatches,checks,mismatches,doubleChecks,fullPcmFrames:pcm.length/6,pcmDifferences,referencePcmDifferences,pcmCalibrationDifferences,kernelSpectra,headProducts,tailProducts,voiceBlocks,routedVoiceBlocks,unroutedVoiceBlocks,skippedVoiceExits,primaryActiveBlocks,secondaryActiveBlocks,postAttackBlocks,sleepAllInactive,sleepMixed,globalFrames:globalFrame,initialCacheHeadObserved:true,initialSilentOutputsAssumedAndCheckedAtCabinet:true,terminalModelFieldsGenerated:!!terminalArchive,terminalModels,terminalDecayRowAndFrequencyObserved:!!terminalArchive,lateDurationOverridesProduced:false,cabinetDescriptorObservedInRecords:data.records.filter(r=>r.stage==='cabinet').every(r=>r.sourceDescriptor!==undefined),cabinetDescriptorAssertedByFrozenCollector:true,cabinetSampleBufferIdentityCarried:true,observedVoiceInput:true,observedModelAndEnableInputs:true,observedSpatialCoefficients:true,observedGlobalInputAndFeedback:true,observedIrSourceAndPlans:true,expDoubleCandidateUsed:!nativeDoubleExpMode,nativeDoubleExpComputed:nativeDoubleExpMode,nativeDoubleExpCalls,fullVoiceSourceComputed:false,finalStereoAudioVerified:sameRunPassed&&!referencePcmDifferences,failures};
 fs.writeFileSync(reportPath,stringifyWithNegativeZero(report,2)+'\n',{flag:'wx'});console.log(JSON.stringify(report));if(!report.passed)process.exitCode=1;
