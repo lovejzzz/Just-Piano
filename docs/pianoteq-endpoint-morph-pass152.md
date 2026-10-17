@@ -40,6 +40,6 @@ out = native_expf(FMA32(u, native_logf(b), f(t * native_logf(a))))
 
 新增测试固定独立 oracle 位模式，检查正弦平方与原始blend差别、零端点四次根、tiny规则、非法输入拒绝；禁用 JS Math.sin/pow/log/exp 仍通过。纳入 npm test。
 
-四函数反编译还显示相位有分段 wrap 和记录类型修正；ARM 的 SIMD lane 与标量尾部含不同精度的 π 减法，不能用一个通用 wrap 或最短弧插值替代。这部分、原生排序和最终源表组装保留为后续必须完成的工作。
+四函数反编译还显示相位有分段 wrap 和记录类型修正。**pass153 更正本轮初判：**逐条核对 ARM 后，SIMD lane 和标量尾部都先转 double 再减 double π；反编译文本的精度差异不是实际指令差异。相位实现和独立 ARM 对照见[pass153](pianoteq-endpoint-phase-pass153.md)。原生排序和最终源表组装仍待完成。
 
 本轮没有新的 Pianoteq 内部动态端点捕获，没有将独立 C 数值对照当作真实音频验收。既有分轨消费缓存表，未调用新模块，因此不重复导出旧音轨来声称新端点声音通过。调试目标39079仍启动挂起，本轮仅确认其进程状态，未重启。没有使用 Pedalboard；全部商业输入和反编译正文仍留本机。
