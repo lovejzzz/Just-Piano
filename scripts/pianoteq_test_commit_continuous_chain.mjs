@@ -19,7 +19,7 @@ const baseline=JSON.parse(fs.readFileSync(baselinePath));
 if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed)throw new Error('Full parent and components must pass');
 const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs,r.cross?.outputs])).digest('hex');
 const expected=hash(baseline),first=(d,stage)=>d.records.find(r=>r.stage===stage);
-const activePre=d=>{const seen=new Set();for(const r of d.records)if(r.stage==='consumer'&&!seen.has(r.epoch)){seen.add(r.epoch);if(r.injectionPre.envelope.active===1)return r;}throw new Error('Active initial envelope seed required by this fixture');};
+const activePre=d=>{const seen=new Set();for(const r of d.records)if(r.stage==='consumer'&&(d.earlyConsumer||!seen.has(r.epoch))){seen.add(r.epoch);if(r.injectionPre.envelope.active===1)return r;}throw new Error('Active envelope required by this fixture');};
 const activePost=d=>{const pre=activePre(d);return d.records.find(r=>r.stage==='consumerPost'&&r.epoch===pre.epoch&&r.counter===pre.counter);};
 const nextPre=d=>{const pre=activePre(d);return d.records.find(r=>r.stage==='consumer'&&r.epoch===pre.epoch&&r.counter>pre.counter);};
 const bypassPre=d=>{const r=d.records.find(r=>r.stage==='consumer'&&(r.injectionPre.controls.skip&1)&&r.injectionPre.envelope.active===0&&r.injectionPre.envelope.gain!==1);if(!r)throw new Error('Non-unit bypassed envelope fixture required');return r;};
@@ -31,7 +31,7 @@ const cases=[
  ['post-envelope-gain-target',d=>{activePost(d).envelope.gain=.25;},'one-same'],
  ['carried-pre-envelope-gain-target',d=>{nextPre(d).injectionPre.envelope.gain=.25;},'one-same'],
  ['carried-pre-envelope-step-target',d=>{nextPre(d).injectionPre.envelope.step=.75;},'one-same'],
- ['initial-envelope-gain-source',d=>{activePre(d).injectionPre.envelope.gain=.5;},'many-different'],
+ [base.earlyConsumer?'initial-envelope-gain-target':'initial-envelope-gain-source',d=>{(d.earlyConsumer?first(d,'consumer'):activePre(d)).injectionPre.envelope.gain=.5;},base.earlyConsumer?'one-same':'many-different'],
  ['missing-post-stage',d=>{d.records.splice(d.records.indexOf(first(d,'consumerPost')),1);},'reject'],
  ['invalid-slot-active-count',d=>{d.slotTransitions[0].active=7;},'reject'],
  ['wrong-source-owner',d=>{first(d,'rattleSource').owner='0x0';},'reject'],
@@ -41,6 +41,23 @@ const cases=[
  ['missing-source-dispatch',d=>{d.records.splice(d.records.indexOf(first(d,'rattleGate')),1);},'reject'],
  ['bypassed-envelope-dispatch-source',d=>{bypassPre(d).injectionPre.controls.skip=0;},'many-different'],
 ];
+if(base.earlyConsumer)cases.push(
+ ['group-control-pre-gain-target',d=>{first(d,'groupControl').state.gain=.25;},'one-same'],
+ ['group-control-return-step-target',d=>{first(d,'groupControlAfter').state.step=.5;},'one-same'],
+ ['group-control-strength-target',d=>{first(d,'groupControl').strength=.125;},'one-same'],
+ ['normalized-strike-velocity-source',d=>{first(d,'before').inputs.newVelocity=.95;},'many-different'],
+ ['group-model-rate-source',d=>{first(d,'consumer').injectionPre.envelope.rate*=.5;},'many-different'],
+ ['missing-group-control-return',d=>{d.records.splice(d.records.indexOf(first(d,'groupControlAfter')),1);},'reject'],
+ ['missing-group-control',d=>{d.records.splice(d.records.indexOf(first(d,'groupControl')),1);},'reject'],
+ ['wrong-control-slot-count',d=>{d.slotTransitions.find(t=>t.newRole==='groupControl').registered=7;},'reject'],
+ ['deferred-update-wrong-callback',d=>{d.slotTransitions[0].callbackStopId+=1000000;},'reject'],
+ ['deferred-update-before-stop',d=>{d.slotTransitions[0].afterRecord=0;},'reject'],
+ ['unproven-stopped-frame',d=>{const r=first(d,'coefficients');r.site.delivery='stopped-frame';r.site.reason=3;},'reject'],
+);
+if(base.stoppedWorkerReads?.length)cases.push(
+ ['wrong-stopped-frame-counter',d=>{d.stoppedWorkerReads[0].counter++;},'reject'],
+ ['missing-stopped-frame-delivery',d=>{delete d.records[d.stoppedWorkerReads[0].record-1].site.delivery;},'reject'],
+);
 if(base.consumerCross){
  const auxiliaryKept=!!(first(base,'consumerPost').crossControls.keepAuxiliary&1);
  cases.push(

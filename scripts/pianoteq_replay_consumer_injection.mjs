@@ -1,4 +1,4 @@
-import {renderVoiceGroupEnvelope} from '../dsp/voice-group-envelope.mjs';
+import {initializeVoiceGroupEnvelope,voiceGroupActivationStrength,activateVoiceGroupEnvelope,renderVoiceGroupEnvelope} from '../dsp/voice-group-envelope.mjs';
 // Same-run calculated delay groups -> release source -> filter -> primary add.
 import {initializeReleaseSource,generateReleaseInjection,modulateReleaseInjection,addReleaseInjection} from '../dsp/release-injection.mjs';
 import {initializeReleaseFilters} from '../dsp/release-filter-design.mjs';
@@ -24,6 +24,13 @@ export function verifyConsumerInjection(data,calculated,check,setContext=()=>{})
  }
  const outputs=[],coverage=[];let generatedBlocks=0,skippedBlocks=0,inferredControlBlocks=0,entryBlocks=0,mixedBlocks=0,postComparedBlocks=0,groupEnvelopeBypassBlocks=0;const groupEnvelopeInitialStates=[];
  const releasePositionBridges=[];
+ const early=data.earlyConsumer===true;let groupControls=0,groupReactivations=0;
+ const velocities=new Map();
+ if(early)for(const r of data.records.filter(r=>r.stage==='weights')){
+  const pair={old:r.postInputs.velocity,effective:r.input.controls.velocity,sampleRate:r.selectionSource.sampleRate};
+  if(velocities.has(r.epoch)&&JSON.stringify(velocities.get(r.epoch))!==JSON.stringify(pair))throw new Error('Strike velocity changed between spectrum families');
+  velocities.set(r.epoch,pair);
+ }
  const compareState=(state,target,after)=>{
   for(const key of Object.keys(state))if(!after||key!=='lastMagnitude')check('injection:state:'+key,state[key],target[key]);
  };
@@ -63,12 +70,41 @@ export function verifyConsumerInjection(data,calculated,check,setContext=()=>{})
   };
   compareFilter(setup);
   let groupEnvelope;
+  const groupEvents=early?data.records.filter(r=>r.epoch===epoch&&['groupControl','groupControlAfter','consumer'].includes(r.stage)):[];
+  let groupEventIndex=0,controlPending=false;
+  function compareGroup(target,label){
+   for(const key of ['gain','step',...(early?['rate']:[])])check('group-envelope:'+label+key,groupEnvelope[key],target[key]);
+   for(const key of ['active','elapsed','duration'])if(groupEnvelope[key]!==target[key])throw new Error('Group-envelope '+label+key+' differs');
+  }
+  function groupControlsBefore(age){
+   while(groupEventIndex<groupEvents.length){
+    const event=groupEvents[groupEventIndex++];
+    if(event.stage==='consumer'){
+     if(event.counter!==age||controlPending)throw new Error('Group control consumer chronology differs');return;
+    }
+    if(event.stage==='groupControl'){
+     if(event.counter!==age||!Number.isInteger(event.newEpoch)||event.newEpoch<=epoch||!velocities.has(event.newEpoch))throw new Error('Group activation age/new voice differs');
+     if(controlPending)throw new Error('Overlapping group control');compareGroup(event.state,'control-pre:');
+     if(!groupEnvelope.active&&groupEnvelope.gain!==1)groupReactivations++;
+     const strength=voiceGroupActivationStrength(velocities.get(epoch).old,velocities.get(event.newEpoch).effective);
+     check('group-envelope:activation-strength',strength,event.strength);
+     activateVoiceGroupEnvelope(groupEnvelope,strength);groupControls++;controlPending=true;
+    }else{
+     if(!controlPending)throw new Error('Unpaired group control return');compareGroup(event.state,'control-post:');controlPending=false;
+    }
+   }
+   throw new Error('Missing group consumer event');
+  }
   const comparePost=(channels,actual,age,begin)=>{
    if(!postMode||age<begin)return;
    const pre=actual.injectionEntry,post=actual.consumerPost;
    if(!pre||!post||pre.preGain?.currentGain!==1||pre.preGain.active!==0||!pre.envelope||!post.envelope)throw new Error('Verified unit pre-gain and group-envelope observations required');
-   if(!groupEnvelope){groupEnvelope={...pre.envelope};groupEnvelopeInitialStates.push({epoch,age,...groupEnvelope});}
-   else{
+   const firstGroupState=!groupEnvelope;
+   if(firstGroupState){
+    groupEnvelope=early?initializeVoiceGroupEnvelope(velocities.get(epoch).sampleRate,pre.envelope.rate):{...pre.envelope};groupEnvelopeInitialStates.push({epoch,age,...groupEnvelope});
+   }
+   if(early){groupControlsBefore(age);compareGroup(pre.envelope,'pre:');}
+   else if(!firstGroupState){
     check('group-envelope:pre-gain',groupEnvelope.gain,pre.envelope.gain);
     check('group-envelope:pre-step',groupEnvelope.step,pre.envelope.step);
     for(const key of ['active','elapsed','duration'])if(groupEnvelope[key]!==pre.envelope[key])throw new Error('Unobserved group-envelope control transition');
@@ -151,8 +187,10 @@ export function verifyConsumerInjection(data,calculated,check,setContext=()=>{})
    const channels=[Array.from(primary),input[1],input[2]],scaled=comparePost(channels,actual,age,begin);outputs.push({epoch,counter:age,channels:scaled?scaled.map(x=>Array.from(x)):channels,enabled:true});
   }
   coverage.push({epoch,firstComparedAge:begin,lastComparedAge:end,entryBlocks:voiceEntries,mixedBlocks:voiceMixed});
+  if(early&&(begin!==0||groupEventIndex!==groupEvents.length||controlPending))throw new Error('Incomplete early group controls');
  }
  if(postMode&&(postComparedBlocks!==entryBlocks||postComparedBlocks!==data.records.filter(r=>r.stage==='consumerPost').length))throw new Error('Incomplete post-release observations');
  if(entryBlocks!==data.records.filter(r=>r.stage===(entryObserved?'injectionEntry':'consumer')).length||mixedBlocks!==data.records.filter(r=>r.stage==='injectionMixed').length)throw new Error('Unconsumed release injection observations');
- return {outputs,coverage,postMode,postComparedBlocks,postOutputSamples:postComparedBlocks*3*64,unitPreGainBypassOnly:postMode,groupEnvelopeSeedObservedOnce:postMode,groupEnvelopeControlsObservedOnce:postMode,groupEnvelopeGainCarried:postMode,groupEnvelopeDispatchControlsObserved:postMode,groupEnvelopeBypassBlocks,groupEnvelopeInitialStates,releasePositionBridges,releasePositionProducerComputed:false,entryBlocks,mixedBlocks,preStateObservations:entryBlocks,mixedPrimarySamples:mixedBlocks*64,generatedBlocks,skippedBlocks,inferredControlBlocks,initialSourceComputed:true,initialFilterComputed:true,globalSourceControlsObserved:true,entryObserved,preConsumerSkipWordNotConsumed:true,fullDispatchGateVerified:false,completePhysicsVerified:false};
+ if(early&&(!groupControls||!groupReactivations))throw new Error('Actual group reactivation coverage required');
+ return {outputs,coverage,postMode,postComparedBlocks,postOutputSamples:postComparedBlocks*3*64,unitPreGainBypassOnly:postMode,groupEnvelopeSeedObservedOnce:postMode&&!early,groupEnvelopeControlsObservedOnce:postMode&&!early,groupEnvelopeActivationComputed:early,groupEnvelopeModelRateObserved:early,groupEnvelopeDurationComputed:early,sampleRateObserved:early,groupEnvelopeStrengthComputed:early,normalizedStrikeVelocitiesObserved:early,groupControls,groupReactivations,groupEnvelopeGainCarried:postMode,groupEnvelopeDispatchControlsObserved:postMode,groupEnvelopeBypassBlocks,groupEnvelopeInitialStates,releasePositionBridges,releasePositionProducerComputed:false,entryBlocks,mixedBlocks,preStateObservations:entryBlocks,mixedPrimarySamples:mixedBlocks*64,generatedBlocks,skippedBlocks,inferredControlBlocks,initialSourceComputed:true,initialFilterComputed:true,globalSourceControlsObserved:true,entryObserved,preConsumerSkipWordNotConsumed:true,fullDispatchGateVerified:false,completePhysicsVerified:false};
 }

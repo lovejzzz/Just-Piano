@@ -1,4 +1,4 @@
-// Only verified, directly compared suffixes; no claim of full stereo output.
+// Only directly compared voice intervals; no claim of full stereo output.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -36,7 +36,8 @@ for(let epoch=0;epoch<5;epoch++){
 if(files.reduce((n,f)=>n+f.frames,0)!==report.injection.postOutputSamples)throw new Error('Post sample coverage differs from replay');
 fs.mkdirSync(directory);
 for(const file of files)fs.writeFileSync(path.join(directory,file.name),file.data,{flag:'wx'});
-const manifest={sampleRate,format:'IEEE float32 mono',computedSamples:true,normalization:false,comparedSuffixesOnly:true,finalStereo:false,observedModelAndControlInputsRemain:true,files:files.map(({data,...metadata})=>metadata)};
+const allVoiceStartsAtZero=files.every(f=>f.firstComparedCounter===0);
+const manifest={sampleRate,format:'IEEE float32 mono',computedSamples:true,normalization:false,comparedSuffixesOnly:!allVoiceStartsAtZero,allVoiceStartsAtZero,groupEnvelopeSeedObserved:report.injection.groupEnvelopeSeedObservedOnce,groupEnvelopeActivationComputed:report.injection.groupEnvelopeActivationComputed===true,finalStereo:false,observedModelAndControlInputsRemain:true,files:files.map(({data,...metadata})=>metadata)};
 fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{flag:'wx'});
 return {directory,...manifest};
 }

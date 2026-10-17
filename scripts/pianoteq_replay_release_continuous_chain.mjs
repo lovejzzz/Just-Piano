@@ -370,7 +370,7 @@ for(const r of d.records){
   }
   const value=runtime.process({samples:r.samples,baseDuration:r.baseDuration,timestep:r.timestep});
   check('envelope:after',value,r.position);envelopeCompleted.set(r.thread,r);blocks++;
- }else if(['injectionEntry','injectionMixed','consumerPost','consumerCross'].includes(r.stage)){
+ }else if(['injectionEntry','injectionMixed','consumerPost','consumerCross',...(d.earlyConsumer?['groupControl','groupControlAfter']:[])].includes(r.stage)){
   voice(r);if(!consumerInjection)throw new Error('Unexpected injection observation');
  }else if(r.stage==='consumer'){
   voice(r);if(!consumerDelay)throw new Error('Unexpected consumer target');consumerConfig(r.controls);

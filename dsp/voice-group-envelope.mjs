@@ -3,6 +3,19 @@ import {nativeScalarExp} from './native-scalar-exp.mjs';
 const f=Math.fround;
 const fromBits=x=>{const v=new DataView(new ArrayBuffer(4));v.setUint32(0,x);return v.getFloat32(0);};
 const minimumGain=fromBits(0x2edbe6ff),minimumStep=fromBits(0x3727c5ac);
+// 07aac8: ceil(float32(sampleRate * float32(0.05))).
+export function initializeVoiceGroupEnvelope(sampleRate,rate){
+ if(!Number.isFinite(sampleRate)||sampleRate<=0||!Number.isFinite(rate))throw new Error('Finite group-envelope model inputs required');
+ const duration=Math.ceil(f(f(sampleRate)*fromBits(0x3d4ccccd)));
+ if(duration<1||duration>0xffffffff)throw new Error('Group-envelope duration outside uint32 range');
+ return {gain:1,step:0,active:0,elapsed:0,rate:f(rate),duration};
+}
+// 35f894: old velocity (H+78) and new effective velocity (H+2fd8).
+export function voiceGroupActivationStrength(oldVelocity,newEffectiveVelocity){
+ if(![oldVelocity,newEffectiveVelocity].every(Number.isFinite))throw new Error('Finite strike velocities required');
+ const base=f(1-Math.max(0,f(f(oldVelocity)-f(newEffectiveVelocity))));
+ return f(base*base);
+}
 // 6edcf8: reactivation preserves the gain carried by the previous ramp.
 export function activateVoiceGroupEnvelope(state,strength){
  if(!Number.isFinite(strength)||!Number.isFinite(state.rate)||!Number.isInteger(state.active)||state.active<0||state.active>255||!Number.isInteger(state.duration)||state.duration<=0||state.duration>0xffffffff)throw new Error('Finite group-envelope control and positive duration required');
