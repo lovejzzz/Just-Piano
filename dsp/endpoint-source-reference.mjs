@@ -2,6 +2,7 @@
 import {fma64} from './native-double-fma.mjs';
 import {referenceModeIndex,normalizeSourceAmplitudes} from './modal-source.mjs';
 import {morphEndpointSources} from './endpoint-source-morph.mjs';
+import {applySourcePhaseOffsets} from './source-phase-offsets.mjs';
 const f=Math.fround;
 export function endpointReferenceFrequency(prepared){
   const t=prepared?.blend,endpoints=prepared?.endpoints;
@@ -20,15 +21,17 @@ export function endpointReferenceFrequency(prepared){
   return fma64(coupled[0].referenceFrequency,t,last*f(1-t));
 }
 // Produces the mixed four tables, independent reference row and a separate
-// normalized amplitude table. Later G phase controls are not applied here.
-export function prepareEndpointSourceTables({coupled,separate,prepared}){
+// normalized amplitude table. Later G controls require explicit phaseOffsets.
+export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffsets}){
   const referenceFrequency=endpointReferenceFrequency(prepared);
   const mixed=morphEndpointSources({coupled,separate,blend:prepared.blend});
   if(mixed.columns!==prepared.scaledOffsets?.length)throw new RangeError('Prepared component count must match endpoint columns');
   const referenceIndex=referenceModeIndex(mixed.frequency,mixed.columns,referenceFrequency);
   const normalization=mixed.amplitude.length?normalizeSourceAmplitudes(mixed.amplitude):
     {values:new Float32Array(),maximum:0,scale:1};
-  return {...mixed,referenceFrequency,referenceIndex,normalizedAmplitude:normalization.values,
+  const adjusted=phaseOffsets===undefined?undefined:applySourcePhaseOffsets({...phaseOffsets,
+    rows:mixed.rows,columns:mixed.columns,frequency:mixed.frequency,phase:mixed.phase});
+  return {...mixed,...(adjusted?{phase:adjusted.phase,phaseOffsetSummary:adjusted.summary}:{}),referenceFrequency,referenceIndex,normalizedAmplitude:normalization.values,
     normalizationMaximum:normalization.maximum,normalizationScale:normalization.scale,
-    laterPhaseControlsApplied:false,completeCacheVerified:false};
+    laterPhaseControlsApplied:Boolean(adjusted),completeCacheVerified:false};
 }
