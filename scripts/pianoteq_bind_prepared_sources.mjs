@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import {ExcitationManagerRandom} from '../dsp/excitation-manager-random.mjs';
 import {nextExcitationRandom} from '../dsp/final-excitation.mjs';
 import {computeNoteOnVelocitySource} from './pianoteq_note_on_velocity_source.mjs';
+import {computeArchiveHardnessSource} from './pianoteq_archive_hardness_source.mjs';
 const names = ['frequency', 'decay', 'amplitude', 'phase'];
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 export function bindPreparedSources(bytes, captureSha256) {
@@ -10,6 +11,8 @@ export function bindPreparedSources(bytes, captureSha256) {
   const forwardRandom = report.primaryInitialRandomStateIndependentlyProduced === true && report.primaryRandomStateStillObserved === false;
   const observedRandom = report.primaryRandomStateStillObserved === true && report.primaryInitialRandomStateIndependentlyProduced === false;
   const computedVelocity=report.eventVelocityComputedFromMidiAndArchive===true;
+  const computedHardness=report.normalHardnessKnotsAndValuesComputedFromArchive===true;
+  if(!computedHardness && report.archiveHardnessSource)throw new Error('Archive hardness payload requires explicit source metadata');
   if(!computedVelocity && (report.eventVelocitySource || report.eventVelocityPredictions))
     throw new Error('Computed velocity payload requires explicit dependency metadata');
   if (!report.passed || !report.compatible || report.mismatches !== 0 || report.comparedValues !== 2160 ||
@@ -30,6 +33,23 @@ export function bindPreparedSources(bytes, captureSha256) {
   const manager = forwardRandom ? new ExcitationManagerRandom({configurationSeed: 0, eventBranch: 'velocity-randomization-enabled'}) : undefined;
   const velocitySource=computedVelocity?computeNoteOnVelocitySource(report.eventVelocitySource):undefined;
   const velocityStarts=new Set();
+  const archiveHardness=computedHardness?computeArchiveHardnessSource(report.archiveHardnessSource):undefined;
+  if(computedHardness){
+    if(report.hardnessMismatches!==0 || report.hardnessComparedValues!==200 || report.hardnessChecks?.length!==40 ||
+        report.hardnessRuntimeConditionsNewlyObserved!==false || report.hardnessEditCurvesConsumed!==false)
+      throw new Error('Complete archive hardness comparisons and explicit mode boundaries required');
+    const owners=new Set();
+    for(const check of report.hardnessChecks){
+      const key=`${check.epoch}:${check.mode}:${check.family}:${check.name}`;
+      const predicted=archiveHardness.curves[check.family]?.[check.name];
+      if(!Number.isInteger(check.epoch)||check.epoch<0||check.epoch>4||![0,1].includes(check.mode)||owners.has(key)||
+          !['primary','secondary'].includes(check.family)||!['knots','values'].includes(check.name)||
+          check.compared!==5||check.mismatches!==0||check.predicted?.length!==5||check.actual?.length!==5||
+          predicted.some((v,i)=>!Object.is(v,check.predicted[i])||!Object.is(v,check.actual[i])))
+        throw new Error('Unique exact archive hardness boundaries required');
+      owners.add(key);
+    }
+  }
   if(computedVelocity){
     if(!forwardRandom || report.velocityMismatches!==0 || report.velocityComparedValues!==15 ||
         report.velocityChecks?.length!==15 || report.eventVelocityRuntimeConditionsNewlyObserved!==false ||
@@ -92,6 +112,10 @@ export function bindPreparedSources(bytes, captureSha256) {
       eventVelocityRuntimeConditionsNewlyObserved:false,
       eventVelocityConditionsSupplied:computedVelocity?report.eventVelocitySource.conditions:undefined,
       eventVelocityMidiSha256:computedVelocity?report.eventVelocitySource.midiSha256:undefined,
+      normalHardnessKnotsAndValuesComputedFromArchive:computedHardness,
+      hardnessRuntimeConditionsNewlyObserved:false,
+      hardnessRuntimeBranchSupplied:computedHardness?'note69-all-zero-linear-clamp-u0-mode0':undefined,
+      hardnessEditCurvesConsumed:false,
       runtimeBranchSupplied: report.decayRuntimeBranchSupplied, wholeEngineEquivalent: false},
     consume(record) {
       const key = `${record.epoch}:${record.input.mode}`, row = entries.get(key);
@@ -114,6 +138,12 @@ export function bindPreparedSources(bytes, captureSha256) {
     velocityForEpoch(epoch){
       if(!velocityStarts.has(epoch))throw new Error('Started computed velocity required');
       return velocitySource.events[epoch].velocity;
+    },
+    hardnessCurves(record){
+      if(!archiveHardness||!used.has(`${record.epoch}:${record.input.mode}`)||record.input.note!==69||
+          record.input.controls.u!==0||record.input.controls.hardnessMode!==0)
+        throw new Error('Consumed source and supported archive hardness mode required');
+      return structuredClone(archiveHardness.curves);
     },
     verifyComplete() {
       if (used.size !== entries.size) throw new Error('Unconsumed prepared source tables');

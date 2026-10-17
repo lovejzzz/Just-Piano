@@ -9,9 +9,10 @@ import {archiveExcitationDecayControls, excitationDecayFromControls, scaleExcita
 import {archiveFrequencyVariationControls, rewindExcitationRandom, secondaryFrequencySeed, varyExcitationFrequencies} from '../dsp/excitation-frequency-variation.mjs';
 import {ExcitationManagerRandom} from '../dsp/excitation-manager-random.mjs';
 import {prepareNoteOnVelocitySource} from './pianoteq_note_on_velocity_source.mjs';
+import {prepareArchiveHardnessSource} from './pianoteq_archive_hardness_source.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
-let presetPair, mixArchive, neighborOracle, decaySource, frequencySource, eventVelocityMidi, nativeNeighborMath = false;
+let presetPair, mixArchive, neighborOracle, decaySource, frequencySource, eventVelocityMidi, hardnessSourceRequested=false, nativeNeighborMath = false;
 for (let i = 0; i < options.length;) {
   const option = options[i++];
   if (option === '--native-neighbor-math' && !nativeNeighborMath) {nativeNeighborMath = true; continue;}
@@ -24,6 +25,7 @@ for (let i = 0; i < options.length;) {
   else if (option === '--decay-source' && !decaySource && second === 'ordinary-host-zero') decaySource = first;
   else if (option === '--frequency-source' && !frequencySource && first === '1' && ['captured-post-jitter-state', 'manager-reset-seed-zero'].includes(second)) frequencySource = second;
   else if (option === '--event-velocity' && !eventVelocityMidi && second === 'velocity-over-128-seed-zero') eventVelocityMidi = first;
+  else if (option === '--hardness-source' && !hardnessSourceRequested && first === '69' && second === 'all-zero') hardnessSourceRequested=true;
   else throw new Error('Expected unique --preset-pair first.json second.json or --mix-archive banks.json index');
 }
 if (nativeNeighborMath && neighborOracle) throw new Error('Choose native neighbor math or an explicit diagnostic oracle');
@@ -63,6 +65,10 @@ const decayPreset = decayPresetBytes ? JSON.parse(decayPresetBytes) : undefined;
 if (eventVelocityMidi && (!decayPreset || !mixBank || frequencySource !== 'manager-reset-seed-zero'))
   throw new Error('Event velocity requires decoded base/preset and forward manager random conditions');
 const eventVelocity = eventVelocityMidi ? prepareNoteOnVelocitySource(fs.readFileSync(eventVelocityMidi),mixBank,decayPreset) : undefined;
+if(hardnessSourceRequested && (!mixBank || !decayPreset))throw new Error('Hardness preparation requires decoded base and preset');
+const archiveHardness=hardnessSourceRequested?prepareArchiveHardnessSource(mixBank,decayPreset):undefined;
+const hardnessChecks=[];
+let hardnessMismatches=0;
 const velocityChecks=[];
 let velocityMismatches=0;
 const word = new DataView(new ArrayBuffer(4));
@@ -98,6 +104,17 @@ for (const record of capture.records) {
   if (!predicted || used.has(owner) || input.header?.[0] !== predicted.cols || input.header[1] !== predicted.rows || input.size !== predicted.rows * predicted.cols)
     throw new Error('Unmatched, duplicate or differently shaped source context');
   used.add(owner); epochs.set(record.epoch, (epochs.get(record.epoch) ?? 0) + 1);
+  if(archiveHardness){
+    if(input.note!==69 || input.controls.u!==0 || input.controls.hardnessMode!==0)
+      throw new Error('Only note69, zero edit, ordinary hardness mode is covered');
+    for(const family of ['primary','secondary'])for(const name of ['knots','values']){
+      const calculated=archiveHardness.curves[family][name],actual=input.curves?.[family]?.[name];
+      if(actual?.length!==5||!actual.every(Number.isFinite))throw new Error('Complete five-node hardness comparison target required');
+      const count=calculated.filter((v,i)=>bits(v)!==bits(actual[i])).length;
+      hardnessMismatches+=count;hardnessChecks.push({epoch:record.epoch,mode:input.mode,family,name,
+        compared:5,mismatches:count,predicted:calculated,actual});
+    }
+  }
   const velocity = eventVelocity ? eventVelocity.events[record.epoch].velocity : input.controls?.velocity;
   // 695108 observes the table after the 692ffc prefix, not the untouched cache.
   // Other intervening transforms remain unresolved; do not infer equivalence.
@@ -188,7 +205,7 @@ const stability = [...hashes].map(([key, rows]) => ({key, observations: rows.len
     rows[0].columnHashes[name].map((_, column) => new Set(rows.map(r => r.columnHashes[name][column])).size)])), rows}));
 if (managerRandom && managerRandom.starts !== capture.starts) throw new Error('Incomplete manager random stream');
 if(eventVelocity && velocityChecks.length!==15)throw new Error('Complete five-start/two-mode velocity coverage required');
-const result = {passed: mismatches === 0 && randomStateMismatches === 0 && velocityMismatches === 0, compatible: mismatches === 0 && randomStateMismatches === 0 && velocityMismatches === 0, bindingAuditOnly: true,
+const result = {passed: mismatches === 0 && randomStateMismatches === 0 && velocityMismatches === 0 && hardnessMismatches === 0, compatible: mismatches === 0 && randomStateMismatches === 0 && velocityMismatches === 0 && hardnessMismatches === 0, bindingAuditOnly: true,
   comparedValues, mismatches, captureSha256: sha(captureBytes), candidateSha256: sha(candidateBytes), checks, failures, stability, presetComparison,
   candidateAmplitudeNormalizationOriginallyObserved: false, correctionFitApplied: false,
   amplitudeMixComputedFromArchive: Boolean(mixBank), mixArchiveSha256,
@@ -211,6 +228,9 @@ const result = {passed: mismatches === 0 && randomStateMismatches === 0 && veloc
   eventVelocityTableSha256:eventVelocity?.tableSha256, eventVelocityPredictions:eventVelocity?.events,
   velocityComparedValues:velocityChecks.length, velocityMismatches,velocityChecks,
   eventVelocityRuntimeConditionsNewlyObserved:false,
+  normalHardnessKnotsAndValuesComputedFromArchive:Boolean(archiveHardness),archiveHardnessSource:archiveHardness?.source,
+  hardnessComparedValues:hardnessChecks.length*5,hardnessMismatches,hardnessChecks,
+  hardnessRuntimeConditionsNewlyObserved:false,hardnessEditCurvesConsumed:false,
   compatibleWithCapturedContextOnly: true,
   substitutedIntoVoice: false, sameRunModelGenerationVerified: false, finalStereoVerified: false};
 fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
