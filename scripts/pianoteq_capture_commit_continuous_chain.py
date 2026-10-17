@@ -19,6 +19,8 @@ INTERIOR=os.environ.get('PIANOTEQ_WORKER_INTERIOR_SITES')=='1'
 assert not INTERIOR or DEFER
 POLL_WORKER=os.environ.get('PIANOTEQ_READ_STOPPED_WORKERS')=='1'
 assert not POLL_WORKER or DEFER
+POLL_MAIN=os.environ.get('PIANOTEQ_READ_STOPPED_MAIN')=='1'
+assert not POLL_MAIN or DEFER
 AUDIO=os.environ.get('PIANOTEQ_VOICE_RATTLE_AUDIO')=='1'
 assert not AUDIO or EARLY and DEFER
 TAIL=os.environ.get('PIANOTEQ_VOICE_TAIL_ENVELOPES')=='1'
@@ -33,7 +35,7 @@ ROOT=base.ROOT;hooks=base.hooks;records=base.records;errors=base.errors;last_see
 source_role='weights';source_pending=None;post_pending=None;main_thread=None;source_started=False;window_complete=False;acknowledged_transitions=0;last_saved_rows=-256
 group_pending=None
 slot_updates=[]
-worker_seen={};stopped_worker_reads=[];STOPPED_FRAME=object()
+worker_seen={};stopped_worker_reads=[];stopped_main_reads=[];STOPPED_FRAME=object()
 audio_pending={};audio_tables=set()
 
 def save(force=False):
@@ -41,6 +43,7 @@ def save(force=False):
  if not force and not errors and not base.complete and len(records)-last_saved_rows<256:return
  data={'schema':1,'sourceCommits':True,'sourceDispatchGates':True,'consumerCross':CROSS,'allObservationBarriers':CROSS,'consumerPost':True,'consumerDelay':True,'consumerInjection':True,'injectionEntryObserved':False,'dispatchControls':True,'workerOutputs':True,'windowBlocks':None,'fixedSites':False,'siteCount':6,'records':records,'errors':errors,'starts':base.starts,'spectrumCount':base.spectrum_calls,'finalCount':base.final_calls,'copyCount':base.copies,'initializations':len(base.initialized),'envelopeBlocks':base.blocks,'duplicateEnvelopeReturns':base.duplicates,'envelopePending':len(base.envelope_pending),'coefficientCount':base.coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='envelopeResult' and 'render' in r for r in records),'pending':len(base.pending),'complete':base.complete,'activeSites':sum(h.IsEnabled() for h in hooks.values()),'transitions':base.transitions,'slotTransitions':slot_transitions,'sourceRole':source_role,'sourcePending':source_pending,'postPending':post_pending,'slotBarriers':True,'acknowledgedTransitions':acknowledged_transitions}
  if EARLY:data.update(earlyConsumer=True,groupControlPending=group_pending,groupEnvelopeControl=True,slotUpdatesDeferred=DEFER,pendingSlotUpdates=len(slot_updates),workerInteriorSites=INTERIOR,readStoppedWorkerFrames=POLL_WORKER,stoppedWorkerReads=stopped_worker_reads)
+ if POLL_MAIN:data.update(readStoppedMainFrames=True,stoppedMainReads=stopped_main_reads)
  if TAIL:data.update(voiceTailEnvelopes=True)
  if AUDIO:data.update(voiceRattleAudio=True,audioPending=len(audio_pending),observedRattleTables=True,rattleTableCount=len(audio_tables))
  (ROOT/'runtime.json').write_text(json.dumps(data,indent=None if CROSS else 2,allow_nan=False));last_saved_rows=len(records)
@@ -172,7 +175,7 @@ def observed(frame,location,_):
    replace(frame,name,next_name,address);source_role=next_name
   elif name in ('audioGain','audioEntry','audioReturn'):
    assert AUDIO and thread==main_thread
-   c=audio_pending[thread];h=c['voice'];age=scalar(frame,h+0x6c,'I');assert age==c['counter']
+   c=audio_pending[thread];h=c['voice'];age=scalar(frame,h+0x6c,'I');assert age==c['counter'],('Audio age changed',name,hex(h),c['counter'],age,hex(register(frame,'x0')),hex(register(frame,'x19')))
    row={'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'midControls':mid_controls(frame,h),'channels':mid_groups(frame,c['matrix'])}
    if name=='audioGain':
     assert c['phase']=='cross' and register(frame,'x19')==h and register(frame,'x23')==c['matrix']
@@ -259,6 +262,19 @@ def resume_owned_stops(debugger):
  while process.GetState()==lldb.eStateStopped and time.monotonic()<deadline:
   assert not errors and not window_complete and target.GetNumBreakpoints()==len(hooks)==6
   recovered=set()
+  if POLL_MAIN and main_thread is not None:
+   thread=process.GetThreadByID(main_thread);assert thread.IsValid()
+   frame=thread.GetFrameAtIndex(0);pc=frame.GetPCAddress().GetFileAddress()
+   name=next((k for k,v in base.POINTS.items() if pc==v and k not in ('coefficients','envelopeResult')),None)
+   if name is not None:
+    seen=last_seen.get(main_thread);hook=hooks[name]
+    delivered=seen and seen['stopId']==process.GetStopID() and seen['id']==hook.GetID() and seen['fileAddress']==pc
+    if not delivered:
+     begin=len(records);observed(frame,hook.GetLocationAtIndex(0),STOPPED_FRAME)
+     assert not errors and len(records)==begin+1,('Incomplete actual stopped main observation',name,begin,len(records))
+     row=records[-1]
+     stopped_main_reads.append({'thread':main_thread,'stage':row['stage'],'epoch':row['epoch'],'counter':row.get('counter'),'stopId':process.GetStopID(),'record':len(records)})
+     recovered.add(main_thread)
   if POLL_WORKER:
    # Read real stopped frames only at exact registered worker addresses.
    # No historical reconstruction, synthetic PC, or target state change.

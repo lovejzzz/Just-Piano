@@ -70,7 +70,7 @@ function validateEarlyCommitSlots(data,resumes){
   stoppedFrames.set(`${thread.thread}:${site.id}:${site.stopId}`,thread.reason);
  }
  const recovered=new Map();
- for(const event of data.stoppedWorkerReads??[]){
+ for(const event of [...(data.stoppedWorkerReads??[]).map(e=>({...e,worker:true})),...(data.stoppedMainReads??[]).map(e=>({...e,worker:false}))]){
   if(!Number.isInteger(event.record)||event.record<1||event.record>data.records.length||recovered.has(event.record))throw new Error('Invalid stopped-worker record identity');
   recovered.set(event.record,event);
  }
@@ -100,7 +100,8 @@ function validateEarlyCommitSlots(data,resumes){
   const s=live.get(role);if(!s||r.site?.fileAddress!==s.address||!audited.has(`${r.thread}:${r.site.id}:${r.site.stopId}`))throw new Error('Unaudited or stale early slot');
   if(r.site.delivery==='stopped-frame'){
    const key=`${r.thread}:${r.site.id}:${r.site.stopId}`,event=recovered.get(i+1);
-   if(!data.readStoppedWorkerFrames||!['coefficients','envelopeResult'].includes(role)||stoppedFrames.get(key)!==r.site.reason||!stoppedFrames.has(key)||!event||event.thread!==r.thread||event.stage!==role||event.epoch!==r.epoch||event.counter!==r.counter||event.stopId!==r.site.stopId)throw new Error('Unproven stopped-worker frame observation');
+   if(!event||stoppedFrames.get(key)!==r.site.reason||!stoppedFrames.has(key)||event.thread!==r.thread||event.stage!==r.stage||event.epoch!==r.epoch||event.counter!==(r.counter??null)||event.stopId!==r.site.stopId)throw new Error('Unproven stopped frame observation');
+   if(event.worker?!(data.readStoppedWorkerFrames&&['coefficients','envelopeResult'].includes(role)):!(data.readStoppedMainFrames&&!['coefficients','envelopeResult'].includes(role)&&r.thread===data.records.find(r=>r.stage==='before').thread))throw new Error('Unproven stopped frame role');
    recovered.delete(i+1);
   }else if(recovered.has(i+1))throw new Error('Stopped-worker provenance missing');
   if(s.id===null){if(seenIds.has(r.site.id))throw new Error('Reused early slot ID');s.id=r.site.id;seenIds.add(s.id);}

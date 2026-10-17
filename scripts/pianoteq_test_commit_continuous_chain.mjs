@@ -62,6 +62,11 @@ if(base.stoppedWorkerReads?.length)cases.push(
  ['wrong-stopped-frame-counter',d=>{d.stoppedWorkerReads[0].counter++;},'reject'],
  ['missing-stopped-frame-delivery',d=>{delete d.records[d.stoppedWorkerReads[0].record-1].site.delivery;},'reject'],
 );
+if(base.stoppedMainReads?.length)cases.push(
+ ['wrong-stopped-main-counter',d=>{const e=d.stoppedMainReads[0];e.counter=e.counter===null?0:e.counter+1;},'reject'],
+ ['missing-stopped-main-delivery',d=>{delete d.records[d.stoppedMainReads[0].record-1].site.delivery;},'reject'],
+ ['disabled-stopped-main-provenance',d=>{d.readStoppedMainFrames=false;},'reject'],
+);
 if(archive)cases.push(
  ['archive-rate-curve-source',()=>{},'many-different',m=>{m.baseFields[0].value.curves[0].y[1]+=.125;}],
  ['unsupported-archive-runtime-mode',()=>{},'reject',m=>{m.runtimeMode='unknown';}],
