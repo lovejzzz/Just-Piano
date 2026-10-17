@@ -125,24 +125,39 @@ def replace(debugger):
 def resume_owned_stops(debugger):
  import lldb
  debugger.SetAsync(False);p=debugger.GetSelectedTarget().GetProcess();deadline=time.monotonic()+40
- while p.GetState()==lldb.eStateStopped and time.monotonic()<deadline:
-  assert not errors and (all(h.IsEnabled() for h in hooks.values()) or global_block==BLOCKS)
-  details=[];matched=False
+ try:
+  while p.GetState()==lldb.eStateStopped and time.monotonic()<deadline:
+   assert not errors and (all(h.IsEnabled() for h in hooks.values()) or global_block==BLOCKS)
+   details=[];matched=False
+   for thread in p:
+    reason=thread.GetStopReason()
+    if reason in (lldb.eStopReasonNone,lldb.eStopReasonInvalid):continue
+    pc=thread.GetFrameAtIndex(0).GetPCAddress().GetFileAddress();ids=[thread.GetStopReasonDataAtIndex(i) for i in range(thread.GetStopReasonDataCount())];seen=last_seen.get(thread.GetThreadID());own=seen and pc in (seen['fileAddress'],seen['fileAddress']+4)
+    if reason==lldb.eStopReasonBreakpoint and ids and ids[0]==(1<<64)-2:
+     bp=p.GetTarget().FindBreakpointByID(-2);assert bp.IsValid() and bp.IsInternal() and len(ids)==2 and 1<=ids[1]<=bp.GetNumLocations();a=bp.GetLocationAtIndex(ids[1]-1).GetAddress();assert a.GetModule().GetFileSpec().GetFilename()=='libsystem_pthread.dylib' and a.GetFileAddress()==pc
+    elif reason==lldb.eStopReasonBreakpoint:assert own and len(ids)==2 and ids[0]==seen['id'];matched=True
+    elif reason==lldb.eStopReasonException:assert own and ids in ([6,1,0],[6,1,thread.GetFrameAtIndex(0).GetPC()]);matched=True
+    elif reason==lldb.eStopReasonTrace:assert own and pc==seen['fileAddress']+4 and ids==[];matched=True
+    else:raise AssertionError(('Unowned stop',reason,hex(pc),ids))
+    details.append(dict(thread=thread.GetThreadID(),pc=hex(pc),reason=reason,ids=ids,lastOwned=seen))
+   assert matched
+   with (ROOT/'owned-resumes.jsonl').open('a') as out:out.write(json.dumps(dict(stopId=p.GetStopID(),records=len(records),threads=details))+'\n')
+   replace(debugger);error=p.Continue();assert error.Success(),str(error)
+  save()
+ except Exception:
+  details=[]
   for thread in p:
    reason=thread.GetStopReason()
    if reason in (lldb.eStopReasonNone,lldb.eStopReasonInvalid):continue
-   pc=thread.GetFrameAtIndex(0).GetPCAddress().GetFileAddress();ids=[thread.GetStopReasonDataAtIndex(i) for i in range(thread.GetStopReasonDataCount())];seen=last_seen.get(thread.GetThreadID());own=seen and pc in (seen['fileAddress'],seen['fileAddress']+4)
-   if reason==lldb.eStopReasonBreakpoint and ids and ids[0]==(1<<64)-2:
-    bp=p.GetTarget().FindBreakpointByID(-2);assert bp.IsValid() and bp.IsInternal() and len(ids)==2 and 1<=ids[1]<=bp.GetNumLocations();a=bp.GetLocationAtIndex(ids[1]-1).GetAddress();assert a.GetModule().GetFileSpec().GetFilename()=='libsystem_pthread.dylib' and a.GetFileAddress()==pc
-   elif reason==lldb.eStopReasonBreakpoint:assert own and len(ids)==2 and ids[0]==seen['id'];matched=True
-   elif reason==lldb.eStopReasonException:assert own and ids in ([6,1,0],[6,1,thread.GetFrameAtIndex(0).GetPC()]);matched=True
-   elif reason==lldb.eStopReasonTrace:assert own and pc==seen['fileAddress']+4 and ids==[];matched=True
-   else:raise AssertionError(('Unowned stop',reason,hex(pc),ids))
-   details.append(dict(thread=thread.GetThreadID(),pc=hex(pc),reason=reason,ids=ids,lastOwned=seen))
-  assert matched
-  with (ROOT/'owned-resumes.jsonl').open('a') as out:out.write(json.dumps(dict(stopId=p.GetStopID(),records=len(records),threads=details))+'\n')
-  replace(debugger);error=p.Continue();assert error.Success(),str(error)
- save()
+   frames=[]
+   for i in range(min(8,thread.GetNumFrames())):
+    frame=thread.GetFrameAtIndex(i)
+    frames.append(dict(index=i,filePC=hex(frame.GetPCAddress().GetFileAddress()),loadPC=hex(frame.GetPC()),symbol=frame.GetFunctionName()))
+   details.append(dict(thread=thread.GetThreadID(),reason=reason,ids=[thread.GetStopReasonDataAtIndex(i) for i in range(thread.GetStopReasonDataCount())],frames=frames,lastSeen=last_seen.get(thread.GetThreadID())))
+  failure=dict(stopId=p.GetStopID(),details=details,errors=list(errors),exception=traceback.format_exc(),records=len(records),globalFrames=global_block)
+  with (ROOT/f'driver-failure-{p.GetStopID()}.json').open('x') as out:json.dump(failure,out,indent=2)
+  save()
+  raise
 
 
 def finish(debugger):
