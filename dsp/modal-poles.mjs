@@ -1,43 +1,8 @@
 // Arithmetic recovered from 476298 / 6d2c10. Root iteration is an independent
 // Durand–Kerner implementation, NOT the native 484ce4 eigensolver.
-const bits = new DataView(new ArrayBuffer(8));
-function split(value) {
-  bits.setFloat64(0, value);
-  const word = bits.getBigUint64(0);
-  const exponent = Number((word >> 52n) & 2047n);
-  let mantissa = word & ((1n << 52n) - 1n);
-  if (exponent) mantissa |= 1n << 52n;
-  if (word >> 63n) mantissa = -mantissa;
-  return [mantissa, exponent ? exponent - 1075 : -1074];
-}
-// Exact integer product and addition, followed by one binary64 ties-even round.
-// Used during coefficient/table construction, never per audio sample.
-export function fma64(a, b, c) {
-  if ([a, b, c].some(Number.isNaN)) return NaN;
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return a * b + c;
-  // A finite exact product plus infinity stays infinity, even if separately
-  // evaluating a*b would overflow to the opposite infinity.
-  if (!Number.isFinite(c)) return c;
-  const [am, ae] = split(a), [bm, be] = split(b), [cm, ce] = split(c);
-  const pe = ae + be, exponent = Math.min(pe, ce);
-  let integer = (am * bm << BigInt(pe - exponent)) + (cm << BigInt(ce - exponent));
-  if (integer === 0n) {
-    // Exact cancellation rounds to +0 in round-to-nearest mode. The exception
-    // is an exact zero product plus zero with both terms carrying a minus sign.
-    const negativeProduct = (a < 0 || Object.is(a, -0)) !== (b < 0 || Object.is(b, -0));
-    return (a === 0 || b === 0) && c === 0 && negativeProduct && Object.is(c, -0) ? -0 : 0;
-  }
-  const sign = integer < 0n ? -1 : 1;
-  if (integer < 0n) integer = -integer;
-  const shift = Math.max(0, integer.toString(2).length - 53, -1074 - exponent);
-  if (shift) {
-    const count = BigInt(shift), mask = (1n << count) - 1n;
-    const tail = integer & mask, midpoint = 1n << (count - 1n);
-    integer >>= count;
-    if (tail > midpoint || (tail === midpoint && (integer & 1n))) integer++;
-  }
-  return sign * Number(integer) * 2 ** (exponent + shift);
-}
+import {fma64} from './native-double-fma.mjs';
+export {fma64} from './native-double-fma.mjs';
+import {singleComponentPole} from './single-component-pole.mjs';
 function multiplyLinear(a, [constant, slope]) {
   const result = Array(a.length + 1).fill(0);
   // 476748 and 476768: ascending source index, two separate FMADDs.
@@ -50,7 +15,7 @@ function multiplyLinear(a, [constant, slope]) {
 }
 export function buildCoupledCoefficients(lambda, { p, q, mode, kappa = Math.PI, gamma = 0 }) {
   const n = lambda.length;
-  if (n < 2) throw new RangeError('N < 2 uses a separate native fast path; not recovered here');
+  if (n < 2) throw new RangeError('Polynomial construction requires N >= 2; use coupledModes for N = 1');
   if (![...lambda, p, q, mode, kappa, gamma].every(Number.isFinite)) throw new RangeError('Non-finite pole input');
   const mean = lambda.reduce((a, b) => a + b, 0) / n;
   if (!mean) throw new RangeError('Zero lambda mean');
@@ -141,6 +106,7 @@ export function rootsToFrequencyDecay(rootsInterleaved, center, floorRatio) {
   };
 }
 export function coupledModes(lambda, parameters) {
+  if (lambda.length === 1) return singleComponentPole(parameters);
   const built = buildCoupledCoefficients(lambda, parameters);
   const solved = solveCoupledPolynomial(built.coefficients);
   return { ...rootsToFrequencyDecay(solved.roots, parameters.center, parameters.decay_floor_ratio), ...built, solver: solved };

@@ -123,7 +123,8 @@ for (const [recordIndex, record] of input.records.entries()) {
     checks.push({ recordIndex, noteIndex: record.note_index, cacheMode: record.cache_mode, row, modalCoordinate: parameters.mode,
       lambdaErrors, centerDoubleEqual: Object.is(reconstructed.center, parameters.center),
       frequencyErrors, decayErrors, coefficients: prediction.coefficients, independentRoots: prediction.solver.roots,
-      residuals: prediction.solver.residuals, iterations: prediction.solver.iterations, passed });
+      residuals: prediction.solver.residuals, iterations: prediction.solver.iterations,
+      rootAlgorithm: prediction.solver.algorithm, passed });
   } catch (error) { failures.push({ recordIndex, stage: 'input-or-solver', error: error.message }); }
 }
 const missingRows = [];
@@ -135,7 +136,10 @@ const result = {
   frequencyCount, decayCount, frequencyMismatches, decayMismatches,
   lambdaCount, lambdaMismatches, centerCount, centerMismatches, rowCountChecks,
   nativeScalarPowfImplemented: true, powfOracleComparisonOnly:true, powfValidationOracleRequired:true, powfComparisons, powfMismatches, powfOracleRecords: powfOracle.records.length,
-  rootAlgorithm: 'independent Durand–Kerner, not native QR reproduction',
+  rootAlgorithm: checks.every(row=>row.rootAlgorithm==='independent-durand-kerner')
+    ? 'independent Durand–Kerner, not native QR reproduction'
+    : 'per-row recovered single-component fast path or independent Durand–Kerner; not native QR reproduction',
+  rootAlgorithms: [...new Set(checks.map(row=>row.rootAlgorithm))],
   polynomialConfiguration: { kappa: Math.PI, gamma: 0, provenance: 'pass7 actual global configuration capture; same binary' },
   sourceControlsToLambdaReconstructed: true, complexCouplingParameterProducerReconstructed: Boolean(impedanceReport),
   reconstructedCouplingValues, reconstructedCouplingMismatches,
