@@ -6,9 +6,10 @@ import {spawnSync} from 'node:child_process';
 import { archiveExcitationMixCoefficients, mixExcitationComponents } from '../dsp/excitation-component-mix.mjs';
 import {archiveNeighborControls, mixNeighborExcitation} from '../dsp/excitation-neighbor-controls.mjs';
 import {archiveExcitationDecayControls, excitationDecayFromControls, scaleExcitationDecay} from '../dsp/excitation-decay-controls.mjs';
+import {archiveFrequencyVariationControls, rewindExcitationRandom, secondaryFrequencySeed, varyExcitationFrequencies} from '../dsp/excitation-frequency-variation.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
-let presetPair, mixArchive, neighborOracle, decaySource;
+let presetPair, mixArchive, neighborOracle, decaySource, frequencySource;
 for (let i = 0; i < options.length;) {
   const option = options[i++], first = options[i++];
   if (option === '--neighbor-math-oracle' && first && !neighborOracle) {neighborOracle = first; continue;}
@@ -17,10 +18,12 @@ for (let i = 0; i < options.length;) {
   if (option === '--preset-pair' && !presetPair) presetPair = [first, second];
   else if (option === '--mix-archive' && !mixArchive && /^\d+$/.test(second)) mixArchive = [first, Number(second)];
   else if (option === '--decay-source' && !decaySource && second === 'ordinary-host-zero') decaySource = first;
+  else if (option === '--frequency-source' && !frequencySource && first === '1' && second === 'captured-post-jitter-state') frequencySource = true;
   else throw new Error('Expected unique --preset-pair first.json second.json or --mix-archive banks.json index');
 }
 if (neighborOracle && !mixArchive) throw new Error('Neighbor preparation requires explicit mix archive');
 if (decaySource && !mixArchive) throw new Error('Decay preparation requires explicit base archive');
+if (frequencySource && !mixArchive) throw new Error('Frequency preparation requires explicit base archive');
 const captureBytes = fs.readFileSync(capturePath), candidateBytes = fs.readFileSync(candidatePath);
 const capture = JSON.parse(captureBytes), candidate = JSON.parse(candidateBytes);
 if (!capture.complete || capture.errors?.length !== 0 || !capture.records?.length || candidate.verifiedStagesPassed !== true ||
@@ -86,11 +89,24 @@ for (const record of capture.records) {
   const decayControls = decayPreset ? archiveExcitationDecayControls(mixBank, decayPreset, input.note, {runtimeCurveMode: 'linear-clamp'}) : undefined;
   const decayModel = decayControls ? excitationDecayFromControls(decayControls, input.controls.velocity, {hostMode: 0, noteBranch: 'ordinary'}) : undefined;
   const decay = decayModel ? scaleExcitationDecay(predicted.decay, decayModel.gain) : undefined;
-  const arrays = {}, tableHashes = {}, columnHashes = {};
+  let variation, variationControls, initialRandomState;
+  if (frequencySource) {
+    variationControls = archiveFrequencyVariationControls(mixBank, input.note, {instrumentMode: 1, runtimeCurveMode: 'linear-clamp'});
+    if (![0, 1].includes(input.mode)) throw new Error('Unverified frequency source mode');
+    const primary = input.mode === 0, spread = primary ? variationControls.primarySpread : variationControls.secondarySpread;
+    const offset = primary ? 0 : variationControls.secondaryOffset;
+    const draws = spread === 0 && offset === 0 ? 0 : Math.ceil(predicted.frequency.length / 4) * 4;
+    initialRandomState = primary ? rewindExcitationRandom(record.randomState, draws) : secondaryFrequencySeed(predicted.noteIndex);
+    variation = varyExcitationFrequencies({frequency: predicted.frequency, columns: predicted.cols, spread, offset, randomState: initialRandomState});
+    if (primary && variation.randomState.some((x, i) => x !== record.randomState[i])) throw new Error('RNG rewind/forward roundtrip failed');
+  }
+  const arrays = {}, tableHashes = {}, columnHashes = {}, predictedSource = {};
   for (const [name, field] of [['frequency', 'frequency'], ['decay', 'decay'], ['amplitude', 'normalizedAmplitude'], ['phase', 'phase']]) {
     const actual = input.source[name], calculated = name === 'amplitude' && mix ? (neighbor?.amplitude ?? mix.amplitude)
-      : name === 'phase' && neighbor ? neighbor.phase : name === 'decay' && decay ? decay : predicted[field];
+      : name === 'phase' && neighbor ? neighbor.phase : name === 'decay' && decay ? decay
+      : name === 'frequency' && variation ? variation.frequency : predicted[field];
     if (actual?.length !== calculated.length || !actual.every(Number.isFinite)) throw new Error('Complete native source arrays required');
+    predictedSource[name] = Array.from(calculated);
     const perColumn = Array(predicted.cols).fill(0); let count = 0;
     for (let i = 0; i < actual.length; i++) {
       comparedValues++;
@@ -106,9 +122,12 @@ for (const record of capture.records) {
   }
   if (!hashes.has(key)) hashes.set(key, []);
   hashes.get(key).push({epoch: record.epoch, hashes: tableHashes, columnHashes});
-  checks.push({epoch: record.epoch, mode: input.mode, rows: predicted.rows, columns: predicted.cols, arrays,
+  checks.push({epoch: record.epoch, mode: input.mode, rows: predicted.rows, columns: predicted.cols, arrays, predictedSource,
     neighbor: neighbor && {controls: neighborControls, amplitudeGain: neighbor.amplitudeGain, phaseDelta: neighbor.phaseDelta},
     decay: decayModel && {controls: decayControls, model: decayModel},
+    frequencyVariation: variation && {controls: variationControls, initialRandomState, randomState: variation.randomState,
+      randomDraws: variation.randomDraws, spacingCorrections: variation.spacingCorrections,
+      initialStateSource: input.mode === 0 ? 'rewound captured post-jitter RNG state' : 'note index LCG initialization'},
     mix: mix && {coefficients: mix.coefficients, blend: mix.blend, control: mix.control, weight: mix.weight, upper: mix.upper}});
 }
 if (checks.length !== capture.spectrumCount || !checks.length || epochs.size !== capture.starts || [...epochs.values()].some(n => n !== predictions.size))
@@ -143,6 +162,9 @@ const result = {passed: mismatches === 0, compatible: mismatches === 0, bindingA
   decayPreparationComputedForSuppliedBranch: Boolean(decayPreset),
   decayControlsComputedFromArchive: Boolean(decayPreset), decayPresetSha256: decayPresetBytes ? sha(decayPresetBytes) : undefined,
   decayRuntimeBranchSupplied: decayPreset ? 'ordinary-host-zero' : undefined, decayRuntimeBranchNewlyObserved: false,
+  frequencyVariationComputedFromArchive: Boolean(frequencySource), frequencyInstrumentModeSupplied: frequencySource ? 1 : undefined,
+  frequencyInstrumentModeNewlyObserved: false, primaryInitialRandomStateIndependentlyProduced: false,
+  primaryRandomStateStillObserved: Boolean(frequencySource), compatibleWithCapturedContextOnly: true,
   substitutedIntoVoice: false, sameRunModelGenerationVerified: false, finalStereoVerified: false};
 fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
 console.log(JSON.stringify({...result, failures: undefined, checks: undefined, stability: stability.map(({rows, ...r}) => r)}));
