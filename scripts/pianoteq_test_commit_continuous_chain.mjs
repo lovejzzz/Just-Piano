@@ -4,14 +4,16 @@ import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {stringifyWithNegativeZero} from './pianoteq_json_exact.mjs';
-const [capturePath,directory,...extra]=process.argv.slice(2);
-if(!capturePath||!directory||extra.length)throw new Error('Usage: completed-capture.json new-results-directory');
+const [capturePath,directory,archiveOption,...extra]=process.argv.slice(2);
+if(!capturePath||!directory||extra.length||archiveOption&&!archiveOption.startsWith('--archive-repeat-model='))throw new Error('Usage: completed-capture.json new-results-directory [--archive-repeat-model=source.json]');
+const archivePath=archiveOption?.slice('--archive-repeat-model='.length),archive=archivePath?JSON.parse(fs.readFileSync(archivePath)):undefined;
+if(archiveOption&&!archivePath)throw new Error('Nonempty archive model path required');
 const base=JSON.parse(fs.readFileSync(capturePath));
 if(!base.complete||!base.sourceCommits||!base.consumerPost)throw new Error('Completed joint capture required');
 fs.mkdirSync(directory);
 const runner=fileURLToPath(new URL('./pianoteq_replay_release_continuous_chain.mjs',import.meta.url));
 const auditOptions=base.consumerCross?['--resume-audit='+path.join(path.dirname(path.resolve(capturePath)),'owned-resumes.jsonl')]:[];
-const run=(input,output)=>spawnSync(process.execPath,[runner,input,output,'--pow-candidate',...auditOptions],{encoding:'utf8',maxBuffer:16*1024*1024});
+const run=(input,output,sourcePath=archivePath)=>spawnSync(process.execPath,[runner,input,output,'--pow-candidate',...auditOptions,...(sourcePath?['--archive-repeat-model='+sourcePath]:[])],{encoding:'utf8',maxBuffer:16*1024*1024});
 const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(capturePath,baselinePath);
 if(baselineRun.error)throw baselineRun.error;
 if(baselineRun.status!==0)throw new Error('Joint baseline failed: '+baselineRun.stderr.slice(-800));
@@ -45,8 +47,9 @@ if(base.earlyConsumer)cases.push(
  ['group-control-pre-gain-target',d=>{first(d,'groupControl').state.gain=.25;},'one-same'],
  ['group-control-return-step-target',d=>{first(d,'groupControlAfter').state.step=.5;},'one-same'],
  ['group-control-strength-target',d=>{first(d,'groupControl').strength=.125;},'one-same'],
- ['normalized-strike-velocity-source',d=>{first(d,'before').inputs.newVelocity=.95;},'many-different'],
- ['group-model-rate-source',d=>{first(d,'consumer').injectionPre.envelope.rate*=.5;},'many-different'],
+ ['normalized-strike-velocity-layout-source',d=>{first(d,'before').inputs.newVelocity=.95;},'reject'],
+ ['normalized-strike-velocity-small-source',d=>{const p=first(d,'before').inputs;p.newVelocity=Math.fround(p.newVelocity+2**-22);},'many-different'],
+ [archive?'group-model-rate-target':'group-model-rate-source',d=>{first(d,'consumer').injectionPre.envelope.rate*=.5;},archive?'one-same':'many-different'],
  ['missing-group-control-return',d=>{d.records.splice(d.records.indexOf(first(d,'groupControlAfter')),1);},'reject'],
  ['missing-group-control',d=>{d.records.splice(d.records.indexOf(first(d,'groupControl')),1);},'reject'],
  ['wrong-control-slot-count',d=>{d.slotTransitions.find(t=>t.newRole==='groupControl').registered=7;},'reject'],
@@ -57,6 +60,12 @@ if(base.earlyConsumer)cases.push(
 if(base.stoppedWorkerReads?.length)cases.push(
  ['wrong-stopped-frame-counter',d=>{d.stoppedWorkerReads[0].counter++;},'reject'],
  ['missing-stopped-frame-delivery',d=>{delete d.records[d.stoppedWorkerReads[0].record-1].site.delivery;},'reject'],
+);
+if(archive)cases.push(
+ ['archive-rate-curve-source',()=>{},'many-different',m=>{m.baseFields[0].value.curves[0].y[1]+=.125;}],
+ ['unsupported-archive-runtime-mode',()=>{},'reject',m=>{m.runtimeMode='unknown';}],
+ ['incomplete-archive-curves',()=>{},'reject',m=>{m.baseFields[0].value.curves.pop();}],
+ ['archive-preset-identity-mismatch',()=>{},'reject',m=>{m.presetSha256='0'.repeat(64);}],
 );
 if(base.consumerCross){
  const auxiliaryKept=!!(first(base,'consumerPost').crossControls.keepAuxiliary&1);
@@ -71,9 +80,11 @@ if(base.consumerCross){
  );
 }
 const results=[];
-for(const [name,mutate,expect] of cases){
+for(const [name,mutate,expect,mutateArchive] of cases){
  const d=structuredClone(base);mutate(d);const input=path.join(directory,'case.json'),output=path.join(directory,name+'.json');fs.writeFileSync(input,stringifyWithNegativeZero(d));
- const result=run(input,output);if(result.error)throw result.error;
+ let sourcePath=archivePath;
+ if(mutateArchive){const model=structuredClone(archive);mutateArchive(model);sourcePath=path.join(directory,'case-archive.json');fs.writeFileSync(sourcePath,stringifyWithNegativeZero(model));}
+ const result=run(input,output,sourcePath);if(result.error)throw result.error;
  const report=fs.existsSync(output)?JSON.parse(fs.readFileSync(output)):undefined,predictionHash=report&&hash(report);
  const valid=expect==='pass-same'?result.status===0&&report?.passed&&predictionHash===expected:expect==='one-same'?result.status===1&&report?.mismatches===1&&predictionHash===expected:expect==='one-different'?result.status===1&&report?.mismatches===1&&predictionHash!==expected:expect==='many-different'?result.status===1&&report?.mismatches>1&&predictionHash!==expected:result.status===1&&!report;
  if(!valid)throw new Error(`Unexpected joint test verdict ${name}: ${result.stderr.slice(-800)}`);
