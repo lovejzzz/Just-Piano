@@ -12,6 +12,8 @@ export function bindPreparedSources(bytes, captureSha256) {
   const observedRandom = report.primaryRandomStateStillObserved === true && report.primaryInitialRandomStateIndependentlyProduced === false;
   const computedVelocity=report.eventVelocityComputedFromMidiAndArchive===true;
   const computedHardness=report.normalHardnessKnotsAndValuesComputedFromArchive===true;
+  if(report.candidateFromArchiveCoupledSource===true&&(report.candidateNativeRootAlgorithm!=='recovered-native-cubic-qr'||!Array.isArray(report.candidateArchiveInputsStillObserved)||!report.candidateArchiveInputsStillObserved.length))
+    throw new Error('Native archive coupled source requires explicit algorithm and remaining observed dependencies');
   if(!computedHardness && report.archiveHardnessSource)throw new Error('Archive hardness payload requires explicit source metadata');
   if(!computedVelocity && (report.eventVelocitySource || report.eventVelocityPredictions))
     throw new Error('Computed velocity payload requires explicit dependency metadata');
@@ -103,6 +105,9 @@ export function bindPreparedSources(bytes, captureSha256) {
   return {
     metadata: {reportSha256: sha(bytes), captureSha256, tables: entries.size, comparedValues: count,
       crossRunHistoricalBridge: true, sameRunModelGenerationVerified: false,
+      candidateFromArchiveCoupledSource:report.candidateFromArchiveCoupledSource===true,
+      candidateNativeRootAlgorithm:report.candidateNativeRootAlgorithm,
+      candidateArchiveInputsStillObserved:report.candidateArchiveInputsStillObserved,
       primaryRandomStateStillObserved: !forwardRandom, primaryInitialRandomStateIndependentlyProduced: forwardRandom,
       managerConditionsSupplied: forwardRandom ? {configurationSeed: 0, eventBranch: 'velocity-randomization-enabled', newlyObserved: false} : undefined,
       neighborSystemMathRequired: report.neighborSystemMathRequired,

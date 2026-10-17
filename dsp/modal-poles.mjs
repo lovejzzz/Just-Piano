@@ -93,13 +93,28 @@ export function solveCoupledPolynomial(coefficientsInterleaved, { maxIterations 
   if (!converged) throw new Error(`Independent root solver did not converge: residual ${Math.max(...residuals)}`);
   return { roots: roots.flat(), iterations, residuals, algorithm: 'independent-durand-kerner' };
 }
+// 4cfac4's direct N2/N3 branches compare strictly descending FMA keys.
+// Equal keys retain input order in these branches, unlike general introsort.
+export function sortNativeSmallPoleIndices(keys){
+  if(!keys?.length||keys.length>3||![...keys].every(Number.isFinite))throw new RangeError('Finite N1/N2/N3 pole sort keys required');
+  const order=Array.from(keys,(_,i)=>i);
+  if(keys.length===2){if(keys[1]>keys[0])[order[0],order[1]]=[1,0];return order;}
+  if(keys.length===3){
+    if(keys[1]>keys[0]){
+      if(keys[2]>keys[1])return [2,1,0];
+      return keys[2]>keys[0]?[1,2,0]:[1,0,2];
+    }
+    if(keys[2]>keys[1])return keys[2]>keys[0]?[2,0,1]:[0,2,1];
+  }
+  return order;
+}
 export function rootsToFrequencyDecay(rootsInterleaved, center, floorRatio) {
   if (!Number.isFinite(center) || !Number.isFinite(floorRatio) || floorRatio <= 0) throw new RangeError('Invalid center/floor ratio');
   const roots = pairs(rootsInterleaved);
   const frequencyDouble = roots.map(([re]) => Math.abs(((center + center) * Math.PI + re) / (2 * Math.PI)));
   const keys = roots.map((root, j) => fma64(frequencyDouble[j], 1e-16, root[1]));
-  const order = roots.map((_, j) => j).sort((a, b) => keys[b] - keys[a]);
-  if (new Set(keys).size !== keys.length) throw new RangeError('Equal native sort keys are not validated');
+  const order = keys.length<=3?sortNativeSmallPoleIndices(keys):roots.map((_, j) => j).sort((a, b) => keys[b] - keys[a]);
+  if (keys.length>3&&new Set(keys).size !== keys.length) throw new RangeError('Equal higher-order native sort keys are not validated');
   const floor = roots[order[0]][1] / floorRatio;
   return {
     frequency: order.map(j => Math.fround(frequencyDouble[j])),

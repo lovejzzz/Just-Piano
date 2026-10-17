@@ -5,6 +5,7 @@ import {morphEndpointSources} from './endpoint-source-morph.mjs';
 import {applySourcePhaseOffsets} from './source-phase-offsets.mjs';
 import {assembleIndependentSource,constructIndependentComponents} from './independent-source-assembly.mjs';
 import {constructIndependentPoles} from './independent-pole-source.mjs';
+import {constructCoupledSource} from './coupled-pole-source.mjs';
 const f=Math.fround;
 export function endpointReferenceFrequency(prepared){
   const t=prepared?.blend,endpoints=prepared?.endpoints;
@@ -24,8 +25,13 @@ export function endpointReferenceFrequency(prepared){
 }
 // Produces the mixed four tables, independent reference row and a separate
 // normalized amplitude table. Later G controls require explicit phaseOffsets.
-export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffsets,independentSource}){
+export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffsets,independentSource,coupledSource}){
   const referenceFrequency=endpointReferenceFrequency(prepared);
+  let coupledBuilt;
+  if(coupledSource!==undefined){
+    if(!(prepared.blend>0)||coupled!==undefined)throw new RangeError('Choose computed coupled source or explicit selected coupled endpoint');
+    coupledBuilt=constructCoupledSource({...coupledSource,prepared});coupled=coupledBuilt;
+  }
   const assemble=prepared.blend<1&&independentSource!==undefined;
   let construct=false,polesComputed=false,archiveImpedance=false;
   if(assemble){
@@ -56,5 +62,7 @@ export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffs
     normalizationMaximum:normalization.maximum,normalizationScale:normalization.scale,
     laterPhaseControlsApplied:Boolean(adjusted),independentComponentsAssembled:assemble,
     independentComponentsConstructed:construct,independentPolesComputed:polesComputed,
+    coupledPolesComputed:coupledBuilt!==undefined,coupledImpedanceFromArchive:coupledBuilt?.coupledImpedanceFromArchive===true,
+    coupledPoleTraces:coupledBuilt?.poles.traces,
     independentImpedanceFromArchive:archiveImpedance,completeCacheVerified:false};
 }

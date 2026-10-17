@@ -12,9 +12,10 @@ import {prepareNoteOnVelocitySource} from './pianoteq_note_on_velocity_source.mj
 import {prepareArchiveHardnessSource} from './pianoteq_archive_hardness_source.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
-let presetPair, mixArchive, neighborOracle, decaySource, frequencySource, eventVelocityMidi, hardnessSourceRequested=false, nativeNeighborMath = false;
+let presetPair, mixArchive, neighborOracle, decaySource, frequencySource, eventVelocityMidi, hardnessSourceRequested=false, nativeNeighborMath = false,archiveCoupledSource=false;
 for (let i = 0; i < options.length;) {
   const option = options[i++];
+  if(option==='--archive-coupled-source'&&!archiveCoupledSource){archiveCoupledSource=true;continue;}
   if (option === '--native-neighbor-math' && !nativeNeighborMath) {nativeNeighborMath = true; continue;}
   const first = options[i++];
   if (option === '--neighbor-math-oracle' && first && !neighborOracle) {neighborOracle = first; continue;}
@@ -35,9 +36,16 @@ if (decaySource && !mixArchive) throw new Error('Decay preparation requires expl
 if (frequencySource && !mixArchive) throw new Error('Frequency preparation requires explicit base archive');
 const captureBytes = fs.readFileSync(capturePath), candidateBytes = fs.readFileSync(candidatePath);
 const capture = JSON.parse(captureBytes), candidate = JSON.parse(candidateBytes);
-if (!capture.complete || capture.errors?.length !== 0 || !capture.records?.length || candidate.verifiedStagesPassed !== true ||
-    candidate.failures?.length !== 0 || !candidate.frequencyAndRawDecayFromComputedPoles || !candidate.harmonicWeightsFromComputedReport ||
-    !candidate.predictions?.length) throw new Error('Complete capture and verified computed source required');
+if (!capture.complete || capture.errors?.length !== 0 || !capture.records?.length || candidate.failures?.length !== 0 || !candidate.predictions?.length)
+  throw new Error('Complete capture and verified computed source required');
+if(archiveCoupledSource){
+  if(candidate.schema!=='pianoteq-archive-coupled-source-pass168'||candidate.passed!==true||candidate.rootAlgorithm!=='recovered-native-cubic-qr'||
+    candidate.archivePhysicalTuningWeightsAmplitudeComputed!==true||candidate.archiveImpedanceAndPolesComputed!==true||
+    candidate.sourceRows!==36||candidate.sourceConfigurations!==2||candidate.float32Values!==648||candidate.doubleValues!==216||candidate.indices!==2||
+    candidate.predictions.length!==2||!candidate.checks?.length||candidate.checks.some(x=>x.mismatches!==0))
+    throw new Error('Complete native-QR archive coupled-source verification required');
+}else if(candidate.verifiedStagesPassed!==true||!candidate.frequencyAndRawDecayFromComputedPoles||!candidate.harmonicWeightsFromComputedReport)
+  throw new Error('Complete legacy computed source report required');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const mathCalls = new Map(), mathWord = new DataView(new ArrayBuffer(8));
 const encode = value => {mathWord.setFloat64(0, value); return mathWord.getBigUint64(0).toString(16).padStart(16, '0');};
@@ -208,6 +216,8 @@ if(eventVelocity && velocityChecks.length!==15)throw new Error('Complete five-st
 const result = {passed: mismatches === 0 && randomStateMismatches === 0 && velocityMismatches === 0 && hardnessMismatches === 0, compatible: mismatches === 0 && randomStateMismatches === 0 && velocityMismatches === 0 && hardnessMismatches === 0, bindingAuditOnly: true,
   comparedValues, mismatches, captureSha256: sha(captureBytes), candidateSha256: sha(candidateBytes), checks, failures, stability, presetComparison,
   candidateAmplitudeNormalizationOriginallyObserved: false, correctionFitApplied: false,
+  candidateFromArchiveCoupledSource:archiveCoupledSource,candidateNativeRootAlgorithm:archiveCoupledSource?candidate.rootAlgorithm:undefined,
+  candidateArchiveInputsStillObserved:archiveCoupledSource?candidate.remainingObservedInputs:undefined,
   amplitudeMixComputedFromArchive: Boolean(mixBank), mixArchiveSha256,
   mixArchiveIndex: mixArchive?.[1], mixRuntimeCurveModeSupplied: mixBank ? 'linear-clamp' : undefined,
   mixRuntimeCurveModeNewlyObserved: false, interveningSourceTransformsFullyReconstructed: false,

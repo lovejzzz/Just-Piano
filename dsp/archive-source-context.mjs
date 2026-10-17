@@ -81,21 +81,27 @@ export function archiveNoteSourceInputs(context,{note,noteIndex=note,amplitudeCu
   return {note,noteIndex,physical:structuredClone(physical),tuning,modal,prepared,amplitude,phase,
     baseWeights:Float32Array.from(weights),harmonicWeightsComputed:false,registryConstantsExplicit:true,completeVoiceVerified:false};
 }
-export function prepareArchiveIndependentTables(context,{note,noteIndex=note,amplitudeCurveModes,instrumentMode,phaseCurveMode,
-  weights,weightSource,integerScale,phaseConstant,jitterAmount,sampleRate,frequencyCutoff,impedanceRuntime,phaseOffsetControls}){
+export function prepareArchiveIndependentTables(context,options){return prepareArchiveTables(context,options,true);}
+export function prepareArchiveSourceTables(context,options){return prepareArchiveTables(context,options,false);}
+function prepareArchiveTables(context,{note,noteIndex=note,amplitudeCurveModes,instrumentMode,phaseCurveMode,
+  weights,weightSource,integerScale,phaseConstant,jitterAmount,sampleRate,frequencyCutoff,impedanceRuntime,phaseOffsetControls,polynomialControls},independentOnly){
   const own=state(context),source=archiveNoteSourceInputs(context,{note,noteIndex,amplitudeCurveModes,instrumentMode,phaseCurveMode});
-  if(source.modal.blend!==0)throw new RangeError('This archive requires a coupled endpoint; independent-only constructor cannot replace it');
+  if(independentOnly&&source.modal.blend!==0)throw new RangeError('This archive requires a coupled endpoint; independent-only constructor cannot replace it');
   if(!Number.isInteger(integerScale)||!Number.isFinite(phaseConstant)||!impedanceRuntime)
     throw new RangeError('Explicit amplitude integer scale, phase constant and impedance runtime modes required');
   if(weightSource!==undefined&&weights!==undefined)throw new RangeError('Choose archive spectrum or explicit weights, not both');
   const spectrum=weightSource===undefined?undefined:archiveNoteSourceWeights(context,{...weightSource,note,noteIndex});
   const modal=source.modal;
-  const independentSource={poleControls:{coordinateScale:modal.coordinateScale,coordinates:modal.coordinates,note,
+  const independentSource=modal.blend<1?{poleControls:{coordinateScale:modal.coordinateScale,coordinates:modal.coordinates,note,
     jitterAmount,sampleRate,frequencyCutoff,archiveContext:{...impedanceRuntime,baseFields:own.baseFields,presetFields:own.presetFields}},
     weights:spectrum?spectrum.output:weights,frequencyRatios:modal.frequencyRatios,componentAmplitudeScale:modal.componentAmplitudeScale,
-    amplitudeControls:{...source.amplitude.independent,integerScale},phaseAmount:source.phase.phaseAmount,phaseConstant};
+    amplitudeControls:{...source.amplitude.independent,integerScale},phaseAmount:source.phase.phaseAmount,phaseConstant}:undefined;
+  const coupledSource=modal.blend>0?{poleControls:{coordinateScale:modal.coordinateScale,coordinates:modal.coordinates,note,
+    jitterAmount,sampleRate,frequencyCutoff,polynomialControls,archiveContext:{...impedanceRuntime,baseFields:own.baseFields,presetFields:own.presetFields}},
+    weights:spectrum?spectrum.output:weights,amplitudeControls:{...source.amplitude.coupled,integerScale},
+    phaseAmount:source.phase.phaseAmount,phaseConstant}:undefined;
   const phaseOffsets=phaseOffsetControls===undefined?undefined:{coordinates:modal.coordinates,controls:phaseOffsetControls,phaseConstant};
-  const tables=prepareEndpointSourceTables({prepared:source.prepared,independentSource,phaseOffsets});
+  const tables=prepareEndpointSourceTables({prepared:source.prepared,independentSource,coupledSource,phaseOffsets});
   return {...tables,archivePhysicalSourceComputed:true,archiveTuningComputed:true,archiveAmplitudeSourceComputed:true,
     harmonicWeightsComputed:spectrum?.harmonicEditsComputed===true,archiveSpectrumComputed:spectrum!==undefined,harmonicEditsExplicit:spectrum?.harmonicEditsExplicit===true,registryConstantsExplicit:true};
 }

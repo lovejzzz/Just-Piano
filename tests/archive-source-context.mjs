@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {constructArchiveSourceContext,archiveSourceContextAudit,archiveTunedNote,archiveNoteSourceInputs,prepareArchiveIndependentTables,archiveNoteWeightControls,archiveNoteSourceWeights} from '../dsp/archive-source-context.mjs';
+import {constructArchiveSourceContext,archiveSourceContextAudit,archiveTunedNote,archiveNoteSourceInputs,prepareArchiveIndependentTables,prepareArchiveSourceTables,archiveNoteWeightControls,archiveNoteSourceWeights} from '../dsp/archive-source-context.mjs';
 const scalar={flags:0,special:0,dimension:1},curve=x=>({x:[0,127],y:[x,x]}),field=(object_offset,value)=>({object_offset,value});
 const physicalNames=['B1b40','B1b98','B2560','A490','A4e0','Af48'];
 const sourceCurveModes=Object.fromEntries(physicalNames.map(k=>[k,scalar]));
@@ -69,4 +69,20 @@ assert.equal(changedNote.frequency,Math.fround(first.frequency*2));
 assert.throws(()=>prepareArchiveIndependentTables(changed,{...noteArgs,weights:[1,1,1],integerScale:1,phaseConstant:Math.PI}));
 assert.throws(()=>archiveSourceContextAudit({...context}));
 assert.throws(()=>archiveTunedNote(context,{note:69,noteIndex:68}));
+// Exercise the general archive constructor with actual coupled and mixed
+// selections, retaining the old independent-only guard.
+for(const blend of [1,.5]){
+ const nativeArgs=structuredClone(args),nativeModel=nativeArgs.baseFields.find(x=>x.object_offset===0x2548).value;
+ nativeModel.scalar9d=blend;nativeArgs.baseFields.find(x=>x.object_offset===0x1d30).value=[-.2,.2,-.2,.2];
+ const nativeContext=constructArchiveSourceContext(nativeArgs);
+ const options={...noteArgs,weightSource:computedWeightSourceArgs,integerScale:1,phaseConstant:Math.PI,jitterAmount:0,sampleRate:48000,frequencyCutoff:3000,
+  polynomialControls:{kappa:Math.PI,gamma:0,decayFloorRatio:1e6},
+  impedanceRuntime:{mode:0,runtimeCurveMode:'linear-clamp',phaseCurveMode:scalar,frequencyCurveModes:[scalar],polarRadius:1}};
+ const nativeTables=prepareArchiveSourceTables(nativeContext,options);
+ assert.equal(nativeTables.coupledPolesComputed,true);assert.equal(nativeTables.coupledImpedanceFromArchive,true);
+ assert.equal(nativeTables.independentPolesComputed,blend<1);assert.equal(nativeTables.archiveSpectrumComputed,true);assert.equal(nativeTables.harmonicWeightsComputed,true);
+ assert.equal(nativeTables.columns,2);assert.ok(nativeTables.rows>0);assert.ok([...nativeTables.normalizedAmplitude].every(Number.isFinite));
+ assert.throws(()=>prepareArchiveIndependentTables(nativeContext,options),/requires a coupled endpoint/);
+ assert.throws(()=>prepareArchiveSourceTables(nativeContext,{...options,polynomialControls:undefined}),/polynomial/);
+}
 console.log('Own stiffness/stretch/tuning context, archive-to-independent tables, pitch edits, snapshot isolation and unsupported branch guards passed.');
