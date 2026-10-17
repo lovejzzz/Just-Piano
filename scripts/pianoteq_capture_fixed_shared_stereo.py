@@ -54,7 +54,11 @@ def observation(frame,location,_):
   elif name=='selection':
    h=register(frame,'x28');g=register(frame,'x25');assert h not in voices and len(voices)<5 and scalar(frame,h+0x6c,'I')==0
    voices[h]=len(voices);ends[h]=0
-   records.append(dict(**base,epoch=voices[h],voice=hex(h),counter=0,note=scalar(frame,g+0x14),initialTime=helpers.time_state(frame,h),source=dict(sampleRate=scalar(frame,g+0x98),overrideDuration=scalar(frame,h+0x3064),legato=scalar(frame,h+0x2ff4,'i'),globalDelay=scalar(frame,g+0x1204),globalAttack=scalar(frame,g+0x1208),legatoAttack=scalar(frame,g+0x120c),globalEnd=scalar(frame,g+0x1210))))
+   source=scalar(frame,register(frame,'sp')+0xd8,'Q');columns,rows=unpack(frame,source,'II');selected_row=scalar(frame,source+0x10,'I')
+   assert rows<=256 and (rows==0 or 0<columns<=4096 and selected_row<rows)
+   decay_row=floats(frame,scalar(frame,source+0x48,'Q')+selected_row*columns*4,columns) if rows else []
+   model_sources=dict(source=hex(source),columns=columns,rows=rows,selectedRow=selected_row,decayRow=decay_row,referenceFrequency=scalar(frame,g+0x78),instrumentDurationFlag=scalar(frame,scalar(frame,g+0x1240,'Q')+0x4c0,'B'),durationTarget=scalar(frame,g+0xfac))
+   records.append(dict(**base,epoch=voices[h],voice=hex(h),counter=0,note=scalar(frame,g+0x14),terminalModelSources=model_sources,initialTime=helpers.time_state(frame,h),source=dict(sampleRate=scalar(frame,g+0x98),overrideDuration=scalar(frame,h+0x3064),legato=scalar(frame,h+0x2ff4,'i'),globalDelay=scalar(frame,g+0x1204),globalAttack=scalar(frame,g+0x1208),legatoAttack=scalar(frame,g+0x120c),globalEnd=scalar(frame,g+0x1210))))
    if len(voices)==5:handoff=('selection','voiceExit',0x10085ede4,site['stopId'],len(records))
   elif name=='before':
    caller=owner(frame,0x100460de4);h=register(caller,'x19');b=register(caller,'x23');a=register(caller,'x21');age=scalar(frame,h+0x6c,'I')
@@ -95,7 +99,7 @@ def observation(frame,location,_):
     assert global_block==0 and not voices;helpers.stereo.time_inputs=time_inputs;configs[key]=helpers.stereo.configure(frame,state);configs[key]['post']=helpers.stereo.post_profile(frame,m);handoff=('irCopy','selection',0x1007181d8,site['stopId'],len(records)+1)
    assert key in configs and len(configs)==1
    c.update(phase='cabinet',cabinetState=key)
-   records.append(dict(**base,cabinetState=key,source=source,before=before,auxiliary=matrix(frame,c['B']+0x120),mode=register(frame,'w4'),gain=list(unpack(frame,state+0x30,'ffff'))))
+   records.append(dict(**base,cabinetState=key,sourceDescriptor=hex(register(frame,'x2')),source=source,before=before,auxiliary=matrix(frame,c['B']+0x120),mode=register(frame,'w4'),gain=list(unpack(frame,state+0x30,'ffff'))))
   else:
    c=context;assert c and c['phase']=='cabinet' and c['M']==register(frame,'x19')
    out=matrix(frame,register(frame,'x23'));assert out['rows']==2 and out['samples']==64

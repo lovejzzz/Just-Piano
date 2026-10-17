@@ -11,20 +11,28 @@ import {createRoutedDelayCache,routeConstantBlock,readRoutedBlock} from '../dsp/
 import {combineThenRestoreGroups,distributeAuxiliary} from '../dsp/voice-spatial-output.mjs';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import {archiveTerminalVoiceModel} from '../dsp/archive-terminal-model.mjs';
 import {archiveTimeEnvelopeAtKnot} from '../dsp/archive-time-envelope.mjs';
 import {stringifyWithNegativeZero} from './pianoteq_json_exact.mjs';
 import {initializeTerminalVoiceEnvelope,renderTerminalVoiceEnvelope,renderVoiceTimeEnvelope} from '../dsp/voice-tail-envelopes.mjs';
 const [capturePath,auditPath,reportPath,...flags]=process.argv.slice(2);
 const diagnosticRejectedCapture=flags.includes('--diagnostic-rejected-capture');
 if(diagnosticRejectedCapture)flags.splice(flags.indexOf('--diagnostic-rejected-capture'),1);
+const terminalOptions=flags.filter(x=>x.startsWith('--archive-terminal-source='));
+if(terminalOptions.length>1)throw new Error('One archive terminal source required');
+const terminalArchive=terminalOptions.length?JSON.parse(fs.readFileSync(terminalOptions[0].slice('--archive-terminal-source='.length))):null;
 const option=flags.includes('--exp-candidate')?'--exp-candidate':null,extra=flags.filter(x=>x.startsWith('--archive-time-source=')),pcmOptions={};
-for(const flag of flags){if(flag==='--exp-candidate'||flag.startsWith('--archive-time-source='))continue;const i=flag.indexOf('=');const key=flag.slice(0,i),value=flag.slice(i+1);if(i<0||!['--observed-wav','--reference-wav','--output-wav'].includes(key)||pcmOptions[key]||!value)throw new Error('Invalid full-stereo option');pcmOptions[key]=value;}
+for(const flag of flags){if(flag==='--exp-candidate'||flag.startsWith('--archive-time-source=')||flag.startsWith('--archive-terminal-source='))continue;const i=flag.indexOf('=');const key=flag.slice(0,i),value=flag.slice(i+1);if(i<0||!['--observed-wav','--reference-wav','--output-wav'].includes(key)||pcmOptions[key]||!value)throw new Error('Invalid full-stereo option');pcmOptions[key]=value;}
 if(!pcmOptions['--observed-wav']||!pcmOptions['--reference-wav'])throw new Error('Full native/reference WAVs required');
 if(!capturePath||!auditPath||!reportPath||option!=='--exp-candidate'||extra.length>1||extra.length&&!extra[0].startsWith('--archive-time-source='))throw new Error('Usage: complete-component.json owned-resumes.jsonl new-report.json --exp-candidate [--archive-time-source=decoded-source.json]');
 const archive=extra.length?JSON.parse(fs.readFileSync(extra[0].slice('--archive-time-source='.length))):null;
 if(archive){
  if(archive.schema!==1||archive.presetSha256!==crypto.createHash('sha256').update(fs.readFileSync(archive.presetPath)).digest('hex'))throw new Error('Verified archive time preset required');
  if(!fs.readFileSync(path.join(path.dirname(capturePath),'commands.lldb'),'utf8').includes('--fxp '+archive.presetPath+' --midi '))throw new Error('Exact archive capture preset required');
+}
+if(terminalArchive){
+ if(terminalArchive.schema!==1||terminalArchive.presetSha256!==crypto.createHash('sha256').update(fs.readFileSync(terminalArchive.presetPath)).digest('hex')||!terminalArchive.baseSourcePath||terminalArchive.baseSourceSha256!==crypto.createHash('sha256').update(fs.readFileSync(terminalArchive.baseSourcePath)).digest('hex'))throw new Error('Verified terminal preset and base-source identity required');
+ if(!fs.readFileSync(path.join(path.dirname(capturePath),'commands.lldb'),'utf8').includes('--fxp '+terminalArchive.presetPath+' --midi '))throw new Error('Exact terminal archive capture preset required');
 }
 import {initializeSpatialSleep,renderSpatialWithSleep} from '../dsp/voice-spatial-sleep.mjs';
 const data=await readCapture(capturePath),resumes=fs.readFileSync(auditPath,'utf8').trim().split('\n').map(x=>JSON.parse(x));
@@ -109,6 +117,7 @@ for(const [name,size]of [['head',64],['tail',512]])for(const ring of cfg[name].c
 const convolution=new CabinetConvolution64(cfg.head.configuration,cfg.tail.configuration),post=new DryStereoPost64(cfg.post);let kernelSpectra=0,pcmCalibrationDifferences=0,headProducts=0,tailProducts=0;
 for(const [name,bank]of [['head',convolution.head],['tail',convolution.tail.model]]){const c=cfg[name].configuration;for(let row=0;row<9;row++)for(let i=0;i<c.kernels[row].slots.length;i++){const native=c.kernels[row].slots[i];if(native.empty)continue;const computed=bank.kernels[row].slots[i].data;if(computed.length!==native.data.length)throw new Error('IR spectrum target length differs');for(let j=0;j<computed.length;j++)check('IR-spectrum',computed[j],native.data[j]);kernelSpectra++;}}
 
+const terminalModels=[];
 const states=new Map(),pending=new Map(),caches=new Map();let globalContext=null,globalFrame=0,globalMix=null,globalIdentity=null,globalTable=null,cacheRoots=null,sourceDataPointer=null;
 let voiceBlocks=0,routedVoiceBlocks=0,unroutedVoiceBlocks=0,skippedVoiceExits=0,primaryActiveBlocks=0,secondaryActiveBlocks=0,postAttackBlocks=0,sleepAllInactive=0,sleepMixed=0;
 function source(r){
@@ -121,11 +130,18 @@ function source(r){
  if(!enabled||selected<0||s.globalDelay!==0||s.globalEnd<10)throw new Error('Unverified time initialization branch');
  const samples=Math.trunc(Math.fround(selected*Math.fround(s.sampleRate)));if(samples>0xffffffff)throw new Error('Time duration outside uint32');
  const time={...r.initialTime,enabled,delay:0,attack:samples,decay:0,counter:0,attackRate:samples?Math.exp(-0.9942522733438669/samples):0,decayRate:1};
- states.set(r.epoch,{voice:r.voice,age:0,sampleRate:s.sampleRate,time,selected});
+ let terminalModel=null;
+ if(terminalArchive){
+  if(!r.terminalModelSources)throw new Error('Actual same-run terminal model inputs required');
+  terminalModel=archiveTerminalVoiceModel({archive:terminalArchive,note:r.note,modelSources:r.terminalModelSources});
+  check('archive-terminal-duration',terminalModel.duration,r.terminalModelSources.durationTarget);
+  terminalModels.push({epoch:r.epoch,...terminalModel});
+ }
+ states.set(r.epoch,{voice:r.voice,age:0,sampleRate:s.sampleRate,time,selected,terminalModel});
 }
 function before(r,own){
  if(r.counter!==own.age||pending.has(r.thread)||globalContext||r.tail.special||r.auxiliary?.rows!==3||r.auxiliary.samples!==64)throw new Error('Contiguous supported voice input required');
- if(!own.terminal){own.terminal={};for(const part of ['primary','secondary'])own.terminal[part]=initializeTerminalVoiceEnvelope(own.sampleRate,r.tail[part].slope,r.tail[part].scale);}
+ if(!own.terminal){own.terminal={};for(const part of ['primary','secondary'])own.terminal[part]=initializeTerminalVoiceEnvelope(own.sampleRate,own.terminalModel?.[part].slope??r.tail[part].slope,own.terminalModel?.[part].scale??r.tail[part].scale);}
  for(const part of ['primary','secondary'])own.terminal[part].enabled=r.tail[part].enabled;
  compareTerminal({...own.terminal,time:own.time},r.tail);
  if(!own.spatial)own.spatial=spatialState(r.spatial);compareSpatial(own,r);
@@ -189,6 +205,7 @@ for(const r of data.records){
   // matrix.pointer is the sample buffer, not the descriptor. The frozen collector
   // asserts actual x2 == B+0x288 at every cabinet stop; no past address is backfilled.
   if(r.source.rowStride!==64||r.source.stride!==9)throw new Error('Contiguous nine-row cabinet sample buffer required');
+  if(r.sourceDescriptor!==undefined)exact('cabinet-source-descriptor',BigInt(r.sourceDescriptor),BigInt(c.B)+0x288n);
   if(sourceDataPointer===null)sourceDataPointer=r.source.pointer;
   exact('cabinet-sample-buffer',r.source.pointer,sourceDataPointer);
   for(let i=0;i<4;i++)check('cabinet-gain',[1,1,0,0][i],r.gain[i]);
@@ -214,5 +231,5 @@ for(let i=0;i<pcm.length;i+=3){if(pcm.readIntLE(i,3)!==nativePcm.readIntLE(i,3))
 if(pcmOptions['--output-wav']){const h=Buffer.alloc(44);h.write('RIFF');h.writeUInt32LE(pcm.length+36,4);h.write('WAVEfmt ',8);h.writeUInt32LE(16,16);h.writeUInt16LE(1,20);h.writeUInt16LE(2,22);h.writeUInt32LE(48000,24);h.writeUInt32LE(288000,28);h.writeUInt16LE(6,32);h.writeUInt16LE(24,34);h.write('data',36);h.writeUInt32LE(pcm.length,40);fs.writeFileSync(pcmOptions['--output-wav'],Buffer.concat([h,pcm]),{flag:'wx'});}
 const diagnosticSameRunMathMatches=!mismatches&&!pcmDifferences&&!pcmCalibrationDifferences;
 const sameRunPassed=captureAccepted&&diagnosticSameRunMathMatches;
-const report={passed:sameRunPassed&&!referencePcmDifferences,sameRunPassed,captureAccepted,diagnosticRejectedCapture,driverFailureCount:driverFailures.length,diagnosticSameRunMathMatches,checks,mismatches,doubleChecks,fullPcmFrames:pcm.length/6,pcmDifferences,referencePcmDifferences,pcmCalibrationDifferences,kernelSpectra,headProducts,tailProducts,voiceBlocks,routedVoiceBlocks,unroutedVoiceBlocks,skippedVoiceExits,primaryActiveBlocks,secondaryActiveBlocks,postAttackBlocks,sleepAllInactive,sleepMixed,globalFrames:globalFrame,initialCacheHeadObserved:true,initialSilentOutputsAssumedAndCheckedAtCabinet:true,cabinetDescriptorObservedInRecords:false,cabinetDescriptorAssertedByFrozenCollector:true,cabinetSampleBufferIdentityCarried:true,observedVoiceInput:true,observedModelAndEnableInputs:true,observedSpatialCoefficients:true,observedGlobalInputAndFeedback:true,observedIrSourceAndPlans:true,expDoubleCandidateUsed:true,fullVoiceSourceComputed:false,finalStereoAudioVerified:sameRunPassed&&!referencePcmDifferences,failures};
+const report={passed:sameRunPassed&&!referencePcmDifferences,sameRunPassed,captureAccepted,diagnosticRejectedCapture,driverFailureCount:driverFailures.length,diagnosticSameRunMathMatches,checks,mismatches,doubleChecks,fullPcmFrames:pcm.length/6,pcmDifferences,referencePcmDifferences,pcmCalibrationDifferences,kernelSpectra,headProducts,tailProducts,voiceBlocks,routedVoiceBlocks,unroutedVoiceBlocks,skippedVoiceExits,primaryActiveBlocks,secondaryActiveBlocks,postAttackBlocks,sleepAllInactive,sleepMixed,globalFrames:globalFrame,initialCacheHeadObserved:true,initialSilentOutputsAssumedAndCheckedAtCabinet:true,terminalModelFieldsGenerated:!!terminalArchive,terminalModels,terminalDecayRowAndFrequencyObserved:!!terminalArchive,lateDurationOverridesProduced:false,cabinetDescriptorObservedInRecords:data.records.filter(r=>r.stage==='cabinet').every(r=>r.sourceDescriptor!==undefined),cabinetDescriptorAssertedByFrozenCollector:true,cabinetSampleBufferIdentityCarried:true,observedVoiceInput:true,observedModelAndEnableInputs:true,observedSpatialCoefficients:true,observedGlobalInputAndFeedback:true,observedIrSourceAndPlans:true,expDoubleCandidateUsed:true,fullVoiceSourceComputed:false,finalStereoAudioVerified:sameRunPassed&&!referencePcmDifferences,failures};
 fs.writeFileSync(reportPath,stringifyWithNegativeZero(report,2)+'\n',{flag:'wx'});console.log(JSON.stringify(report));if(!report.passed)process.exitCode=1;
