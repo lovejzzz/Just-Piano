@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {archiveTerminalVoiceModel} from '../dsp/archive-terminal-model.mjs';
+import {archiveTerminalVoiceModel,terminalSlopesFromDecayRow} from '../dsp/archive-terminal-model.mjs';
 // Synthetic branch checks; authentic source rows and audio are validated separately.
 const fields=[{object_offset:0x10a8,kind:'u32',value:0},{object_offset:0x1334,kind:'f32',value:1},{object_offset:0x1338,kind:'curve',value:{}},{object_offset:0x1398,kind:'f32',value:0},{object_offset:0x139c,kind:'u32',value:0},{object_offset:0x45c,kind:'u32',value:0}];
 const archive={editFields:fields,baseFields:[{object_offset:0x1c10,kind:'vf',value:Array(113).fill(.5)}]};
@@ -16,4 +16,5 @@ assert.equal(make({instrumentDurationFlag:1},60).duration,Math.fround(.84));
 assert.throws(()=>make({decayRow:[]}),/Complete selected/);
 assert.throws(()=>make({selectedRow:1}),/Complete selected/);
 assert.throws(()=>make({referenceFrequency:NaN}),/Finite terminal/);
+assert.throws(()=>terminalSlopesFromDecayRow({columns:1,rows:1,selectedRow:0,decayRow:[1e40]}),/Finite terminal decay/);
 console.log('PASS synthetic: decay-row minimum/floor, duration frequency floor, instrument boundary constants, target independence and malformed-source rejection');
