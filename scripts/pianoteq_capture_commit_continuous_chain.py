@@ -9,14 +9,16 @@ import pianoteq_capture_release_continuous_chain as base
 from pianoteq_damper_runtime_capture import scalar,unpack
 from pianoteq_capture_recurrence import register
 from pianoteq_capture_source_amplitude import regfloat
+from pianoteq_capture_key_mix import matrix as auxiliary_matrix
+CROSS=os.environ.get('PIANOTEQ_CONSUMER_CROSS')=='1'
 ROOT=base.ROOT;hooks=base.hooks;records=base.records;errors=base.errors;last_seen={};slot_transitions=[]
 source_role='weights';source_pending=None;post_pending=None;main_thread=None;source_started=False;window_complete=False;acknowledged_transitions=0;last_saved_rows=-256
 
 def save(force=False):
  global last_saved_rows
  if not force and not errors and not base.complete and len(records)-last_saved_rows<256:return
- data={'schema':1,'sourceCommits':True,'sourceDispatchGates':True,'consumerPost':True,'consumerDelay':True,'consumerInjection':True,'injectionEntryObserved':False,'dispatchControls':True,'workerOutputs':True,'windowBlocks':None,'fixedSites':False,'siteCount':6,'records':records,'errors':errors,'starts':base.starts,'spectrumCount':base.spectrum_calls,'finalCount':base.final_calls,'copyCount':base.copies,'initializations':len(base.initialized),'envelopeBlocks':base.blocks,'duplicateEnvelopeReturns':base.duplicates,'envelopePending':len(base.envelope_pending),'coefficientCount':base.coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='envelopeResult' and 'render' in r for r in records),'pending':len(base.pending),'complete':base.complete,'activeSites':sum(h.IsEnabled() for h in hooks.values()),'transitions':base.transitions,'slotTransitions':slot_transitions,'sourceRole':source_role,'sourcePending':source_pending,'postPending':post_pending,'slotBarriers':True,'acknowledgedTransitions':acknowledged_transitions}
- (ROOT/'runtime.json').write_text(json.dumps(data,indent=2,allow_nan=False));last_saved_rows=len(records)
+ data={'schema':1,'sourceCommits':True,'sourceDispatchGates':True,'consumerCross':CROSS,'allObservationBarriers':CROSS,'consumerPost':True,'consumerDelay':True,'consumerInjection':True,'injectionEntryObserved':False,'dispatchControls':True,'workerOutputs':True,'windowBlocks':None,'fixedSites':False,'siteCount':6,'records':records,'errors':errors,'starts':base.starts,'spectrumCount':base.spectrum_calls,'finalCount':base.final_calls,'copyCount':base.copies,'initializations':len(base.initialized),'envelopeBlocks':base.blocks,'duplicateEnvelopeReturns':base.duplicates,'envelopePending':len(base.envelope_pending),'coefficientCount':base.coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='envelopeResult' and 'render' in r for r in records),'pending':len(base.pending),'complete':base.complete,'activeSites':sum(h.IsEnabled() for h in hooks.values()),'transitions':base.transitions,'slotTransitions':slot_transitions,'sourceRole':source_role,'sourcePending':source_pending,'postPending':post_pending,'slotBarriers':True,'acknowledgedTransitions':acknowledged_transitions}
+ (ROOT/'runtime.json').write_text(json.dumps(data,indent=None if CROSS else 2,allow_nan=False));last_saved_rows=len(records)
 base.save=save
 
 def replace(frame,old_name,new_name,address):
@@ -38,6 +40,13 @@ def pre_gain(frame,h):
 
 def envelope(frame,h):
  return {'gain':scalar(frame,h+0xcf0),'step':scalar(frame,h+0xcf4),'active':scalar(frame,h+0xcfc,'B'),'elapsed':scalar(frame,h+0xd00,'I'),'duration':scalar(frame,h+0xd04,'I')}
+
+def channels(frame):
+ m=register(frame,'x23');count=scalar(frame,m,'Q');assert count==3;result=[]
+ for i in range(count):
+  d=m+8+56*i;rows,stride,n,sample_stride=unpack(frame,d,'IIII');assert rows==1 and n==64
+  result.append(list(unpack(frame,scalar(frame,d+16,'Q'),'f'*64)))
+ return result
 
 def observed(frame,location,_):
  global source_role,source_pending,post_pending,main_thread,source_started
@@ -73,11 +82,15 @@ def observed(frame,location,_):
     source_pending=None;replace(frame,name,'rattleSource',0x10085ed9c);source_role='rattleSource'
   elif name=='consumerPost':
    h=register(frame,'x19');age=scalar(frame,h+0x6c,'I');assert post_pending=={'voice':hex(h),'counter':age}
-   matrix=register(frame,'x23');count=scalar(frame,matrix,'Q');assert count==3;channels=[]
-   for i in range(count):
-    d=matrix+8+56*i;rows,stride,n,sample_stride=unpack(frame,d,'IIII');assert rows==1 and n==64
-    channels.append(list(unpack(frame,scalar(frame,d+16,'Q'),'f'*64)))
-   records.append({'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'channels':channels,'state':base.release_state(frame,h+0xd08),'filter':base.release_filter(frame,h+0xd08),'envelope':envelope(frame,h),'preGain':pre_gain(frame,h)})
+   records.append({'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'channels':channels(frame),'state':base.release_state(frame,h+0xd08),'filter':base.release_filter(frame,h+0xd08),'envelope':envelope(frame,h),'preGain':pre_gain(frame,h)})
+   if CROSS:
+    records[-1]['crossControls']={key:scalar(frame,h+offset,'B') for key,offset in [('keepGroups',0x30b5),('keepAuxiliary',0x30b6),('processorA',0x1740),('processorB',0x1918)]}
+    records[-1]['auxiliary']=auxiliary_matrix(frame,register(frame,'x21'))
+    replace(frame,name,'consumerCross',0x100460acc)
+   else:post_pending=None;replace(frame,name,'consumer',0x100460908)
+  elif name=='consumerCross':
+   h=register(frame,'x19');age=scalar(frame,h+0x6c,'I');assert post_pending=={'voice':hex(h),'counter':age}
+   records.append({'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'channels':channels(frame),'auxiliary':auxiliary_matrix(frame,register(frame,'x21'))})
    post_pending=None;replace(frame,name,'consumer',0x100460908)
   else:
    begin=len(records);result=base.observed(frame,location,_)
@@ -95,7 +108,7 @@ def observed(frame,location,_):
     assert thread==main_thread and post_pending is None
     r=records[-1];h=register(frame,'x19');r['injectionPre']['envelope']=envelope(frame,h);r['injectionPre']['preGain']=pre_gain(frame,h);post_pending={'voice':hex(h),'counter':r['counter']};replace(frame,'consumer','consumerPost',0x100460a4c)
   if len(records)%64==0:save()
-  return len(slot_transitions)!=changes_before
+  return CROSS or len(slot_transitions)!=changes_before
  except Exception:
   errors.append(traceback.format_exc())
   for h in hooks.values():h.SetEnabled(False)
@@ -114,7 +127,9 @@ def finish(debugger):
  import lldb
  p=debugger.GetSelectedTarget().GetProcess();assert p.GetState()==lldb.eStateExited and p.GetExitStatus()==0 and not source_pending and not post_pending and source_role=='rattleSource' and acknowledged_transitions==len(slot_transitions)
  assert sum(r['stage']=='rattleSource' for r in records)==sum((r['stage']=='rattleCommit' and r['caller']=='0x100460260') or r['stage']=='rattleSkip' for r in records)
- for epoch in range(5):assert [r['counter'] for r in records if r['stage']=='consumer' and r['epoch']==epoch]==[r['counter'] for r in records if r['stage']=='consumerPost' and r['epoch']==epoch]
+ for epoch in range(5):
+  expected=[r['counter'] for r in records if r['stage']=='consumer' and r['epoch']==epoch]
+  for stage in (['consumerPost','consumerCross'] if CROSS else ['consumerPost']):assert expected==[r['counter'] for r in records if r['stage']==stage and r['epoch']==epoch]
  base.finish();window_complete=True
 
 def resume_owned_stops(debugger):

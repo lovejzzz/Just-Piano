@@ -10,13 +10,14 @@ const base=JSON.parse(fs.readFileSync(capturePath));
 if(!base.complete||!base.sourceCommits||!base.consumerPost)throw new Error('Completed joint capture required');
 fs.mkdirSync(directory);
 const runner=fileURLToPath(new URL('./pianoteq_replay_release_continuous_chain.mjs',import.meta.url));
-const run=(input,output)=>spawnSync(process.execPath,[runner,input,output,'--pow-candidate'],{encoding:'utf8',maxBuffer:16*1024*1024});
+const auditOptions=base.consumerCross?['--resume-audit='+path.join(path.dirname(path.resolve(capturePath)),'owned-resumes.jsonl')]:[];
+const run=(input,output)=>spawnSync(process.execPath,[runner,input,output,'--pow-candidate',...auditOptions],{encoding:'utf8',maxBuffer:16*1024*1024});
 const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(capturePath,baselinePath);
 if(baselineRun.error)throw baselineRun.error;
 if(baselineRun.status!==0)throw new Error('Joint baseline failed: '+baselineRun.stderr.slice(-800));
 const baseline=JSON.parse(fs.readFileSync(baselinePath));
-if(!baseline.passed||!baseline.injection?.passed)throw new Error('Full parent and component must pass');
-const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs])).digest('hex');
+if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed)throw new Error('Full parent and components must pass');
+const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs,r.cross?.outputs])).digest('hex');
 const expected=hash(baseline),first=(d,stage)=>d.records.find(r=>r.stage===stage);
 const activePre=d=>{const seen=new Set();for(const r of d.records)if(r.stage==='consumer'&&!seen.has(r.epoch)){seen.add(r.epoch);if(r.injectionPre.envelope.active===1)return r;}throw new Error('Active initial envelope seed required by this fixture');};
 const activePost=d=>{const pre=activePre(d);return d.records.find(r=>r.stage==='consumerPost'&&r.epoch===pre.epoch&&r.counter===pre.counter);};
@@ -40,12 +41,24 @@ const cases=[
  ['missing-source-dispatch',d=>{d.records.splice(d.records.indexOf(first(d,'rattleGate')),1);},'reject'],
  ['bypassed-envelope-dispatch-source',d=>{bypassPre(d).injectionPre.controls.skip=0;},'many-different'],
 ];
+if(base.consumerCross){
+ const auxiliaryKept=!!(first(base,'consumerPost').crossControls.keepAuxiliary&1);
+ cases.push(
+  ['cross-audio-target',d=>{first(d,'consumerCross').channels[0][8]=.25;},'one-same'],
+  ['cross-auxiliary-target',d=>{first(d,'consumerCross').auxiliary.values[0][8]=.25;},'one-same'],
+  ['cross-auxiliary-source',d=>{first(d,'consumerPost').auxiliary.values[0][8]=.25;},auxiliaryKept?'one-different':'pass-same'],
+  ['cross-clear-control-source',d=>{const r=d.records.find(r=>r.stage==='consumerPost'&&(r.crossControls.keepGroups&1)&&r.channels.some(g=>g.some(x=>x!==0)));if(!r)throw new Error('Nonzero kept cross group required');r.crossControls.keepGroups&=254;},'many-different'],
+  ['cross-active-processor',d=>{first(d,'consumerPost').crossControls.processorA=1;},'reject'],
+  ['missing-cross-stage',d=>{d.records.splice(d.records.indexOf(first(d,'consumerCross')),1);},'reject'],
+  ['unaudited-cross-observation',d=>{first(d,'consumerCross').site.stopId+=1000000;},'reject'],
+ );
+}
 const results=[];
 for(const [name,mutate,expect] of cases){
  const d=structuredClone(base);mutate(d);const input=path.join(directory,'case.json'),output=path.join(directory,name+'.json');fs.writeFileSync(input,stringifyWithNegativeZero(d));
  const result=run(input,output);if(result.error)throw result.error;
  const report=fs.existsSync(output)?JSON.parse(fs.readFileSync(output)):undefined,predictionHash=report&&hash(report);
- const valid=expect==='pass-same'?result.status===0&&report?.passed&&predictionHash===expected:expect==='one-same'?result.status===1&&report?.mismatches===1&&predictionHash===expected:expect==='many-different'?result.status===1&&report?.mismatches>1&&predictionHash!==expected:result.status===1&&!report;
+ const valid=expect==='pass-same'?result.status===0&&report?.passed&&predictionHash===expected:expect==='one-same'?result.status===1&&report?.mismatches===1&&predictionHash===expected:expect==='one-different'?result.status===1&&report?.mismatches===1&&predictionHash!==expected:expect==='many-different'?result.status===1&&report?.mismatches>1&&predictionHash!==expected:result.status===1&&!report;
  if(!valid)throw new Error(`Unexpected joint test verdict ${name}: ${result.stderr.slice(-800)}`);
  results.push({name,expect,exit:result.status,mismatches:report?.mismatches,predictionHash,error:result.stderr.slice(-600)});
 }
