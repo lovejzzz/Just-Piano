@@ -59,6 +59,7 @@ export function bindPreparedSources(bytes, captureSha256) {
       primaryRandomStateStillObserved: !forwardRandom, primaryInitialRandomStateIndependentlyProduced: forwardRandom,
       managerConditionsSupplied: forwardRandom ? {configurationSeed: 0, eventBranch: 'velocity-randomization-enabled', newlyObserved: false} : undefined,
       neighborSystemMathRequired: report.neighborSystemMathRequired,
+      neighborNativeHypotfImplemented: report.neighborNativeHypotfImplemented === true,
       runtimeBranchSupplied: report.decayRuntimeBranchSupplied, wholeEngineEquivalent: false},
     consume(record) {
       const key = `${record.epoch}:${record.input.mode}`, row = entries.get(key);

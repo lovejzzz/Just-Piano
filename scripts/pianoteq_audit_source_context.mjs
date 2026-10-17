@@ -86,7 +86,7 @@ for (const record of capture.records) {
     velocity: input.controls?.velocity, attenuation: input.controls?.attenuation,
     blendFloor: input.controls?.blendFloor, inputBlend: input.controls?.inputBlend }) : undefined;
   const neighborControls = neighborOracle ? archiveNeighborControls(mixBank, input.note,
-    {runtimeMode: 'linear-clamp', hypotf: nativeMath('hypotf'), atan2f: nativeMath('atan2f')}) : undefined;
+    {runtimeMode: 'linear-clamp', atan2f: nativeMath('atan2f')}) : undefined;
   const neighbor = neighborControls ? mixNeighborExcitation({amplitude: mix.amplitude, phase: predicted.phase, columns: predicted.cols},
     {...neighborControls, floor: input.controls.blendFloor, blend: input.controls.inputBlend,
       mix: Math.max(Math.fround(input.controls.blendFloor), Math.fround(input.controls.inputBlend))}) : undefined;
@@ -172,6 +172,7 @@ const result = {passed: mismatches === 0 && randomStateMismatches === 0, compati
   mixArchiveIndex: mixArchive?.[1], mixRuntimeCurveModeSupplied: mixBank ? 'linear-clamp' : undefined,
   mixRuntimeCurveModeNewlyObserved: false, interveningSourceTransformsFullyReconstructed: false,
   neighborControlsComputedFromArchive: Boolean(neighborOracle), neighborSystemMathRequired: Boolean(neighborOracle),
+  neighborNativeHypotfImplemented: Boolean(neighborOracle),
   neighborOracleSha256: neighborOracle ? sha(fs.readFileSync(neighborOracle)) : undefined,
   neighborMathCalls: [...mathCalls.values()], decayPreparationReconstructed: false,
   decayPreparationComputedForSuppliedBranch: Boolean(decayPreset),

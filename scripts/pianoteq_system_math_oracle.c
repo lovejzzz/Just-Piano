@@ -23,6 +23,16 @@ static void print_bits(double value) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "hypotf-bulk")) {
+        uint32_t a, b, output;
+        while (scanf("%x %x", &a, &b) == 2) {
+            float x, y, value;
+            memcpy(&x, &a, 4); memcpy(&y, &b, 4);
+            value = hypotf(x, y); memcpy(&output, &value, 4);
+            printf("%08x\n", output);
+        }
+        return ferror(stdin) || ferror(stdout) ? 3 : 0;
+    }
     if (argc < 3) return 2;
     volatile double x = decode(argv[2]);
     volatile double y = argc > 3 ? decode(argv[3]) : 0;

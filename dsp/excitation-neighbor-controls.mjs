@@ -1,12 +1,13 @@
 // 1c5a98..1c5b3c: two complex base curves become log-magnitude/angle.
-// Float hypot/atan2 implementations are explicit unresolved math dependencies.
+// Float atan2 remains an explicit unresolved math dependency.
 import {linearModelCurve} from './model-curves.mjs';
 import {nativeScalarLogf} from './native-scalar-log.mjs';
 import {fma32} from './modal-kernel.mjs';
 import {nativeScalarExp} from './native-scalar-exp.mjs';
+import {nativeScalarHypotf} from './native-scalar-hypot.mjs';
 const f = Math.fround;
 
-export function archiveNeighborControls(bank, note, {runtimeMode, hypotf, atan2f} = {}) {
+export function archiveNeighborControls(bank, note, {runtimeMode, hypotf = nativeScalarHypotf, atan2f} = {}) {
   if (typeof hypotf !== 'function' || typeof atan2f !== 'function')
     throw new TypeError('Explicit native float hypotf and atan2f dependencies required');
   const pairs = [0x1928, 0x1978].map(offset => {
