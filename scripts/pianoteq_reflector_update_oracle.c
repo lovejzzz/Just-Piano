@@ -18,6 +18,7 @@ static double reflect(double *a,int rows,int cols,int rs,int re,int cs,int ce,do
  }
  return beta;
 }
+#ifndef PIANOTEQ_REFLECTOR_ORACLE_NO_MAIN
 int main(void){char op;while(scanf(" %c",&op)==1){int rows,cols,rs,re,cs,ce,n;double a[512],v[32],w[32],wr[32];
  if(op=='h'){
   if(scanf("%d",&n)!=1||n<0||n>12)return 10;for(int i=0;i<2*n*n;i++)a[i]=readnumber();printf("ok ");
@@ -31,3 +32,4 @@ int main(void){char op;while(scanf(" %c",&op)==1){int rows,cols,rs,re,cs,ce,n;do
   n=op=='l'?re-rs:ce-cs;for(int i=0;i<2*n;i++)v[i]=readnumber();for(int i=0;i<2*rows*cols;i++)a[i]=readnumber();
   double beta=reflect(a,rows,cols,rs,re,cs,ce,v,op=='l',w);printf("ok ");word(beta);int m=op=='l'?ce-cs:re-rs;for(int i=0;i<2*m;i++)word(w[i]);for(int i=0;i<2*rows*cols;i++)word(a[i]);
  }else return 12;putchar('\n');}return 0;}
+#endif

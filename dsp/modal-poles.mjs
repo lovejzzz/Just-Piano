@@ -1,8 +1,9 @@
-// Arithmetic recovered from 476298 / 6d2c10. Root iteration is an independent
-// Durand–Kerner implementation, NOT the native 484ce4 eigensolver.
+// Arithmetic recovered from 476298 / 6d2c10. Native finite N2/N3 root routes
+// are explicit; legacy default remains independent Durand–Kerner.
 import {fma64} from './native-double-fma.mjs';
 export {fma64} from './native-double-fma.mjs';
 import {solveNativeQuadratic} from './native-small-eigen.mjs';
+import {solveNativeCubic,nativeQrTolerance} from './native-cubic-qr.mjs';
 import {singleComponentPole} from './single-component-pole.mjs';
 function multiplyLinear(a, [constant, slope]) {
   const result = Array(a.length + 1).fill(0);
@@ -110,8 +111,11 @@ export function coupledModes(lambda, parameters) {
   if (lambda.length === 1) return singleComponentPole(parameters);
   const built = buildCoupledCoefficients(lambda, parameters);
   const algorithm=parameters.rootAlgorithm??'independent-durand-kerner';
-  if(!['independent-durand-kerner','native-quadratic-block'].includes(algorithm))throw new RangeError('Unknown pole root algorithm');
-  const solved = algorithm==='native-quadratic-block'
+  if(!['independent-durand-kerner','native-quadratic-block','native-qr'].includes(algorithm))throw new RangeError('Unknown pole root algorithm');
+  const solved = algorithm==='native-qr'
+    ? (lambda.length===2?solveNativeQuadratic(built.coefficients,{tolerance:parameters.rootTolerance??nativeQrTolerance})
+      :solveNativeCubic(built.coefficients,{tolerance:parameters.rootTolerance,absoluteFloor:parameters.rootAbsoluteFloor}))
+    : algorithm==='native-quadratic-block'
     ? solveNativeQuadratic(built.coefficients,{tolerance:parameters.rootTolerance})
     : solveCoupledPolynomial(built.coefficients);
   return { ...rootsToFrequencyDecay(solved.roots, parameters.center, parameters.decay_floor_ratio), ...built, solver: solved };
