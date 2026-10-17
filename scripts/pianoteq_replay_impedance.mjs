@@ -1,3 +1,4 @@
+import {nativeDoubleSinCos} from '../dsp/native-double-sincos.mjs';
 import {nativeDoubleTan} from '../dsp/native-double-tan.mjs';
 import {nativeDoubleLog} from '../dsp/native-double-log.mjs';
 import {nativeScalarLog2f} from '../dsp/native-scalar-log2.mjs';
@@ -8,13 +9,14 @@ import { spawnSync } from 'node:child_process';
 import { modalImpedance, couplingJitterFactors } from '../dsp/modal-impedance.mjs';
 import { impedanceControls } from '../dsp/impedance-controls.mjs';
 const argumentsOnly = [], additionalReturnPaths = [];
-let nativeDoubleExpMode=false,nativeDoubleLogMode=false,nativeLog2fMode=false,nativeDoubleTanMode=false;const computedDoubleExpCalls=[],computedMathCalls=[];
+let nativeDoubleExpMode=false,nativeDoubleLogMode=false,nativeLog2fMode=false,nativeDoubleTanMode=false,nativeDoubleSinCosMode=false;const computedDoubleExpCalls=[],computedMathCalls=[];
 let sourcePolesPath, sourceControlsPath, baseModelsPath, presetPath, couplingInputReportPath, baseModelIndex = 0;
 for (let i = 2; i < process.argv.length; i++) {
   if(process.argv[i]==='--native-double-exp'){if(nativeDoubleExpMode)throw new Error('Duplicate native double exp option');nativeDoubleExpMode=true;}
   else if(process.argv[i]==='--native-double-log'){if(nativeDoubleLogMode)throw new Error('Duplicate native double log option');nativeDoubleLogMode=true;}
   else if(process.argv[i]==='--native-log2f'){if(nativeLog2fMode)throw new Error('Duplicate native log2f option');nativeLog2fMode=true;}
   else if(process.argv[i]==='--native-double-tan'){if(nativeDoubleTanMode)throw new Error('Duplicate native double tan option');nativeDoubleTanMode=true;}
+  else if(process.argv[i]==='--native-double-sincos'){if(nativeDoubleSinCosMode)throw new Error('Duplicate native double sincos option');nativeDoubleSinCosMode=true;}
   else if (process.argv[i] === '--additional-return') {
     if (!process.argv[i + 1]) throw new Error('Missing additional return capture path');
     additionalReturnPaths.push(process.argv[++i]);
@@ -50,10 +52,10 @@ const cache = new Map(), oracleCalls = [];
 const math = Object.fromEntries(['log2f', 'exp', 'sincos', 'tan', 'pow', 'log'].map(name => [name, (...values) => {
   const inputs = values.map(bits), key = [name, ...inputs].join(':');
   if (!cache.has(key)) {
-   const native=name==='exp'&&nativeDoubleExpMode?nativeDoubleExp:name==='log'&&nativeDoubleLogMode?nativeDoubleLog:name==='log2f'&&nativeLog2fMode?nativeScalarLog2f:name==='tan'&&nativeDoubleTanMode?nativeDoubleTan:null;
+   const native=name==='exp'&&nativeDoubleExpMode?nativeDoubleExp:name==='log'&&nativeDoubleLogMode?nativeDoubleLog:name==='log2f'&&nativeLog2fMode?nativeScalarLog2f:name==='tan'&&nativeDoubleTanMode?nativeDoubleTan:name==='sincos'&&nativeDoubleSinCosMode?nativeDoubleSinCos:null;
    if(native){
     if(values.length!==1)throw new Error('One native math argument required');
-    const predicted=native(values[0]),call={operation:name,inputs,outputs:[bits(predicted)]};cache.set(key,predicted);computedMathCalls.push(call);if(name==='exp')computedDoubleExpCalls.push(call);
+    const predicted=native(values[0]),outputs=name==='sincos'?[bits(predicted.sin),bits(predicted.cos)]:[bits(predicted)],call={operation:name,inputs,outputs};cache.set(key,predicted);computedMathCalls.push(call);if(name==='exp')computedDoubleExpCalls.push(call);
    }else{
     const run = spawnSync(oracle, [name, ...inputs], { encoding: 'utf8' });
     if (run.status !== 0) throw new Error(`Host math oracle failed: ${run.stderr}`);
@@ -195,6 +197,7 @@ const result = {
   archiveDistinctConfigurations: archivePrepared.size, archiveDistinctControlValues: archivePrepared.size * 4,
   archiveDistinctPhaseValues: [...archivePrepared.values()].reduce((n, source) => n + source.phaseCurve.x.length + source.phaseCurve.y.length, 0),
   nativeDoubleTanComputed:nativeDoubleTanMode,computedDoubleTanUniqueCalls:computedMathCalls.filter(c=>c.operation==='tan').length,
+  nativeDoubleSinCosComputed:nativeDoubleSinCosMode,computedDoubleSinCosUniqueCalls:computedMathCalls.filter(c=>c.operation==='sincos').length,
   nativeDoubleLogComputed:nativeDoubleLogMode,nativeLog2fComputed:nativeLog2fMode,computedDoubleLogUniqueCalls:computedMathCalls.filter(c=>c.operation==='log').length,computedLog2fUniqueCalls:computedMathCalls.filter(c=>c.operation==='log2f').length,computedMathCalls,
   nativeDoubleExpComputed:nativeDoubleExpMode,computedDoubleExpCalls,computedDoubleExpUniqueCalls:computedDoubleExpCalls.length,mathExpDifferencesOnComputedCalls:computedDoubleExpCalls.filter(c=>bits(Math.exp(decode(c.inputs[0])))!==c.outputs[0]).length,
   platformTranscendentalOracleRequired: true, oracleUniqueCalls: oracleCalls.length,
