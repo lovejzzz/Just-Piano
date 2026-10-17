@@ -140,8 +140,8 @@ const result = {
   sourceControlsToLambdaReconstructed: true, complexCouplingParameterProducerReconstructed: Boolean(impedanceReport),
   reconstructedCouplingValues, reconstructedCouplingMismatches,
   fourCouplingArgumentsReconstructed: impedanceReport?.fourArgumentsReconstructed === true,
-  couplingSource: impedanceReport ? 'archive impedance calculation and deterministic jitter with platform math oracle' : 'captured p/q parameters',
-  platformTranscendentalOracleRequired: Boolean(impedanceReport),
+  couplingSource: impedanceReport ? (impedanceReport.platformTranscendentalOracleRequired === false ? 'archive impedance calculation and deterministic jitter with recovered native math' : 'archive impedance calculation and deterministic jitter with platform math oracle') : 'captured p/q parameters',
+  platformTranscendentalOracleRequired: Boolean(impedanceReport) && impedanceReport.platformTranscendentalOracleRequired !== false,
   checks, failures, passed: failures.length === 0,
 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
