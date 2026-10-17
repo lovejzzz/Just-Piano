@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {initializeSpatialSleep,renderSpatialWithSleep} from '../dsp/voice-spatial-sleep.mjs';
+const zero=()=>Array.from({length:3},()=>new Float32Array(64));
+const rows=()=>Array.from({length:3},()=>({vectors:128,counter:1,taps:Array.from({length:5},()=>({start:0,end:1,c:0,g:1})),ring:new Float32Array(512)}));
+const fade=()=>({start:Math.fround(.003),duration:Math.fround(.01),secondsPerSample:Math.fround(1/48000),counter:624});
+const state=initializeSpatialSleep(77),network=rows(),f=fade();
+assert.deepEqual(renderSpatialWithSleep(zero(),network,f,state).active,[true,true,true]);
+assert.deepEqual([...state.inputCounters],[64,64,64]);
+assert.deepEqual(renderSpatialWithSleep(zero(),network,f,state).active,[true,true,true]);
+const counter=network.map(r=>r.counter),third=renderSpatialWithSleep(zero(),network,f,state);
+assert.equal(third.allInactive,true);assert.deepEqual(network.map(r=>r.counter),counter);assert.deepEqual([...state.outputCounters],[192,192,192]);
+const tiny=zero();tiny[0][10]=-1e-9;const quiet=renderSpatialWithSleep(tiny,network,f,state);
+assert.equal(quiet.output[0][0][10],tiny[0][10]);assert(quiet.output.every(group=>group.slice(1).every(row=>row.every(x=>Object.is(x,0)))));
+const early={...fade(),counter:0};assert.throws(()=>renderSpatialWithSleep(zero(),rows(),early,state),/during fade/);
+assert.throws(()=>initializeSpatialSleep(0),/threshold/);
+console.log('PASS: 77-sample sleep threshold, delayed quiet-output gate, frozen packed state, preserved first row and cleared new rows; unverified early fade rejected (synthetic)');
