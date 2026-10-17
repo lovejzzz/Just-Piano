@@ -18,9 +18,9 @@ const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(captureP
 if(baselineRun.error)throw baselineRun.error;
 if(baselineRun.status!==0)throw new Error('Joint baseline failed: '+baselineRun.stderr.slice(-800));
 const baseline=JSON.parse(fs.readFileSync(baselinePath));
-if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed||base.voiceRattleAudio&&!baseline.rattleAudio?.passed)throw new Error('Full parent and components must pass');
+if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed||base.voiceRattleAudio&&!baseline.rattleAudio?.passed||base.voiceTailEnvelopes&&!baseline.tailEnvelopes?.passed)throw new Error('Full parent and components must pass');
 if(base.voiceRattleAudio&&(!baseline.rattleAudio.births.length||!baseline.rattleAudio.changedOutputSamples||!baseline.rattleAudio.zeroControlTailBlocks))throw new Error('Active Rattle births, changed audio and zero-control tail coverage required');
-const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs,r.cross?.outputs,r.rattleAudio?.outputs])).digest('hex');
+const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs,r.cross?.outputs,r.rattleAudio?.outputs,r.tailEnvelopes?.outputs])).digest('hex');
 const expected=hash(baseline),first=(d,stage)=>d.records.find(r=>r.stage===stage);
 const activePre=d=>{const seen=new Set();for(const r of d.records)if(r.stage==='consumer'&&(d.earlyConsumer||!seen.has(r.epoch))){seen.add(r.epoch);if(r.injectionPre.envelope.active===1)return r;}throw new Error('Active envelope required by this fixture');};
 const activePost=d=>{const pre=activePre(d);return d.records.find(r=>r.stage==='consumerPost'&&r.epoch===pre.epoch&&r.counter===pre.counter);};
@@ -85,6 +85,24 @@ if(base.voiceRattleAudio)cases.push(
  ['missing-rattle-return',d=>{d.records.splice(d.records.indexOf(first(d,'audioReturn')),1);},'reject'],
  ['wrong-rattle-address',d=>{first(d,'audioEntry').site.fileAddress+=4;},'reject'],
  ['unsupported-mid-processor',d=>{first(d,'consumerCross').midControls.primaryProcessorEnabled=1;},'reject'],
+);
+if(base.voiceTailEnvelopes)cases.push(
+ ['terminal-initial-gain-target',d=>{first(d,'audioReturn').tail.primary.gain=.25;},'one-same'],
+ ['terminal-initial-step-target',d=>{first(d,'audioReturn').tail.primary.step=.5;},'one-same'],
+ ['terminal-gain-group-target',d=>{first(d,'audioAfterGains').channels[0][8]+=.125;},'one-same'],
+ ['terminal-gain-auxiliary-target',d=>{first(d,'audioAfterGains').auxiliary.values[0][8]+=.125;},'one-same'],
+ ['terminal-time-group-target',d=>{first(d,'audioTail').channels[0][8]+=.125;},'one-same'],
+ ['terminal-time-auxiliary-target',d=>{first(d,'audioTail').auxiliary.values[0][8]+=.125;},'one-same'],
+ ['terminal-gain-state-target',d=>{first(d,'audioAfterGains').tail.primary.gain=.25;},'one-same'],
+ ['terminal-double-state-target',d=>{first(d,'audioTail').tail.time.value=Number.MIN_VALUE;},'one-same'],
+ ['terminal-time-state-target',d=>{first(d,'audioTail').tail.time.counter++;},'one-same'],
+ ['terminal-auxiliary-entry-source',d=>{first(d,'audioReturn').auxiliary.values[0][8]+=.125;},'many-different'],
+ ['terminal-time-envelope-source',d=>{const t=first(d,'audioReturn').tail.time;t.enabled=1;t.attack=1;t.attackRate=.5;},'many-different'],
+ ['terminal-nonzero-initial-time',d=>{first(d,'audioReturn').tail.time.counter++;},'reject'],
+ ['missing-terminal-gain-stage',d=>{d.records.splice(d.records.indexOf(first(d,'audioAfterGains')),1);},'reject'],
+ ['missing-terminal-time-stage',d=>{d.records.splice(d.records.indexOf(first(d,'audioTail')),1);},'reject'],
+ ['unsupported-terminal-special',d=>{first(d,'audioReturn').tail.special=true;},'reject'],
+ ['wrong-terminal-address',d=>{first(d,'audioTail').site.fileAddress+=4;},'reject'],
 );
 if(base.consumerCross){
  const auxiliaryKept=!!(first(base,'consumerPost').crossControls.keepAuxiliary&1);

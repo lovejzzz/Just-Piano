@@ -21,6 +21,8 @@ POLL_WORKER=os.environ.get('PIANOTEQ_READ_STOPPED_WORKERS')=='1'
 assert not POLL_WORKER or DEFER
 AUDIO=os.environ.get('PIANOTEQ_VOICE_RATTLE_AUDIO')=='1'
 assert not AUDIO or EARLY and DEFER
+TAIL=os.environ.get('PIANOTEQ_VOICE_TAIL_ENVELOPES')=='1'
+assert not TAIL or AUDIO
 if AUDIO:
  from pianoteq_capture_voice_mid import controls as mid_controls,groups as mid_groups
  from pianoteq_capture_rattle_burst import state as rattle_state,samples as audio_samples
@@ -39,6 +41,7 @@ def save(force=False):
  if not force and not errors and not base.complete and len(records)-last_saved_rows<256:return
  data={'schema':1,'sourceCommits':True,'sourceDispatchGates':True,'consumerCross':CROSS,'allObservationBarriers':CROSS,'consumerPost':True,'consumerDelay':True,'consumerInjection':True,'injectionEntryObserved':False,'dispatchControls':True,'workerOutputs':True,'windowBlocks':None,'fixedSites':False,'siteCount':6,'records':records,'errors':errors,'starts':base.starts,'spectrumCount':base.spectrum_calls,'finalCount':base.final_calls,'copyCount':base.copies,'initializations':len(base.initialized),'envelopeBlocks':base.blocks,'duplicateEnvelopeReturns':base.duplicates,'envelopePending':len(base.envelope_pending),'coefficientCount':base.coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='envelopeResult' and 'render' in r for r in records),'pending':len(base.pending),'complete':base.complete,'activeSites':sum(h.IsEnabled() for h in hooks.values()),'transitions':base.transitions,'slotTransitions':slot_transitions,'sourceRole':source_role,'sourcePending':source_pending,'postPending':post_pending,'slotBarriers':True,'acknowledgedTransitions':acknowledged_transitions}
  if EARLY:data.update(earlyConsumer=True,groupControlPending=group_pending,groupEnvelopeControl=True,slotUpdatesDeferred=DEFER,pendingSlotUpdates=len(slot_updates),workerInteriorSites=INTERIOR,readStoppedWorkerFrames=POLL_WORKER,stoppedWorkerReads=stopped_worker_reads)
+ if TAIL:data.update(voiceTailEnvelopes=True)
  if AUDIO:data.update(voiceRattleAudio=True,audioPending=len(audio_pending),observedRattleTables=True,rattleTableCount=len(audio_tables))
  (ROOT/'runtime.json').write_text(json.dumps(data,indent=None if CROSS else 2,allow_nan=False));last_saved_rows=len(records)
 base.save=save
@@ -79,6 +82,14 @@ def channels(frame):
   d=m+8+56*i;rows,stride,n,sample_stride=unpack(frame,d,'IIII');assert rows==1 and n==64
   result.append(list(unpack(frame,scalar(frame,d+16,'Q'),'f'*64)))
  return result
+
+def tail_states(frame,h):
+ def env(offset):
+  a=h+offset
+  return dict(zip(('period','slope','scale','gain','step','target'),unpack(frame,a,'ffffff')),enabled=scalar(frame,a+0x18,'B'),ready=scalar(frame,a+0x19,'B'))
+ a=h+0x2d88
+ return {'special':scalar(frame,h+0xc68,'Q')!=0,'specialReady':scalar(frame,h+0xced,'B'),'specialLevel':scalar(frame,h+0xce0),'specialLimit':scalar(frame,h+0xce8),'secondaryEnabled':scalar(frame,h+0x160,'B'),'activationAge':scalar(frame,h+0x2eb8,'Q'),
+         'primary':env(0xc80),'secondary':env(0xcd4),'time':dict(enabled=scalar(frame,a,'B'),delay=scalar(frame,a+4,'I'),attack=scalar(frame,a+8,'I'),decay=scalar(frame,a+12,'I'),counter=scalar(frame,a+16,'I'),attackRate=scalar(frame,a+24,'d'),decayRate=scalar(frame,a+32,'d'),value=scalar(frame,a+40,'d'))}
 
 def observed(frame,location,_):
  global source_role,source_pending,post_pending,main_thread,source_started,group_pending
@@ -146,10 +157,19 @@ def observed(frame,location,_):
    if AUDIO:
     assert thread==main_thread and thread not in audio_pending
     matrix=register(frame,'x23');records[-1]['midControls']=mid_controls(frame,h)
-    audio_pending[thread]={'voice':h,'counter':age,'matrix':matrix,'phase':'cross'}
+    audio_pending[thread]={'voice':h,'counter':age,'matrix':matrix,'auxiliary':register(frame,'x21'),'phase':'cross'}
     next_name,address='audioGain',0x100460c84
    replace(frame,name,next_name,address)
    if EARLY:source_role=next_name
+  elif name in ('audioAfterGains','audioTail'):
+   assert TAIL and thread==main_thread
+   c=audio_pending[thread];h=c['voice'];age=scalar(frame,h+0x6c,'I')
+   assert age==c['counter'] and register(frame,'x19')==h and register(frame,'x23')==c['matrix'] and register(frame,'x21')==c['auxiliary']
+   assert c['phase']==('return' if name=='audioAfterGains' else 'afterGains')
+   records.append({'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'channels':mid_groups(frame,c['matrix']),'auxiliary':auxiliary_matrix(frame,c['auxiliary']),'tail':tail_states(frame,h)})
+   if name=='audioAfterGains':c['phase']='afterGains';next_name,address='audioTail',0x100460f1c
+   else:audio_pending.pop(thread);next_name,address='rattleSource',0x10085ed9c
+   replace(frame,name,next_name,address);source_role=next_name
   elif name in ('audioGain','audioEntry','audioReturn'):
    assert AUDIO and thread==main_thread
    c=audio_pending[thread];h=c['voice'];age=scalar(frame,h+0x6c,'I');assert age==c['counter']
@@ -172,7 +192,10 @@ def observed(frame,location,_):
    else:
     assert c['phase']=='entry' and register(frame,'x19')==c['obj'] and register(frame,'x20')==c['descriptor']
     row.update(output=audio_samples(frame,c['descriptor']),state=rattle_state(frame,c['obj']))
-    audio_pending.pop(thread);next_name,address='rattleSource',0x10085ed9c
+    if TAIL:
+     row.update(auxiliary=auxiliary_matrix(frame,c['auxiliary']),tail=tail_states(frame,h))
+     c['phase']='return';next_name,address='audioAfterGains',0x100460f08
+    else:audio_pending.pop(thread);next_name,address='rattleSource',0x10085ed9c
    records.append(row);replace(frame,name,next_name,address);source_role=next_name
   else:
    begin=len(records);result=base.observed(frame,location,_)
@@ -225,7 +248,7 @@ def finish(debugger):
   if EARLY:
    assert expected==[r['counter'] for r in records if r['stage']=='copy' and r['epoch']==epoch]
   if AUDIO:
-   for stage in ('audioGain','audioEntry','audioReturn'):assert expected==[r['counter'] for r in records if r['stage']==stage and r['epoch']==epoch]
+   for stage in ('audioGain','audioEntry','audioReturn')+(('audioAfterGains','audioTail') if TAIL else ()):assert expected==[r['counter'] for r in records if r['stage']==stage and r['epoch']==epoch]
  base.finish();window_complete=True
 
 def resume_owned_stops(debugger):

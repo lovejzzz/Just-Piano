@@ -56,6 +56,7 @@ function validateEarlyCommitSlots(data,resumes){
  if(data.voiceRattleAudio===true){
   if(data.audioPending||!data.observedRattleTables||!data.rattleTableCount)throw new Error('Complete Rattle audio capture required');
   Object.assign(a,{audioGain:0x100460c84,audioEntry:0x10030bd30,audioReturn:0x10030c104});
+  if(data.voiceTailEnvelopes===true)Object.assign(a,{audioAfterGains:0x100460f08,audioTail:0x100460f1c});
  }
  if(data.workerInteriorSites===true){
   if(data.slotUpdatesDeferred!==true)throw new Error('Interior worker sites require deferred updates');
@@ -115,7 +116,7 @@ function validateEarlyCommitSlots(data,resumes){
    if(role==='before')allowed=t.oldRole==='rattleSource'&&t.newRole==='weights'||t.oldRole==='copy'&&t.newRole==='groupControl';
    else if(role==='rattleSource'&&t.oldRole==='groupControl'&&t.newRole==='copy')allowed=true;
    else if(role===t.oldRole){
-    allowed=role==='weights'&&t.newRole==='rattleSource'||role==='rattleSource'&&t.newRole==='rattleEntry'||event.stage==='rattleGate'&&event.route===rattleDispatchRoute(event.kind,event.flag,event.multi)&&t.newRole===routeRoles[event.route]||role==='rattleSkip'&&t.newRole==='rattleSource'||role==='rattleCommit'&&event.caller==='0x100460260'&&t.newRole==='consumer'||role==='consumer'&&t.newRole==='consumerPost'||role==='consumerPost'&&t.newRole==='consumerCross'||role==='consumerCross'&&t.newRole===(data.voiceRattleAudio?'audioGain':'rattleSource')||data.voiceRattleAudio&&(role==='audioGain'&&t.newRole==='audioEntry'||role==='audioEntry'&&t.newRole==='audioReturn'||role==='audioReturn'&&t.newRole==='rattleSource')||role==='groupControl'&&t.newRole==='groupControlAfter'||role==='groupControlAfter'&&t.newRole==='groupControl';
+    allowed=role==='weights'&&t.newRole==='rattleSource'||role==='rattleSource'&&t.newRole==='rattleEntry'||event.stage==='rattleGate'&&event.route===rattleDispatchRoute(event.kind,event.flag,event.multi)&&t.newRole===routeRoles[event.route]||role==='rattleSkip'&&t.newRole==='rattleSource'||role==='rattleCommit'&&event.caller==='0x100460260'&&t.newRole==='consumer'||role==='consumer'&&t.newRole==='consumerPost'||role==='consumerPost'&&t.newRole==='consumerCross'||role==='consumerCross'&&t.newRole===(data.voiceRattleAudio?'audioGain':'rattleSource')||data.voiceRattleAudio&&(role==='audioGain'&&t.newRole==='audioEntry'||role==='audioEntry'&&t.newRole==='audioReturn'||role==='audioReturn'&&t.newRole===(data.voiceTailEnvelopes?'audioAfterGains':'rattleSource')||data.voiceTailEnvelopes&&(role==='audioAfterGains'&&t.newRole==='audioTail'||role==='audioTail'&&t.newRole==='rattleSource'))||role==='groupControl'&&t.newRole==='groupControlAfter'||role==='groupControlAfter'&&t.newRole==='groupControl';
     if(role==='weights'&&allowed)sourceStarts++;
     if(role==='rattleCommit'&&allowed)consumerStarts++;
     if(role==='groupControl'&&allowed)controls++;

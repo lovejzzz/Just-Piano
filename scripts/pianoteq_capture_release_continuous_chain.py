@@ -235,7 +235,7 @@ def observed(frame,location,_):
      for group,(start,_,_,logical) in enumerate(result['postState']['groups']):
       for lane in range(start,(start+logical+3)//4*4):result['postState']['lanes'].append({'lane':lane,'group':group,**{k:scalar(frame,p+lane*4) for k,p in pointers.items()}})
     records.append(result);envelope_completed[thread]=result;blocks+=1
-  assert len(records)<50000 and all(h.IsEnabled() for h in hooks.values())
+  assert len(records)<(60000 if os.environ.get('PIANOTEQ_VOICE_TAIL_ENVELOPES')=='1' else 50000) and all(h.IsEnabled() for h in hooks.values())
   if len(records)%128==0:save()
   return False
  except Exception:

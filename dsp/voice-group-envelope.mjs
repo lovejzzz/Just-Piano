@@ -24,7 +24,8 @@ export function activateVoiceGroupEnvelope(state,strength){
  const speed=f(f(-f(f(state.rate)*Math.max(f(strength),fromBits(0x358637bd))))/f(state.duration));
  state.step=speed===0?1:nativeScalarExp(f(speed*fromBits(0x3debc8e3)));
 }
-function ramp(input,gain,step){
+export function renderVoiceMultiplicativeRamp(input,gain,step){
+ if(!input.length||input.length%16||!Number.isFinite(gain)||!Number.isFinite(step)||!input.every(Number.isFinite))throw new Error('Aligned finite multiplicative ramp required');
  gain=gain<minimumGain?0:f(gain);step=f(step);step=step<minimumStep?0:step;
  const lanes=[gain];for(let i=1;i<4;i++)lanes.push(f(step*lanes[i-1]));
  const square=f(step*step),stride=f(square*square),output=new Float32Array(input.length);
@@ -36,7 +37,7 @@ export function renderVoiceGroupEnvelope(groups,state){
  const start=f(state.gain),active=state.active===1;state.gain=start;state.step=f(state.step);
  return groups.map(input=>{
   if(!active)return Float32Array.from(input,x=>f(f(x)*start));
-  const result=ramp(input,start,state.step);state.gain=result.gain;state.elapsed=(state.elapsed+input.length)>>>0;
+  const result=renderVoiceMultiplicativeRamp(input,start,state.step);state.gain=result.gain;state.elapsed=(state.elapsed+input.length)>>>0;
   if(state.elapsed>state.duration)state.active=0;
   return result.output;
  });
