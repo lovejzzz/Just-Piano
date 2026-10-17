@@ -46,8 +46,9 @@ export function prepareModalInputs({ frequency, offsets, offsetExponent, stiffne
     for (const value of scaledOffsets) sum = f32(sum + value);
     const mean = f32(sum / f32(count));
     const divisor = Math.sqrt(stiffness + 1);
-    endpoints.push({ kind: 'coupled', reference: frequency / divisor,
-      base: f32(f32(frequency + mean) / f32(frequencyRatios[0])) / divisor,
+    const referenceFrequency=f32(f32(frequency+mean)/f32(frequencyRatios[0]));
+    endpoints.push({ kind: 'coupled', reference: frequency / divisor,referenceFrequency,
+      base: referenceFrequency / divisor,
       stiffness, offsets: scaledOffsets, spread: spreadVector });
   }
   if (blend < 1) {
@@ -55,12 +56,13 @@ export function prepareModalInputs({ frequency, offsets, offsetExponent, stiffne
       const componentB = f32(componentStiffness[Math.min(j, componentStiffness.length - 1)]);
       const ratio = f32(frequencyRatios[Math.min(j, frequencyRatios.length - 1)]);
       const divisor = Math.sqrt(componentB + 1);
-      endpoints.push({ kind: 'separate', component: j, reference: frequency / divisor,
-        base: f32(f32(frequency + scaledOffsets[j]) / ratio) / divisor,
+      const referenceFrequency=f32(f32(frequency+scaledOffsets[j])/ratio);
+      endpoints.push({ kind: 'separate', component: j, reference: frequency / divisor,referenceFrequency,
+        base: referenceFrequency / divisor,
         stiffness: componentB, offsets: scaledOffsets.slice(j, j + 1), spread: spreadVector.slice(j, j + 1) });
     }
   }
-  return { scaledOffsets, spreadVector, endpoints, nativeOffsetScale: f32(offsetScale), offsetScaleComputed };
+  return { scaledOffsets, spreadVector, endpoints, blend, nativeOffsetScale: f32(offsetScale), offsetScaleComputed };
 }
 
 export function modePoleInputs({ reference, base, stiffness, mode, offsets, spread }) {
