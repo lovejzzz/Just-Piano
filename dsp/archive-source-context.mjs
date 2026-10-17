@@ -9,6 +9,7 @@ import {archiveModalSource,prepareModalInputs} from './modal-source.mjs';
 import {archiveAmplitudeControls} from './source-amplitude-controls.mjs';
 import {archivePhaseAmount} from './source-phase-controls.mjs';
 import {prepareEndpointSourceTables} from './endpoint-source-reference.mjs';
+import {archiveWeightControls} from './source-weight-controls.mjs';
 const contexts=new WeakMap(),f=Math.fround;
 const registryNames=['middleWeight','gramScale','pitchScale','referenceNote','anchorMultiplier'];
 const physicalCurveNames=['B1b40','B1b98','B2560','A490','A4e0','Af48'];
@@ -94,4 +95,9 @@ export function prepareArchiveIndependentTables(context,{note,noteIndex=note,amp
   const tables=prepareEndpointSourceTables({prepared:source.prepared,independentSource,phaseOffsets});
   return {...tables,archivePhysicalSourceComputed:true,archiveTuningComputed:true,archiveAmplitudeSourceComputed:true,
     harmonicWeightsComputed:false,registryConstantsExplicit:true};
+}
+
+export function archiveNoteWeightControls(context,{note,runtimeCurveModes}) {
+  const own=state(context);
+  return archiveWeightControls({baseFields:own.baseFields,presetFields:own.presetFields,note,runtimeCurveModes});
 }

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {constructArchiveSourceContext,archiveSourceContextAudit,archiveTunedNote,archiveNoteSourceInputs,prepareArchiveIndependentTables} from '../dsp/archive-source-context.mjs';
+import {constructArchiveSourceContext,archiveSourceContextAudit,archiveTunedNote,archiveNoteSourceInputs,prepareArchiveIndependentTables,archiveNoteWeightControls} from '../dsp/archive-source-context.mjs';
 const scalar={flags:0,special:0,dimension:1},curve=x=>({x:[0,127],y:[x,x]}),field=(object_offset,value)=>({object_offset,value});
 const physicalNames=['B1b40','B1b98','B2560','A490','A4e0','Af48'];
 const sourceCurveModes=Object.fromEntries(physicalNames.map(k=>[k,scalar]));
@@ -13,12 +13,18 @@ const baseFields=[field(0x2548,model),field(0x1b40,{x:[],y:[]}),field(0x1b98,cur
 const presetFields=[field(0x1398,0),field(0xf40,10),field(0xf48,curve(1)),field(0x470,{a:1,b:1,c:0,curves_ab:[curve(1),curve(0)],curve_c:curve(0)}),
  field(0x318,{kind:1,controls:[1,0],values:Array.from({length:12},(_,i)=>(i+1)*100),midi:{float:440,flag:70,notes:[60,69],map:[]}}),
  field(0x3b0,curve(0)),field(0x46c,0),field(0x458,0),field(0x400,{index:12,curve:curve(1)}),field(0x588,{curves:[curve(1),curve(1),curve(1)],scalars:[1,1,1]})];
+baseFields.push(field(0x17d8,curve(1)),field(0x1828,curve(10000)),field(0x1878,curve(2000)),field(0x18c8,0));
+presetFields.push(field(0x8a0,1),field(0x8a8,curve(1)),field(0x1024,1),field(0x1020,1));
+const weightArgs={note:69,runtimeCurveModes:Object.fromEntries(['B17d8','A8a8','B1828','B1878'].map(k=>[k,scalar]))};
 const args={baseFields,presetFields,sourceCurveModes,stretchCurveMode:scalar,pitchCurveMode:scalar,
  registry:{middleWeight:2,gramScale:1,pitchScale:1,referenceNote:69,anchorMultiplier:1}};
 assert.throws(()=>constructArchiveSourceContext({...args,registry:undefined}));
 assert.throws(()=>constructArchiveSourceContext({...args,sourceCurveModes:{}}));
 const context=constructArchiveSourceContext(args),audit=archiveSourceContextAudit(context);
 assert.equal(audit.stiffnessTable.length,128);assert.ok(audit.stiffnessTable.every(x=>x===0));assert.equal(audit.stretchTable.length,128);
+assert.deepEqual(archiveNoteWeightControls(context,weightArgs).controls,{s0:1,s1:1,s2:10000,s3:2000});
+presetFields.find(x=>x.object_offset===0x8a0).value=2;
+assert.equal(archiveNoteWeightControls(context,weightArgs).controls.s1,1);
 const first=archiveTunedNote(context,{note:69});assert.ok(Math.abs(first.frequency-440)<.001);
 const amplitudeCurveModes=Object.fromEntries(['B25b0','B26f0','B2790','A530'].map(k=>[k,scalar]));
 const noteArgs={note:69,amplitudeCurveModes,instrumentMode:1,phaseCurveMode:scalar};
@@ -42,6 +48,7 @@ try{
  for(const k of Object.keys(originals))Math[k]=()=>{throw new Error('JS transcendental fallback forbidden');};
  changed=constructArchiveSourceContext(args);changedNote=archiveTunedNote(changed,{note:69});
 }finally{Object.assign(Math,originals);}
+assert.equal(archiveNoteWeightControls(changed,weightArgs).controls.s1,2);
 assert.equal(changedNote.frequency,Math.fround(first.frequency*2));
 assert.throws(()=>prepareArchiveIndependentTables(changed,{...noteArgs,weights:[1,1,1],integerScale:1,phaseConstant:Math.PI}));
 assert.throws(()=>archiveSourceContextAudit({...context}));

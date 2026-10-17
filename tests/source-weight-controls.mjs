@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {archiveWeightControls} from '../dsp/source-weight-controls.mjs';
+const field=(object_offset,value)=>({object_offset,value}),constant=v=>({x:[],y:[v]});
+const baseFields=[field(0x17d8,{x:[0,127],y:[.25,2]}),field(0x1828,constant(10000)),field(0x1878,constant(2000)),field(0x18c8,0)];
+const presetFields=[field(0x8a0,2),field(0x8a8,constant(.5)),field(0x1024,0),field(0x1020,.25)];
+const runtimeCurveModes=Object.fromEntries(['B17d8','A8a8','B1828','B1878'].map(k=>[k,{flags:0,special:0,dimension:1}]));
+const run=note=>archiveWeightControls({baseFields,presetFields,note,runtimeCurveModes});
+assert.deepEqual(run(0).controls,{s0:1,s1:.25,s2:10000,s3:2000});
+assert.equal(run(127).controls.s1,2);
+presetFields.find(r=>r.object_offset===0x1024).value=1;assert.equal(run(69).controls.s0,.25);
+presetFields.find(r=>r.object_offset===0x1024).value=0;baseFields.at(-1).value=1;assert.equal(run(69).controls.s0,.25);
+presetFields[0].value=100;assert.equal(run(127).controls.s1,10);
+presetFields[0].value=-1;assert.equal(run(127).controls.s1,Math.fround(.1));
+assert.throws(()=>run(NaN),/note/);
+assert.throws(()=>archiveWeightControls({baseFields,presetFields,note:69}),/mode/);
+console.log('Archive weight controls: argument origins, activation and float clamp passed');
