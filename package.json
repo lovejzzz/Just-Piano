@@ -4,7 +4,7 @@
   "private": true,
   "description": "Independent modal piano for the browser",
   "scripts": {
-    "test": "node tests/engine.cjs && node tests/modal-arithmetic.mjs",
+    "test": "node tests/engine.cjs && node tests/modal-arithmetic.mjs && node tests/voice-group-envelope.mjs",
     "test:browser": "node tests/browser.cjs",
     "serve": "python3 -m http.server 8000"
   },

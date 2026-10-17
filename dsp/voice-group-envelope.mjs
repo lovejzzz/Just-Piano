@@ -25,7 +25,7 @@ export function activateVoiceGroupEnvelope(state,strength){
  state.step=speed===0?1:nativeScalarExp(f(speed*fromBits(0x3debc8e3)));
 }
 function ramp(input,gain,step){
- gain=gain<minimumGain?0:f(gain);step=Math.max(minimumStep,f(step));
+ gain=gain<minimumGain?0:f(gain);step=f(step);step=step<minimumStep?0:step;
  const lanes=[gain];for(let i=1;i<4;i++)lanes.push(f(step*lanes[i-1]));
  const square=f(step*step),stride=f(square*square),output=new Float32Array(input.length);
  for(let i=0;i<input.length;i+=4)for(let lane=0;lane<4;lane++){output[i+lane]=f(lanes[lane]*f(input[i+lane]));lanes[lane]=f(lanes[lane]*stride);}
