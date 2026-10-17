@@ -7,8 +7,8 @@ import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {constructModalSource} from '../dsp/modal-source.mjs';
 const [root, directory, ...extra] = process.argv.slice(2);
-if (!directory || extra.length > 1 || extra.some(x => x !== '--with-amplitude-model')) throw new Error('Usage: analysis-root new-directory [--with-amplitude-model]');
-const amplitudeModel = extra.includes('--with-amplitude-model');
+if (!directory || extra.length > 1 || extra.some(x => !['--with-amplitude-model','--with-phase-tuning'].includes(x))) throw new Error('Usage: analysis-root new-directory [--with-amplitude-model|--with-phase-tuning]');
+const phaseTuning = extra.includes('--with-phase-tuning'), amplitudeModel = phaseTuning || extra.includes('--with-amplitude-model');
 fs.mkdirSync(directory);
 const f = name => path.join(root, name), paths = {
   runtime: f('debug-pass14-modal-source/runtime.json'), archive: f('base-model-modal-inputs-pass13.json'),
@@ -17,6 +17,7 @@ const f = name => path.join(root, name), paths = {
   poles: f('pass128-native-pow-poles-report.json'), weights: f('pass125-native-source-weights-report.json'),
 };
 if (amplitudeModel) { paths.archive = f('base-model-full-values-pass13.json'); paths.preset = f('dry-full-fxp-pass13.json'); }
+if (phaseTuning) paths.tuning = f('debug-pass17-tuning/tuning-replay.json');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const original = Object.fromEntries(Object.entries(paths).map(([key, file]) => [key, sha(fs.readFileSync(file))]));
 const script = fileURLToPath(new URL('./pianoteq_replay_modal_source.mjs', import.meta.url)), wrapper = path.join(directory, 'guard.mjs');
@@ -25,7 +26,7 @@ function run(name, overrides = {}, flags = true) {
   const folder = path.join(directory, name); fs.mkdirSync(folder);
   const p = {...paths, ...overrides}, output = path.join(folder, 'report.json');
   const args = [wrapper, script, p.runtime, p.archive, p.constants, p.amplitude, p.pow, output];
-  if (flags) { args.push('--native-double-pow', '--poles-report', p.poles, '--weights-report', p.weights); if (amplitudeModel) args.push('--amplitude-preset', p.preset, '--amplitude-linear-curves'); }
+  if (flags) { args.push('--native-double-pow', '--poles-report', p.poles, '--weights-report', p.weights); if (amplitudeModel) args.push('--amplitude-preset', p.preset, '--amplitude-linear-curves'); if (phaseTuning) args.push('--archive-phase-mode', '1', '--tuning-report', p.tuning); }
   const r = spawnSync(process.execPath, args, {encoding: 'utf8', maxBuffer: 4 * 1024 * 1024});
   fs.writeFileSync(path.join(folder, 'process.json'), JSON.stringify({status: r.status, signal: r.signal, error: r.error?.message, stdout: r.stdout, stderr: r.stderr}, null, 2) + '\n');
   assert.equal(r.signal, null);
@@ -37,6 +38,7 @@ assert(baseline.report.frequencyAndRawDecayFromComputedPoles && baseline.report.
 assert.equal(baseline.report.computedFrequencyBindings, 108); assert.equal(baseline.report.computedRawDecayBindings, 108);
 assert.equal(baseline.report.computedWeightBindings, 70); assert.equal(baseline.report.computedPowCalls.length, 72);
 if (amplitudeModel) { assert(baseline.report.sourceAmplitudeControlsFromArchives); assert.equal(baseline.report.amplitudeControlBindings, 8); assert.equal(baseline.report.amplitudeRegistryBindings, 6); }
+if (phaseTuning) { assert(baseline.report.phaseAmountFromArchive && baseline.report.referenceFrequencyFromTuning); assert.equal(baseline.report.phaseControlBindings, 4); assert.equal(baseline.report.referenceFrequencyBindings, 2); }
 assert.equal(baseline.report.nativePowDoubleMismatches, 0); assert.equal(baseline.report.unmatchedPowComparisonCalls, 0);
 const results = [], view = new DataView(new ArrayBuffer(8));
 const bits64 = x => { view.setFloat64(0, x); return view.getBigUint64(0).toString(16).padStart(16, '0'); };
@@ -69,8 +71,8 @@ try {
     const harmonicWeights = weights.find(r => r.note === prediction.note && r.noteIndex === prediction.noteIndex).values;
     const built = constructModalSource({frequency: prediction.frequency, rawDecay: prediction.rawDecay, weights: harmonicWeights,
       columns: prediction.cols, ...(amplitudeModel ? baseline.report.amplitudeControlPredictions.find(r => r.recordIndex === runtime.records.indexOf(record)) : {addedDecay: input.added_decay, shape: input.shape, eta: input.eta}),
-      integerScale: constants.integer_amplitude_scale, phaseAmount: record.cache_controls['0x158'],
-      phaseConstant: constants.phase_constant, referenceFrequency: record.G_controls['0x78']});
+      integerScale: constants.integer_amplitude_scale, phaseAmount: phaseTuning ? prediction.phaseAmount : record.cache_controls['0x158'],
+      phaseConstant: constants.phase_constant, referenceFrequency: phaseTuning ? prediction.referenceFrequency : record.G_controls['0x78']});
     for (const name of ['frequency', 'rawDecay', 'decay', 'amplitude', 'phase', 'normalizedAmplitude'])
       assert.deepEqual(Array.from(built[name]), prediction[name]);
     assert.equal(built.referenceIndex, prediction.referenceIndex);
@@ -79,7 +81,7 @@ try {
 const powPredictions = r => r.computedPowCalls.map(({base, exponent, result, resultBits}) => ({base, exponent, result, resultBits}));
 function save(result) {
   results.push(result);
-  fs.writeFileSync(path.join(directory, 'results.json'), JSON.stringify({baseline: {passed: true, frequencyBindings: 108, rawDecayBindings: 108, weightBindings: 70, powCalls: 72, systemPowMismatches: 0, defaultBuilderMatchesReplayWithoutMathPow: true, amplitudeModelControlsComputed: amplitudeModel}, originalHashes: original, results}, null, 2) + '\n');
+  fs.writeFileSync(path.join(directory, 'results.json'), JSON.stringify({baseline: {passed: true, frequencyBindings: 108, rawDecayBindings: 108, weightBindings: 70, powCalls: 72, systemPowMismatches: 0, defaultBuilderMatchesReplayWithoutMathPow: true, amplitudeModelControlsComputed: amplitudeModel, phaseAndTuningComputed: phaseTuning}, originalHashes: original, results}, null, 2) + '\n');
   console.log(JSON.stringify(result));
 }
 function mutate(key, name, edit) {
@@ -102,6 +104,11 @@ for (const [name, key, edit] of [
     ['shape-db-comparison', 'amplitude', d => { d.records[0].shape_db += 1; }],
     ['registry-db-comparison', 'runtime', d => { d.records[0].cache_controls['0x188'] += 1; }],
   ] : []),
+  ...(phaseTuning ? [
+    ['phase-cache-comparison', 'runtime', d => { d.records[0].cache_controls['0x158'] *= .75; }],
+    ['phase-input-comparison', 'amplitude', d => { d.records[0].random_amount *= .75; }],
+    ['reference-frequency-comparison', 'runtime', d => { d.records[0].G_controls['0x78'] += 1; }],
+  ] : []),
 ]) {
   const r = run(name, mutate(key, name, edit));
   assert.equal(r.process.status, 1); assert.equal(r.report.failures.length, 1);
@@ -111,6 +118,10 @@ for (const [name, key, edit] of [
 }
 for (const [name, key, edit] of [
   ['upstream-weight-source', 'weights', d => { d.predictions[0].values[0] *= 1.25; }],
+  ...(phaseTuning ? [
+    ['phase-curve-source', 'archive', d => { d[0].fields.find(r => r.object_offset === 0x2548).value.curves[9].y = d[0].fields.find(r => r.object_offset === 0x2548).value.curves[9].y.map(x => x * .75); }],
+    ['tuning-frequency-source', 'tuning', d => { d.predictedSources.find(r => r.key === '69:69').frequency = 900; }],
+  ] : []),
   ...(amplitudeModel ? [['preset-amplitude-source', 'preset', d => { d.decoded_tail.fields.find(r => r.object_offset === 0x470).value.b *= .9; }]] : [['amplitude-model-control', 'amplitude', d => { d.records[0].eta *= .5; }]]),
 ]) {
   const r = run(name, mutate(key, name, edit));
@@ -121,6 +132,7 @@ for (const [name, key, edit] of [
 for (const [name, key, edit] of [
   ['missing-pole-row', 'poles', d => { d.checks.pop(); }],
   ['duplicate-weight-row', 'weights', d => { d.predictions.push(d.predictions[0]); }],
+  ...(phaseTuning ? [['duplicate-tuning-key', 'tuning', d => { d.predictedSources[1].key = d.predictedSources[0].key; }]] : []),
 ]) {
   const r = run(name, mutate(key, name, edit));
   assert.equal(r.process.status, 1); assert(!r.report);

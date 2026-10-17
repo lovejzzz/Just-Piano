@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {nativeDoublePow} from '../dsp/native-double-pow.mjs';
 import {archiveAmplitudeControls} from '../dsp/source-amplitude-controls.mjs';
+import {archivePhaseAmount} from '../dsp/source-phase-controls.mjs';
 import { archiveModalSource, constructModalSource } from '../dsp/modal-source.mjs';
-const positional = []; let nativePowMode = false, polesPath, weightsPath, amplitudePresetPath, amplitudeLinearCurves = false;
+const positional = []; let nativePowMode = false, polesPath, weightsPath, amplitudePresetPath, amplitudeLinearCurves = false, phaseInstrumentMode, tuningPath;
 for (let i = 2; i < process.argv.length; i++) {
   const flag = process.argv[i];
   if (flag === '--native-double-pow' && !nativePowMode) nativePowMode = true;
@@ -12,6 +13,8 @@ for (let i = 2; i < process.argv.length; i++) {
   else if (flag === '--weights-report' && weightsPath === undefined && process.argv[i + 1]) weightsPath = process.argv[++i];
   else if (flag === '--amplitude-preset' && amplitudePresetPath === undefined && process.argv[i + 1]) amplitudePresetPath = process.argv[++i];
   else if (flag === '--amplitude-linear-curves' && !amplitudeLinearCurves) amplitudeLinearCurves = true;
+  else if (flag === '--archive-phase-mode' && phaseInstrumentMode === undefined && /^\d+$/.test(process.argv[i + 1] ?? '')) phaseInstrumentMode = Number(process.argv[++i]);
+  else if (flag === '--tuning-report' && tuningPath === undefined && process.argv[i + 1]) tuningPath = process.argv[++i];
   else if (flag.startsWith('--')) throw new Error('Unknown, duplicate or incomplete computed source option');
   else positional.push(flag);
 }
@@ -19,6 +22,8 @@ if (positional.length > 6 || Boolean(polesPath) !== Boolean(weightsPath) || pole
   throw new Error('Computed source bridge requires both reports and native double pow');
 if (Boolean(amplitudePresetPath) !== amplitudeLinearCurves || amplitudePresetPath && !polesPath)
   throw new Error('Archive amplitude source requires computed bridge and explicit linear curve modes');
+if ((phaseInstrumentMode !== undefined || tuningPath) && (!amplitudePresetPath || phaseInstrumentMode > 255))
+  throw new Error('Phase/tuning source requires archive amplitude context and valid mode byte');
 const [runtimePath, archivePath, constantsPath, amplitudePath, powPath, outputPath] = positional;
 if (![runtimePath, archivePath, constantsPath, amplitudePath, powPath].every(Boolean))
   throw new Error('Expected output capture, model archive, constants capture, amplitude input capture and independent pow oracle');
@@ -30,6 +35,17 @@ const powOracle = JSON.parse(fs.readFileSync(powPath));
 const amplitudePresetBytes = amplitudePresetPath ? fs.readFileSync(amplitudePresetPath) : undefined;
 const amplitudePreset = amplitudePresetBytes ? JSON.parse(amplitudePresetBytes) : undefined;
 if (amplitudePreset && !amplitudePreset.decoded_tail?.fields) throw new Error('Decoded amplitude preset required');
+const tuningBytes = tuningPath ? fs.readFileSync(tuningPath) : undefined, tuning = tuningBytes ? JSON.parse(tuningBytes) : undefined;
+const tuningFrequencies = new Map();
+if (tuning) {
+  if (tuning.schema !== 'pianoteq-source-tuning-pass17' || !tuning.passed || tuning.failures?.length !== 0 ||
+      !tuning.archivePitchCurveVerified || tuning.floatMismatches !== 0 || tuning.uniqueNotes !== 105 || tuning.predictedSources?.length !== 105)
+    throw new Error('Complete verified source tuning report required');
+  for (const row of tuning.predictedSources) {
+    if (tuningFrequencies.has(row.key) || !Number.isFinite(row.frequency) || row.frequency <= 0) throw new Error('Invalid or duplicate tuning source');
+    tuningFrequencies.set(row.key, row.frequency);
+  }
+}
 let poles, weights; const computedPoleRows = new Map(), computedWeightRows = new Map(), bridgeSources = {};
 if (polesPath) {
   for (const [name, file] of [['poles', polesPath], ['weights', weightsPath]]) {
@@ -110,6 +126,7 @@ let archiveValues = 0, phases = 0, phaseMismatches = 0;
 let decayValues = 0, amplitudeValues = 0, alignedFrequencyValues = 0;
 let computedFrequencyBindings = 0, computedRawDecayBindings = 0, computedWeightBindings = 0;
 let amplitudeControlBindings = 0, amplitudeRegistryBindings = 0; const amplitudeControlPredictions = [];
+let phaseControlBindings = 0, referenceFrequencyBindings = 0; const phaseControlPredictions = [];
 for (const [recordIndex, record] of runtime.records.entries()) {
   const matches = [];
   const matchedBanks = [];
@@ -188,9 +205,27 @@ for (const [recordIndex, record] of runtime.records.entries()) {
       if (!same(value, actual)) failures.push({stage: 'archive-amplitude-registry-binding', recordIndex, name, prediction: value, actual});
     }
   }
+  let phaseAmount = record.cache_controls['0x158'], referenceFrequency = record.G_controls['0x78'];
+  if (phaseInstrumentMode !== undefined) {
+    if (matchedBanks.length !== 1) throw new Error('Archive phase source needs unique base model');
+    const controls = archivePhaseAmount({baseFields: matchedBanks[0].fields, note: record.note, instrumentMode: phaseInstrumentMode,
+      runtimeCurveMode: {flags: 0, special: 0, dimension: 1}});
+    phaseAmount = controls.phaseAmount;
+    phaseControlPredictions.push({recordIndex, ...controls});
+    for (const [name, actual] of [['cache158', record.cache_controls['0x158']], ['amplitude-random-amount', input.random_amount]]) {
+      phaseControlBindings++;
+      if (!same(phaseAmount, actual)) failures.push({stage: 'archive-phase-binding', recordIndex, name, prediction: phaseAmount, actual});
+    }
+  }
+  if (tuning) {
+    referenceFrequency = tuningFrequencies.get(`${record.note_index}:${record.note}`);
+    if (!Number.isFinite(referenceFrequency)) throw new Error('Tuning predictions do not cover this source');
+    referenceFrequencyBindings++;
+    if (!same(referenceFrequency, record.G_controls['0x78'])) failures.push({stage: 'computed-reference-frequency-binding', recordIndex, prediction: referenceFrequency, actual: record.G_controls['0x78']});
+  }
   const built = constructModalSource({frequency: ownFrequency, rawDecay: ownRawDecay, weights: ownWeights, columns: matrix.cols,
     ...amplitudeControls, integerScale: integerAmplitudeScale,
-    phaseAmount: record.cache_controls['0x158'], phaseConstant, referenceFrequency: record.G_controls['0x78']}, {pow: observedPow});
+    phaseAmount, phaseConstant, referenceFrequency}, {pow: observedPow});
   for (let j = 0; j < built.phase.length; j++) {
     phases++;
     if (!same(built.phase[j], matrix.values[j])) {
@@ -218,6 +253,7 @@ for (const [recordIndex, record] of runtime.records.entries()) {
   predictions.push({note: record.note, noteIndex: record.note_index, mode: record.mode, rows: matrix.rows, cols: matrix.cols,
     frequency: Array.from(built.frequency), rawDecay: Array.from(built.rawDecay), decay: Array.from(built.decay), amplitude: Array.from(built.amplitude), phase: Array.from(built.phase),
     normalizedAmplitude: Array.from(built.normalizedAmplitude), normalizationCompared: false, referenceIndex});
+  if (phaseInstrumentMode !== undefined || tuning) Object.assign(predictions.at(-1), {phaseAmount, referenceFrequency});
 }
 if (polesPath && (usedPoleRows.size !== computedPoleRows.size || usedWeightRows.size !== computedWeightRows.size)) throw new Error('Unused computed source rows or missing coverage');
 if (nativePowDoubleMismatches) failures.push({stage: 'native-pow-comparison', mismatches: nativePowDoubleMismatches});
@@ -232,6 +268,9 @@ const result = {
   sourceAmplitudeControlsFromArchives: Boolean(amplitudePreset), amplitudeControlBindings, amplitudeRegistryBindings, amplitudeControlPredictions,
   amplitudeRuntimeCurveModesSupplied: amplitudeLinearCurves, amplitudeRuntimeCurveModesNewlyObserved: false,
   amplitudePresetSource: amplitudePresetBytes ? {path: amplitudePresetPath, sha256: crypto.createHash('sha256').update(amplitudePresetBytes).digest('hex')} : undefined,
+  phaseAmountFromArchive: phaseInstrumentMode !== undefined, phaseInstrumentModeSupplied: phaseInstrumentMode, phaseInstrumentModeNewlyObserved: false,
+  phaseControlBindings, phaseControlPredictions, referenceFrequencyFromTuning: Boolean(tuning), referenceFrequencyBindings,
+  tuningSource: tuningBytes ? {path: tuningPath, sha256: crypto.createHash('sha256').update(tuningBytes).digest('hex'), nativeMathOracleRequired: tuning.nativeMathOracleRequired, stretchTableProducerReconstructed: tuning.stretchTableProducerReconstructed} : undefined,
   crossRunHistoricalBridge: Boolean(polesPath), sameRunWholeVoiceVerified: false,
   phaseConstant, integerAmplitudeScale, constantRecords: constants.records.length,
   phaseRegistryValueDirectlyObserved: true,
