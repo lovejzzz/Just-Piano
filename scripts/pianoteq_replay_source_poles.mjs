@@ -42,6 +42,7 @@ const view = new DataView(new ArrayBuffer(4));
 function bits(value) { view.setFloat32(0, value); return view.getUint32(0); }
 const same = (a, b) => bits(a) === bits(b);
 const checks = [], failures = [], visited = new Set();
+let powfComparisons=0,powfMismatches=0;
 let lambdaCount = 0, lambdaMismatches = 0, centerCount = 0, centerMismatches = 0;
 let reconstructedCouplingValues = 0, reconstructedCouplingMismatches = 0;
 const preparedSources = new Map(), rowCountChecks = [];
@@ -54,7 +55,9 @@ for (const source of sources.records) {
       bits(row.result).toString(16).padStart(8, '0') !== row.result_bits) throw new Error('Powf oracle input/result bits differ');
   const prepared = prepareModalInputs({ frequency: g['0x78'], offsets: v['0x120'], offsetExponent: c['0x1a0'],
     stiffness: g['0x28'], componentStiffness: v['0x40'], spread: g['0x148'],
-    frequencyRatios: w['0x1f8'], blend: c['0x270'], offsetScale: row.result });
+    frequencyRatios: w['0x1f8'], blend: c['0x270'] });
+  if(!prepared.offsetScaleComputed)throw new Error('Offset scale must be calculated independently');
+  powfComparisons++;if(!same(prepared.nativeOffsetScale,row.result)){powfMismatches++;failures.push({stage:'powf-offset-scale',noteIndex:source.note_index,cacheMode:source.mode,prediction:prepared.nativeOffsetScale,actual:row.result});}
   if (prepared.endpoints.length !== 1 || prepared.endpoints[0].kind !== 'coupled')
     throw new Error('Only coupled endpoint is covered by this capture');
   const endpoint = prepared.endpoints[0];
@@ -131,7 +134,7 @@ const result = {
   capturedCalls: input.records.length, replayedCalls: checks.length, distinctRowsCovered: visited.size,
   frequencyCount, decayCount, frequencyMismatches, decayMismatches,
   lambdaCount, lambdaMismatches, centerCount, centerMismatches, rowCountChecks,
-  nativeScalarPowfImplemented: false, powfOracleRecords: powfOracle.records.length,
+  nativeScalarPowfImplemented: true, powfOracleComparisonOnly:true, powfValidationOracleRequired:true, powfComparisons, powfMismatches, powfOracleRecords: powfOracle.records.length,
   rootAlgorithm: 'independent Durand–Kerner, not native QR reproduction',
   polynomialConfiguration: { kappa: Math.PI, gamma: 0, provenance: 'pass7 actual global configuration capture; same binary' },
   sourceControlsToLambdaReconstructed: true, complexCouplingParameterProducerReconstructed: Boolean(impedanceReport),

@@ -1,5 +1,6 @@
 // Source-table preparation recovered from 1026dc / 194870 / 182960 / 7a4014.
 // Callers supply model tables and unrecovered transcendental/config values.
+import {nativeScalarPowf} from './native-scalar-pow.mjs';
 import { fma64 } from './modal-poles.mjs';
 const f32 = Math.fround;
 
@@ -19,18 +20,22 @@ export function archiveModalSource(bank, noteIndex) {
   };
 }
 
+export function modalOffsetScale(frequency,exponent){
+  frequency=f32(frequency);exponent=f32(exponent);
+  if(!(frequency>0)||!Number.isFinite(frequency)||!Number.isFinite(exponent))throw new RangeError('Finite positive modal frequency and finite exponent required');
+  return nativeScalarPowf(f32(frequency/440),exponent);
+}
+
 export function prepareModalInputs({ frequency, offsets, offsetExponent, stiffness,
   componentStiffness, spread, frequencyRatios, blend, offsetScale }) {
   frequency = f32(frequency); stiffness = f32(stiffness); spread = f32(spread);
   offsetExponent = f32(offsetExponent); blend = f32(blend);
   const count = offsets.length;
   if (!count || !componentStiffness.length || !frequencyRatios.length) throw new RangeError('Missing component model vectors');
-  // powf has its own scalar implementation; do not silently replace it with JS
-  // Math.pow or the unrelated vector exp. Exact identity cases need no lookup.
-  if (offsetScale === undefined) {
-    if (f32(frequency / 440) === 1 || offsetExponent === 0) offsetScale = 1;
-    else throw new RangeError('Nontrivial native powf offsetScale must be supplied');
-  }
+  // Match the recovered scalar powf, including the native float32 division.
+  // Explicit offsetScale remains available to older diagnostic callers.
+  const offsetScaleComputed=offsetScale===undefined;
+  if(offsetScaleComputed)offsetScale=modalOffsetScale(frequency,offsetExponent);
   const scaledOffsets = Float32Array.from(offsets, value => f32(f32(value) * f32(offsetScale)));
   const slope = f32(f32(componentStiffness[0]) * spread);
   const spreadVector = Float32Array.from(offsets, (_, j) => f32(f32(f32(j) * slope) / 100));
@@ -54,7 +59,7 @@ export function prepareModalInputs({ frequency, offsets, offsetExponent, stiffne
         stiffness: componentB, offsets: scaledOffsets.slice(j, j + 1), spread: spreadVector.slice(j, j + 1) });
     }
   }
-  return { scaledOffsets, spreadVector, endpoints, nativeOffsetScale: f32(offsetScale) };
+  return { scaledOffsets, spreadVector, endpoints, nativeOffsetScale: f32(offsetScale), offsetScaleComputed };
 }
 
 export function modePoleInputs({ reference, base, stiffness, mode, offsets, spread }) {

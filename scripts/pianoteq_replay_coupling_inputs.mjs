@@ -40,6 +40,7 @@ if (controlsReportPath || tuningReportPath) {
     frequencies.set(row.key, row.frequency);
   }
 }
+let powfComparisons=0,powfMismatches=0;
 const grid = archiveCouplingGrid(base.fields), prepared = new Map(), failures = [], gridChecks = [], expectedKeys = new Set();
 for (const row of source.records) {
   const key = `${row.note_index}:${row.mode}`, config = capture.configurations[key];
@@ -76,7 +77,9 @@ for (const row of source.records) {
     throw new Error('Independent powf oracle does not match these inputs');
   const input = prepareModalInputs({ frequency: g['0x78'], offsets: v['0x120'], offsetExponent: c['0x1a0'],
     stiffness: g['0x28'], componentStiffness: v['0x40'], spread: g['0x148'], frequencyRatios: w['0x1f8'],
-    blend: c['0x270'], offsetScale: native[0].result });
+    blend: c['0x270'] });
+  if(!input.offsetScaleComputed)throw new Error('Offset scale must be calculated independently');
+  powfComparisons++;if(!equal(input.nativeOffsetScale,native[0].result)){powfMismatches++;failures.push({key,stage:'powf-offset-scale',prediction:input.nativeOffsetScale,actual:native[0].result});}
   if (input.endpoints.length !== 1 || input.endpoints[0].kind !== 'coupled') throw new Error('Coupled endpoint capture required');
   const threshold = Math.min(c['0xf8'], Math.fround(g['0x98'] * 0.5)) * 0.99;
   for (const mode of w['0x1b8']) {
@@ -110,7 +113,7 @@ for (const record of capture.records) {
 }
 for (const key of expectedKeys) if (!keys.has(key)) failures.push({ key, stage: 'missing-captured-call' });
 const result = { model: base.strings[0], capturedCalls: capture.records.length, inputValues, inputMismatches,
-  expectedCalls: expectedKeys.size, archiveGridVerified: true, gridChecks, nativePowfOracleRequired: true, sourceGAndCacheStillCaptured: true,
+  expectedCalls: expectedKeys.size, archiveGridVerified: true, gridChecks, nativePowfOracleRequired: false, powfValidationOracleRequired:true, powfOracleComparisonOnly:true, nativeScalarPowfImplemented:true, powfComparisons, powfMismatches, sourceGAndCacheStillCaptured: true,
   physicalSourceInputsComputed: physical.size > 0, frequencyComputedFromTuning: frequencies.size > 0,
   checks, failures, passed: failures.length === 0 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
