@@ -1,9 +1,17 @@
 // Bounded component validation; every audio input is observed in this run.
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import path from 'node:path';
+import {archiveTimeEnvelopeAtKnot} from '../dsp/archive-time-envelope.mjs';
 import {stringifyWithNegativeZero} from './pianoteq_json_exact.mjs';
 import {initializeTerminalVoiceEnvelope,renderTerminalVoiceEnvelope,renderVoiceTimeEnvelope} from '../dsp/voice-tail-envelopes.mjs';
 const [capturePath,auditPath,reportPath,option,...extra]=process.argv.slice(2);
-if(!capturePath||!auditPath||!reportPath||option!=='--exp-candidate'||extra.length)throw new Error('Usage: complete-component.json owned-resumes.jsonl new-report.json --exp-candidate');
+if(!capturePath||!auditPath||!reportPath||option!=='--exp-candidate'||extra.length>1||extra.length&&!extra[0].startsWith('--archive-time-source='))throw new Error('Usage: complete-component.json owned-resumes.jsonl new-report.json --exp-candidate [--archive-time-source=decoded-source.json]');
+const archive=extra.length?JSON.parse(fs.readFileSync(extra[0].slice('--archive-time-source='.length))):null;
+if(archive){
+ if(archive.schema!==1||archive.presetSha256!==crypto.createHash('sha256').update(fs.readFileSync(archive.presetPath)).digest('hex'))throw new Error('Verified archive time preset required');
+ if(!fs.readFileSync(path.join(path.dirname(capturePath),'commands.lldb'),'utf8').includes('--fxp '+archive.presetPath+' --midi '))throw new Error('Exact archive capture preset required');
+}
 const data=JSON.parse(fs.readFileSync(capturePath)),resumes=fs.readFileSync(auditPath,'utf8').trim().split('\n').map(x=>JSON.parse(x));
 if(!data.complete||data.errors?.length||!data.activeTimeComponent||!data.fixedSites||data.siteCount!==6||data.pending||data.voices!==5||data.sources!==5||data.models!==5)throw new Error('Complete six-site active-time component required');
 const points={selection:0x1007181d8,model:0x100718230,entry:0x10030bd30,before:0x10030c104,gains:0x100460f08,time:0x100460f1c},roles=Object.keys(points);
@@ -26,7 +34,11 @@ for(const r of data.records){
  if(r.site?.fileAddress!==points[r.stage]||r.site.id!==roles.indexOf(r.stage)+1||!audited.has(`${r.thread}:${r.site.id}:${r.site.stopId}`))throw new Error('Unaudited fixed hardware observation');
  if(r.stage==='selection'){
   if(r.counter!==0||r.epoch!==states.size||states.has(r.epoch))throw new Error('Unique model selection from age zero required');
-  const s=r.source;
+  const s={...r.source};
+  if(archive){
+   const model=archiveTimeEnvelopeAtKnot({editFields:archive.editFields,note:r.note});
+   for(const k of ['globalAttack','legatoAttack']){check('archive:'+k,model[k],r.source[k]);s[k]=model[k];}
+  }
   if(!Object.values(s).every(Number.isFinite)||s.sampleRate<=0||r.initialTime.counter!==0)throw new Error('Finite model source and zero initial counter required');
   let selected=Math.fround(s.overrideDuration!==0?s.overrideDuration:s.globalAttack);if(s.legato>0)selected=Math.fround(s.legatoAttack);
   const enabled=s.globalDelay!==0||selected!==0||s.globalEnd<10?1:0;
@@ -67,5 +79,5 @@ for(const r of data.records){
  }else throw new Error('Unknown component stage');
 }
 if(pending.size||states.size!==5||[...states.values()].some(s=>s.age!==data.windowBlocks*64)||!timeChangedSamples||!postAttackBlocks)throw new Error('Actual shaping and post-attack coverage required');
-const report={passed:!mismatches,checks,mismatches,doubleChecks,blocks:predictions.length,voices:5,windowBlocks:data.windowBlocks,primaryActiveBlocks,secondaryActiveBlocks,timeChangedSamples,gainChangedSamples,postAttackBlocks,models:[...states].map(([epoch,s])=>({epoch,selectedDuration:s.selected,attackSamples:s.time.attack,attackRate:s.time.attackRate,finalCounter:s.time.counter})),selectedDurationAndSampleCountComputed:true,terminalInitialGainComputed:true,timeInitialWrittenFieldsComputed:true,timeInitialUnwrittenValueObserved:true,expDoubleCandidateUsed:true,observedAudioInput:true,terminalModelAndEnableInputsObserved:true,fullVoiceSourceComputed:false,finalStereoAudioVerified:false,predictions,failures};
+const report={passed:!mismatches,checks,mismatches,doubleChecks,blocks:predictions.length,voices:5,windowBlocks:data.windowBlocks,primaryActiveBlocks,secondaryActiveBlocks,timeChangedSamples,gainChangedSamples,postAttackBlocks,models:[...states].map(([epoch,s])=>({epoch,selectedDuration:s.selected,attackSamples:s.time.attack,attackRate:s.time.attackRate,finalCounter:s.time.counter})),selectedDurationAndSampleCountComputed:true,globalTimeFieldsFromArchive:!!archive,terminalInitialGainComputed:true,timeInitialWrittenFieldsComputed:true,timeInitialUnwrittenValueObserved:true,expDoubleCandidateUsed:true,observedAudioInput:true,terminalModelAndEnableInputsObserved:true,fullVoiceSourceComputed:false,finalStereoAudioVerified:false,predictions,failures};
 fs.writeFileSync(reportPath,stringifyWithNegativeZero(report,2)+'\n',{flag:'wx'});console.log(JSON.stringify({...report,predictions:undefined,failures:undefined}));if(!report.passed)process.exitCode=1;
