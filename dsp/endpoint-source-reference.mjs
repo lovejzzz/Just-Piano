@@ -3,6 +3,7 @@ import {fma64} from './native-double-fma.mjs';
 import {referenceModeIndex,normalizeSourceAmplitudes} from './modal-source.mjs';
 import {morphEndpointSources} from './endpoint-source-morph.mjs';
 import {applySourcePhaseOffsets} from './source-phase-offsets.mjs';
+import {assembleIndependentSource,constructIndependentComponents} from './independent-source-assembly.mjs';
 const f=Math.fround;
 export function endpointReferenceFrequency(prepared){
   const t=prepared?.blend,endpoints=prepared?.endpoints;
@@ -22,8 +23,17 @@ export function endpointReferenceFrequency(prepared){
 }
 // Produces the mixed four tables, independent reference row and a separate
 // normalized amplitude table. Later G controls require explicit phaseOffsets.
-export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffsets}){
+export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffsets,independentSource}){
   const referenceFrequency=endpointReferenceFrequency(prepared);
+  const assemble=prepared.blend<1&&independentSource!==undefined;
+  let construct=false;
+  if(assemble){
+    if(separate!==undefined)throw new RangeError('Choose component assembly or an explicit independent endpoint');
+    construct=independentSource.componentPoles!==undefined;
+    if(construct&&independentSource.components!==undefined)throw new RangeError('Choose pole construction or explicit component tables');
+    const built=construct?constructIndependentComponents(independentSource):independentSource;
+    separate=assembleIndependentSource({...independentSource,components:built.components});
+  }
   const mixed=morphEndpointSources({coupled,separate,blend:prepared.blend});
   if(mixed.columns!==prepared.scaledOffsets?.length)throw new RangeError('Prepared component count must match endpoint columns');
   const referenceIndex=referenceModeIndex(mixed.frequency,mixed.columns,referenceFrequency);
@@ -33,5 +43,6 @@ export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffs
     rows:mixed.rows,columns:mixed.columns,frequency:mixed.frequency,phase:mixed.phase});
   return {...mixed,...(adjusted?{phase:adjusted.phase,phaseOffsetSummary:adjusted.summary}:{}),referenceFrequency,referenceIndex,normalizedAmplitude:normalization.values,
     normalizationMaximum:normalization.maximum,normalizationScale:normalization.scale,
-    laterPhaseControlsApplied:Boolean(adjusted),completeCacheVerified:false};
+    laterPhaseControlsApplied:Boolean(adjusted),independentComponentsAssembled:assemble,
+    independentComponentsConstructed:construct,completeCacheVerified:false};
 }

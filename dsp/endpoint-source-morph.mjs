@@ -4,13 +4,13 @@ import {endpointSineWeights,morphEndpointAmplitudes,endpointAmplitudeTypes,morph
 import {sortEndpointFrequencyIndices} from './endpoint-frequency-sort.mjs';
 import {fma32} from './modal-kernel.mjs';
 const fields=['frequency','decay','amplitude','phase'];
-function check(source){
+function check(source,nonnegativeAmplitude=false){
   if(!source||!Number.isInteger(source.rows)||source.rows<0||!Number.isInteger(source.columns)||source.columns<1)
     throw new RangeError('Explicit endpoint rows and positive columns required');
   const size=source.rows*source.columns;
   for(const field of fields){
     if(source[field]?.length!==size)throw new RangeError('Complete row-major endpoint '+field+' required');
-    for(const value of source[field])if(!Number.isFinite(Math.fround(value))||(field==='amplitude'&&value<0))
+    for(const value of source[field])if(!Number.isFinite(Math.fround(value))||(nonnegativeAmplitude&&field==='amplitude'&&value<0))
       throw new RangeError('Finite endpoint data and nonnegative amplitudes required');
   }
 }
@@ -22,7 +22,7 @@ export function morphEndpointSources({coupled,separate,blend}){
     return {rows:selected.rows,columns:selected.columns,...Object.fromEntries(fields.map(key=>[key,Float32Array.from(selected[key])])),
       algorithm:'endpoint-copy',nativeTrajectoryVerified:false};
   }
-  check(coupled);check(separate);
+  check(coupled,true);check(separate,true);
   if(coupled.columns!==separate.columns)throw new RangeError('Matching endpoint columns required');
   const rows=Math.min(coupled.rows,separate.rows),columns=coupled.columns,w=endpointSineWeights(t);
   const out=Object.fromEntries(fields.map(key=>[key,new Float32Array(rows*columns)])),permutations=[];
