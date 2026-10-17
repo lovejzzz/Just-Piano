@@ -2,18 +2,23 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {nativeDoublePow} from '../dsp/native-double-pow.mjs';
+import {archiveAmplitudeControls} from '../dsp/source-amplitude-controls.mjs';
 import { archiveModalSource, constructModalSource } from '../dsp/modal-source.mjs';
-const positional = []; let nativePowMode = false, polesPath, weightsPath;
+const positional = []; let nativePowMode = false, polesPath, weightsPath, amplitudePresetPath, amplitudeLinearCurves = false;
 for (let i = 2; i < process.argv.length; i++) {
   const flag = process.argv[i];
   if (flag === '--native-double-pow' && !nativePowMode) nativePowMode = true;
   else if (flag === '--poles-report' && polesPath === undefined && process.argv[i + 1]) polesPath = process.argv[++i];
   else if (flag === '--weights-report' && weightsPath === undefined && process.argv[i + 1]) weightsPath = process.argv[++i];
+  else if (flag === '--amplitude-preset' && amplitudePresetPath === undefined && process.argv[i + 1]) amplitudePresetPath = process.argv[++i];
+  else if (flag === '--amplitude-linear-curves' && !amplitudeLinearCurves) amplitudeLinearCurves = true;
   else if (flag.startsWith('--')) throw new Error('Unknown, duplicate or incomplete computed source option');
   else positional.push(flag);
 }
 if (positional.length > 6 || Boolean(polesPath) !== Boolean(weightsPath) || polesPath && !nativePowMode)
   throw new Error('Computed source bridge requires both reports and native double pow');
+if (Boolean(amplitudePresetPath) !== amplitudeLinearCurves || amplitudePresetPath && !polesPath)
+  throw new Error('Archive amplitude source requires computed bridge and explicit linear curve modes');
 const [runtimePath, archivePath, constantsPath, amplitudePath, powPath, outputPath] = positional;
 if (![runtimePath, archivePath, constantsPath, amplitudePath, powPath].every(Boolean))
   throw new Error('Expected output capture, model archive, constants capture, amplitude input capture and independent pow oracle');
@@ -22,6 +27,9 @@ const banks = JSON.parse(fs.readFileSync(archivePath));
 const constants = JSON.parse(fs.readFileSync(constantsPath));
 const amplitudeInputs = JSON.parse(fs.readFileSync(amplitudePath));
 const powOracle = JSON.parse(fs.readFileSync(powPath));
+const amplitudePresetBytes = amplitudePresetPath ? fs.readFileSync(amplitudePresetPath) : undefined;
+const amplitudePreset = amplitudePresetBytes ? JSON.parse(amplitudePresetBytes) : undefined;
+if (amplitudePreset && !amplitudePreset.decoded_tail?.fields) throw new Error('Decoded amplitude preset required');
 let poles, weights; const computedPoleRows = new Map(), computedWeightRows = new Map(), bridgeSources = {};
 if (polesPath) {
   for (const [name, file] of [['poles', polesPath], ['weights', weightsPath]]) {
@@ -101,8 +109,10 @@ const failures = [], checks = [], predictions = []; const usedPoleRows = new Set
 let archiveValues = 0, phases = 0, phaseMismatches = 0;
 let decayValues = 0, amplitudeValues = 0, alignedFrequencyValues = 0;
 let computedFrequencyBindings = 0, computedRawDecayBindings = 0, computedWeightBindings = 0;
+let amplitudeControlBindings = 0, amplitudeRegistryBindings = 0; const amplitudeControlPredictions = [];
 for (const [recordIndex, record] of runtime.records.entries()) {
   const matches = [];
+  const matchedBanks = [];
   for (const bank of banks) {
     let source;
     try { source = archiveModalSource(bank, record.note_index); } catch { continue; }
@@ -114,8 +124,10 @@ for (const [recordIndex, record] of runtime.records.entries()) {
       [[source.offsetExponent, source.coordinateScale, source.blend],
         [record.cache_controls['0x1a0'], record.cache_controls['0x1e0'], record.cache_controls['0x270']]],
     ];
-    if (pairs.every(([a, b]) => a.length === b.length && Array.from(a).every((v, j) => same(v, b[j]))))
+    if (pairs.every(([a, b]) => a.length === b.length && Array.from(a).every((v, j) => same(v, b[j])))) {
       matches.push({ name: bank.strings[0], values: pairs.reduce((n, [a]) => n + a.length, 0) });
+      matchedBanks.push(bank);
+    }
   }
   if (!matches.length) failures.push({ stage: 'archive-binding', recordIndex });
   else archiveValues += matches[0].values;
@@ -158,8 +170,26 @@ for (const [recordIndex, record] of runtime.records.entries()) {
     ownFrequency.push(...frequency.values);
     ownRawDecay.push(...input.raw_decay.values);
   }
+  let amplitudeControls = {addedDecay: input.added_decay, shape: input.shape, eta: input.eta};
+  if (amplitudePreset) {
+    if (matchedBanks.length !== 1) throw new Error('Archive amplitude source needs unique base model');
+    const runtimeCurveModes = Object.fromEntries(['B25b0', 'B26f0', 'B2790', 'A530'].map(name => [name, {flags: 0, special: 0, dimension: 1}]));
+    amplitudeControls = archiveAmplitudeControls({baseFields: matchedBanks[0].fields, presetFields: amplitudePreset.decoded_tail.fields,
+      note: record.note, components: matrix.cols, runtimeCurveModes});
+    amplitudeControlPredictions.push({recordIndex, ...amplitudeControls});
+    for (const [name, value, actual] of [['addedDecay', amplitudeControls.addedDecay, input.added_decay],
+      ['shape', amplitudeControls.shape, input.shape], ['shapeDb', amplitudeControls.shapeDb, input.shape_db], ['eta', amplitudeControls.eta, input.eta]]) {
+      amplitudeControlBindings++;
+      if (!Object.is(value, actual)) failures.push({stage: 'archive-amplitude-control-binding', recordIndex, name, prediction: value, actual});
+    }
+    for (const [name, value, actual] of [['G160', amplitudeControls.addedDecay, record.G_controls['0x160']],
+      ['cache128', amplitudeControls.shape, record.cache_controls['0x128']], ['cache188', amplitudeControls.shapeDb, record.cache_controls['0x188']]]) {
+      amplitudeRegistryBindings++;
+      if (!same(value, actual)) failures.push({stage: 'archive-amplitude-registry-binding', recordIndex, name, prediction: value, actual});
+    }
+  }
   const built = constructModalSource({frequency: ownFrequency, rawDecay: ownRawDecay, weights: ownWeights, columns: matrix.cols,
-    addedDecay: input.added_decay, shape: input.shape, eta: input.eta, integerScale: integerAmplitudeScale,
+    ...amplitudeControls, integerScale: integerAmplitudeScale,
     phaseAmount: record.cache_controls['0x158'], phaseConstant, referenceFrequency: record.G_controls['0x78']}, {pow: observedPow});
   for (let j = 0; j < built.phase.length; j++) {
     phases++;
@@ -199,6 +229,9 @@ const result = {
   jsPowDoubleMismatches, nativeScalarPowImplemented: nativePowMode, nativePowDoubleMismatches, unmatchedPowComparisonCalls, computedPowCalls,
   powOracleComparisonOnly: nativePowMode, frequencyAndRawDecayFromComputedPoles: Boolean(polesPath), harmonicWeightsFromComputedReport: Boolean(weightsPath),
   computedFrequencyBindings, computedRawDecayBindings, computedWeightBindings, bridgeSources,
+  sourceAmplitudeControlsFromArchives: Boolean(amplitudePreset), amplitudeControlBindings, amplitudeRegistryBindings, amplitudeControlPredictions,
+  amplitudeRuntimeCurveModesSupplied: amplitudeLinearCurves, amplitudeRuntimeCurveModesNewlyObserved: false,
+  amplitudePresetSource: amplitudePresetBytes ? {path: amplitudePresetPath, sha256: crypto.createHash('sha256').update(amplitudePresetBytes).digest('hex')} : undefined,
   crossRunHistoricalBridge: Boolean(polesPath), sameRunWholeVoiceVerified: false,
   phaseConstant, integerAmplitudeScale, constantRecords: constants.records.length,
   phaseRegistryValueDirectlyObserved: true,
