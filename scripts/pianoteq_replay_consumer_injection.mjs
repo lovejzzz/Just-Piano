@@ -4,7 +4,7 @@ import {initializeReleaseSource,generateReleaseInjection,modulateReleaseInjectio
 import {initializeReleaseFilters} from '../dsp/release-filter-design.mjs';
 import {renderVectorFilter} from '../dsp/vector-filter.mjs';
 
-export function verifyConsumerInjection(data,calculated,check){
+export function verifyConsumerInjection(data,calculated,check,setContext=()=>{}){
  const view=new DataView(new ArrayBuffer(4));
  const fromBits=x=>{view.setUint32(0,x);return view.getFloat32(0);};
  const array=(name,a,b)=>{if(a.length!==b?.length)throw new Error(`Incomplete ${name}`);a.forEach((v,i)=>check(name,v,b[i]));};
@@ -22,12 +22,13 @@ export function verifyConsumerInjection(data,calculated,check){
   if(observed.get(key).injectionEntry)throw new Error('Ambiguous pre-injection observation');
   observed.get(key).injectionEntry={...r.injectionPre,primary:r.channels[0]};
  }
- const outputs=[],coverage=[];let generatedBlocks=0,skippedBlocks=0,inferredControlBlocks=0,entryBlocks=0,mixedBlocks=0,postComparedBlocks=0;const groupEnvelopeInitialStates=[];
+ const outputs=[],coverage=[];let generatedBlocks=0,skippedBlocks=0,inferredControlBlocks=0,entryBlocks=0,mixedBlocks=0,postComparedBlocks=0,groupEnvelopeBypassBlocks=0;const groupEnvelopeInitialStates=[];
  const releasePositionBridges=[];
  const compareState=(state,target,after)=>{
   for(const key of Object.keys(state))if(!after||key!=='lastMagnitude')check('injection:state:'+key,state[key],target[key]);
  };
  for(let epoch=0;epoch<5;epoch++){
+  setContext({stage:'releaseSeed',epoch,age:0});
   const copies=data.records.filter(r=>r.stage==='copy'&&r.epoch===epoch);
   const first=copies[0],seed=first?.releaseSeed;
   if(!seed||first.counter!==0)throw new Error('Release initialization from age zero required');
@@ -72,7 +73,11 @@ export function verifyConsumerInjection(data,calculated,check){
     check('group-envelope:pre-step',groupEnvelope.step,pre.envelope.step);
     for(const key of ['active','elapsed','duration'])if(groupEnvelope[key]!==pre.envelope[key])throw new Error('Unobserved group-envelope control transition');
    }
-   const scaled=renderVoiceGroupEnvelope(channels,groupEnvelope);
+   // 460914 and 460970 can bypass 428784 entirely. In particular an
+   // inactive envelope may still hold a non-unit gain when dispatch skips it.
+   const groupEnabled=!!(pre.controls.voiceFlags&4)&&!(pre.controls.skip&1);
+   const scaled=groupEnabled?renderVoiceGroupEnvelope(channels,groupEnvelope):channels.map(x=>Float32Array.from(x));
+   if(!groupEnabled)groupEnvelopeBypassBlocks++;
    for(const key of ['gain','step'])check('group-envelope:post-'+key,groupEnvelope[key],post.envelope[key]);
    for(const key of ['active','elapsed','duration'])if(groupEnvelope[key]!==post.envelope[key])throw new Error('Group-envelope post state differs');
    if(post.channels.length!==3)throw new Error('Three complete post-release groups required');
@@ -100,6 +105,7 @@ export function verifyConsumerInjection(data,calculated,check){
   }
 
   for(let age=0;age<=end;age+=64){
+   setContext({stage:'releaseConsumer',epoch,age});
    while(index+1<copies.length&&copies[index+1].counter<=age)index++;
    let c=copies[index].releaseControls;
    if(!c)throw new Error('Missing release controls');
@@ -148,5 +154,5 @@ export function verifyConsumerInjection(data,calculated,check){
  }
  if(postMode&&(postComparedBlocks!==entryBlocks||postComparedBlocks!==data.records.filter(r=>r.stage==='consumerPost').length))throw new Error('Incomplete post-release observations');
  if(entryBlocks!==data.records.filter(r=>r.stage===(entryObserved?'injectionEntry':'consumer')).length||mixedBlocks!==data.records.filter(r=>r.stage==='injectionMixed').length)throw new Error('Unconsumed release injection observations');
- return {outputs,coverage,postMode,postComparedBlocks,postOutputSamples:postComparedBlocks*3*64,unitPreGainBypassOnly:postMode,groupEnvelopeSeedObservedOnce:postMode,groupEnvelopeControlsObservedOnce:postMode,groupEnvelopeGainCarried:postMode,groupEnvelopeInitialStates,releasePositionBridges,releasePositionProducerComputed:false,entryBlocks,mixedBlocks,preStateObservations:entryBlocks,mixedPrimarySamples:mixedBlocks*64,generatedBlocks,skippedBlocks,inferredControlBlocks,initialSourceComputed:true,initialFilterComputed:true,globalSourceControlsObserved:true,entryObserved,preConsumerSkipWordNotConsumed:true,fullDispatchGateVerified:false,completePhysicsVerified:false};
+ return {outputs,coverage,postMode,postComparedBlocks,postOutputSamples:postComparedBlocks*3*64,unitPreGainBypassOnly:postMode,groupEnvelopeSeedObservedOnce:postMode,groupEnvelopeControlsObservedOnce:postMode,groupEnvelopeGainCarried:postMode,groupEnvelopeDispatchControlsObserved:postMode,groupEnvelopeBypassBlocks,groupEnvelopeInitialStates,releasePositionBridges,releasePositionProducerComputed:false,entryBlocks,mixedBlocks,preStateObservations:entryBlocks,mixedPrimarySamples:mixedBlocks*64,generatedBlocks,skippedBlocks,inferredControlBlocks,initialSourceComputed:true,initialFilterComputed:true,globalSourceControlsObserved:true,entryObserved,preConsumerSkipWordNotConsumed:true,fullDispatchGateVerified:false,completePhysicsVerified:false};
 }
