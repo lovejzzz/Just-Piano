@@ -9,6 +9,7 @@ import {archiveModalSource,prepareModalInputs} from './modal-source.mjs';
 import {archiveAmplitudeControls} from './source-amplitude-controls.mjs';
 import {archivePhaseAmount} from './source-phase-controls.mjs';
 import {prepareEndpointSourceTables} from './endpoint-source-reference.mjs';
+import {constructArchiveSourceWeights} from './archive-source-weights.mjs';
 import {archiveWeightControls} from './source-weight-controls.mjs';
 const contexts=new WeakMap(),f=Math.fround;
 const registryNames=['middleWeight','gramScale','pitchScale','referenceNote','anchorMultiplier'];
@@ -81,23 +82,33 @@ export function archiveNoteSourceInputs(context,{note,noteIndex=note,amplitudeCu
     baseWeights:Float32Array.from(weights),harmonicWeightsComputed:false,registryConstantsExplicit:true,completeVoiceVerified:false};
 }
 export function prepareArchiveIndependentTables(context,{note,noteIndex=note,amplitudeCurveModes,instrumentMode,phaseCurveMode,
-  weights,integerScale,phaseConstant,jitterAmount,sampleRate,frequencyCutoff,impedanceRuntime,phaseOffsetControls}){
+  weights,weightSource,integerScale,phaseConstant,jitterAmount,sampleRate,frequencyCutoff,impedanceRuntime,phaseOffsetControls}){
   const own=state(context),source=archiveNoteSourceInputs(context,{note,noteIndex,amplitudeCurveModes,instrumentMode,phaseCurveMode});
   if(source.modal.blend!==0)throw new RangeError('This archive requires a coupled endpoint; independent-only constructor cannot replace it');
   if(!Number.isInteger(integerScale)||!Number.isFinite(phaseConstant)||!impedanceRuntime)
     throw new RangeError('Explicit amplitude integer scale, phase constant and impedance runtime modes required');
+  if(weightSource!==undefined&&weights!==undefined)throw new RangeError('Choose archive spectrum or explicit weights, not both');
+  const spectrum=weightSource===undefined?undefined:archiveNoteSourceWeights(context,{...weightSource,note,noteIndex});
   const modal=source.modal;
   const independentSource={poleControls:{coordinateScale:modal.coordinateScale,coordinates:modal.coordinates,note,
     jitterAmount,sampleRate,frequencyCutoff,archiveContext:{...impedanceRuntime,baseFields:own.baseFields,presetFields:own.presetFields}},
-    weights,frequencyRatios:modal.frequencyRatios,componentAmplitudeScale:modal.componentAmplitudeScale,
+    weights:spectrum?spectrum.output:weights,frequencyRatios:modal.frequencyRatios,componentAmplitudeScale:modal.componentAmplitudeScale,
     amplitudeControls:{...source.amplitude.independent,integerScale},phaseAmount:source.phase.phaseAmount,phaseConstant};
   const phaseOffsets=phaseOffsetControls===undefined?undefined:{coordinates:modal.coordinates,controls:phaseOffsetControls,phaseConstant};
   const tables=prepareEndpointSourceTables({prepared:source.prepared,independentSource,phaseOffsets});
   return {...tables,archivePhysicalSourceComputed:true,archiveTuningComputed:true,archiveAmplitudeSourceComputed:true,
-    harmonicWeightsComputed:false,registryConstantsExplicit:true};
+    harmonicWeightsComputed:false,archiveSpectrumComputed:spectrum!==undefined,harmonicEditsExplicit:spectrum!==undefined,registryConstantsExplicit:true};
 }
 
 export function archiveNoteWeightControls(context,{note,runtimeCurveModes}) {
   const own=state(context);
   return archiveWeightControls({baseFields:own.baseFields,presetFields:own.presetFields,note,runtimeCurveModes});
+}
+
+export function archiveNoteSourceWeights(context,{note,noteIndex=note,runtimeCurveModes,harmonicEdits,weightOffset}) {
+  const own=state(context),tuning=archiveTunedNote(context,{note,noteIndex});
+  if(!own.physicalCache.has(note))own.physicalCache.set(note,archiveSourceControls({baseFields:own.baseFields,presetFields:own.presetFields,
+    note,runtimeCurveModes:own.sourceCurveModes,math:nativeSourceMath}));
+  return constructArchiveSourceWeights({baseFields:own.baseFields,presetFields:own.presetFields,note,noteIndex,runtimeCurveModes,
+    frequency:tuning.frequency,stiffness:own.physicalCache.get(note).stiffness,harmonicEdits,weightOffset});
 }
