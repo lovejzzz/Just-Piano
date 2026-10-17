@@ -9,7 +9,8 @@ from pianoteq_capture_recurrence import register
 from pianoteq_capture_source_amplitude import regfloat
 from pianoteq_capture_key_mix import matrix
 ROOT=Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
-LIMIT=256
+LIMIT=int(os.environ.get('PIANOTEQ_TIME_WINDOW_BLOCKS','256'))
+assert 256<=LIMIT<=1024
 POINTS={'selection':0x1007181d8,'model':0x100718230,'entry':0x10030bd30,'before':0x10030c104,'gains':0x100460f08,'time':0x100460f1c}
 records=[];errors=[];hooks={};voices={};sources={};models=set();pending={};last_seen={};ends={};complete=False;main_thread=None
 
@@ -73,7 +74,7 @@ def observed(frame,location,_):
     ends[h]=age+64;pending.pop(thread)
     if len(ends)==5 and all(x==LIMIT*64 for x in ends.values()):
      for hook in hooks.values():hook.SetEnabled(False)
-  assert len(records)<6000
+  assert len(records)<20*LIMIT+256
   if len(records)%128==0 or not any(h.IsEnabled() for h in hooks.values()):save()
   return True
  except Exception:

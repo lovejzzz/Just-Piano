@@ -1,13 +1,17 @@
 import fs from 'node:fs';import path from 'node:path';import crypto from 'node:crypto';import {spawnSync} from 'node:child_process';import {fileURLToPath} from 'node:url';
 import {stringifyWithNegativeZero} from './pianoteq_json_exact.mjs';
 const [capture,audit,directory,...extra]=process.argv.slice(2);
-if(!capture||!audit||!directory||extra.length)throw new Error('Usage: capture.json resumes.jsonl new-directory');
+const held=extra.length===1&&extra[0]==='--held-attack';
+if(!capture||!audit||!directory||extra.length&&!held)throw new Error('Usage: capture.json resumes.jsonl new-directory [--held-attack]');
 const base=JSON.parse(fs.readFileSync(capture));fs.mkdirSync(directory);
 const runner=fileURLToPath(new URL('./pianoteq_replay_active_time_envelope.mjs',import.meta.url));
 const run=(input,output)=>spawnSync(process.execPath,[runner,input,audit,output,'--exp-candidate'],{encoding:'utf8',maxBuffer:2**20});
 const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(capture,baselinePath);if(baselineRun.status!==0)throw new Error('Active baseline must pass');
 const baseline=JSON.parse(fs.readFileSync(baselinePath));
-if(!baseline.passed||!baseline.timeChangedSamples||!baseline.primaryActiveBlocks||!baseline.postAttackBlocks)throw new Error('Actual shaping, primary envelope and post-attack coverage required');
+if(!baseline.passed||!baseline.timeChangedSamples||!baseline.postAttackBlocks)throw new Error('Actual shaping and post-attack coverage required');
+if(held){
+ if(baseline.primaryActiveBlocks!==0||baseline.secondaryActiveBlocks!==0||baseline.gainChangedSamples!==0||baseline.windowBlocks!==800||baseline.postAttackBlocks!==250||new Set(base.records.filter(r=>r.stage==='selection').map(r=>r.note)).size!==5||baseline.models.some(m=>m.attackSamples!==48000||m.finalCounter!==51200))throw new Error('Five held notes must cross the full one-second attack without terminal gain activity');
+}else if(!baseline.primaryActiveBlocks)throw new Error('Active primary envelope coverage required for the repeat fixture');
 const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero(r.predictions)).digest('hex'),expected=hash(baseline),first=(d,stage)=>d.records.find(r=>r.stage===stage);
 const nextDouble=x=>{const v=new DataView(new ArrayBuffer(8));v.setFloat64(0,x);v.setBigUint64(0,v.getBigUint64(0)+1n);return v.getFloat64(0);};
 const cases=[
@@ -35,4 +39,4 @@ for(const [name,mutate,expect]of cases){
  results.push({name,expect,exit:r.status,mismatches:report?.mismatches,predictionHash,error:r.stderr.slice(-600)});
  fs.writeFileSync(path.join(directory,'progress.json'),JSON.stringify({baselineChecks:baseline.checks,results},null,2));
 }
-fs.writeFileSync(path.join(directory,'results.json'),JSON.stringify({allExpected:true,cases:results.length,baselineChecks:baseline.checks,predictionHash:expected,results},null,2));console.log(JSON.stringify({allExpected:true,cases:results.length}));
+fs.writeFileSync(path.join(directory,'results.json'),JSON.stringify({allExpected:true,profile:held?'held-attack':'repeated-primary',cases:results.length,baselineChecks:baseline.checks,predictionHash:expected,results},null,2));console.log(JSON.stringify({allExpected:true,cases:results.length}));

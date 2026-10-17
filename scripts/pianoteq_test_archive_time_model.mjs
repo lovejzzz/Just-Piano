@@ -19,7 +19,13 @@ const clone=structuredClone,results=[];
 function verify(name,c,s,expected,changed){const r=run(name,c,s);if(r.exit!==1||(expected===null?r.report!==null:r.report?.mismatches!==expected)||r.report&&((r.report.predictionHash!==baseline.report.predictionHash)!==changed))throw new Error('Unexpected negative result: '+name);results.push({name,exit:r.exit,mismatches:r.report?.mismatches??null,predictionChanged:r.report?changed:null});}
 let c=clone(capture);c.records.find(r=>r.stage==='selection').source.globalAttack+=.01;verify('target',c,source,1,false);
 let s=clone(source);s.editFields.find(r=>r.object_offset===0x1470).value.a+=.01;verify('scalar-source',capture,s,5,true);
-s=clone(source);s.editFields.find(r=>r.object_offset===0x1470).value.curve_a.y[60]=.1;verify('curve-source',capture,s,5,true);
+s=clone(source);
+const curve=s.editFields.find(r=>r.object_offset===0x1470).value.curve_a;
+const selected=capture.records.filter(r=>r.stage==='selection');
+const curveIndex=curve.x.findIndex(x=>x===selected[0].note);
+if(curveIndex<0)throw new Error('Curve perturbation requires a selected exact knot');
+curve.y[curveIndex]+=.1;
+verify('curve-source',capture,s,selected.filter(r=>r.note===selected[0].note).length,true);
 c=clone(capture);c.records.find(r=>r.stage==='selection').note=69.5;verify('unverified-interpolation',c,source,null,false);
 s=clone(source);s.editFields=s.editFields.filter(r=>r.object_offset!==0x1470);verify('missing-object',capture,s,null,false);
 s=clone(source);s.presetSha256='0'.repeat(64);verify('preset-identity',capture,s,null,false);
