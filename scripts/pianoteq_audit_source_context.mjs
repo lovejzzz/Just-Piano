@@ -7,6 +7,7 @@ import { archiveExcitationMixCoefficients, mixExcitationComponents } from '../ds
 import {archiveNeighborControls, mixNeighborExcitation} from '../dsp/excitation-neighbor-controls.mjs';
 import {archiveExcitationDecayControls, excitationDecayFromControls, scaleExcitationDecay} from '../dsp/excitation-decay-controls.mjs';
 import {archiveFrequencyVariationControls, rewindExcitationRandom, secondaryFrequencySeed, varyExcitationFrequencies} from '../dsp/excitation-frequency-variation.mjs';
+import {ExcitationManagerRandom} from '../dsp/excitation-manager-random.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
 let presetPair, mixArchive, neighborOracle, decaySource, frequencySource;
@@ -18,7 +19,7 @@ for (let i = 0; i < options.length;) {
   if (option === '--preset-pair' && !presetPair) presetPair = [first, second];
   else if (option === '--mix-archive' && !mixArchive && /^\d+$/.test(second)) mixArchive = [first, Number(second)];
   else if (option === '--decay-source' && !decaySource && second === 'ordinary-host-zero') decaySource = first;
-  else if (option === '--frequency-source' && !frequencySource && first === '1' && second === 'captured-post-jitter-state') frequencySource = true;
+  else if (option === '--frequency-source' && !frequencySource && first === '1' && ['captured-post-jitter-state', 'manager-reset-seed-zero'].includes(second)) frequencySource = second;
   else throw new Error('Expected unique --preset-pair first.json second.json or --mix-archive banks.json index');
 }
 if (neighborOracle && !mixArchive) throw new Error('Neighbor preparation requires explicit mix archive');
@@ -68,6 +69,9 @@ for (const row of candidate.predictions) {
   predictions.set(key, row);
 }
 const checks = [], failures = [], hashes = new Map(), used = new Set(), epochs = new Map();
+const managerRandom = frequencySource === 'manager-reset-seed-zero' ? new ExcitationManagerRandom({configurationSeed: 0, eventBranch: 'velocity-randomization-enabled'}) : undefined;
+const managerRandomStateChecks = [];
+let randomStateMismatches = 0;
 let comparedValues = 0, mismatches = 0;
 for (const record of capture.records) {
   if (record.stage !== 'weights') continue;
@@ -89,16 +93,26 @@ for (const record of capture.records) {
   const decayControls = decayPreset ? archiveExcitationDecayControls(mixBank, decayPreset, input.note, {runtimeCurveMode: 'linear-clamp'}) : undefined;
   const decayModel = decayControls ? excitationDecayFromControls(decayControls, input.controls.velocity, {hostMode: 0, noteBranch: 'ordinary'}) : undefined;
   const decay = decayModel ? scaleExcitationDecay(predicted.decay, decayModel.gain) : undefined;
-  let variation, variationControls, initialRandomState;
+  let variation, variationControls, initialRandomState, managerInitialization;
   if (frequencySource) {
     variationControls = archiveFrequencyVariationControls(mixBank, input.note, {instrumentMode: 1, runtimeCurveMode: 'linear-clamp'});
     if (![0, 1].includes(input.mode)) throw new Error('Unverified frequency source mode');
     const primary = input.mode === 0, spread = primary ? variationControls.primarySpread : variationControls.secondarySpread;
     const offset = primary ? 0 : variationControls.secondaryOffset;
     const draws = spread === 0 && offset === 0 ? 0 : Math.ceil(predicted.frequency.length / 4) * 4;
-    initialRandomState = primary ? rewindExcitationRandom(record.randomState, draws) : secondaryFrequencySeed(predicted.noteIndex);
+    if (primary && managerRandom) {
+      managerInitialization = managerRandom.nextVoice();
+      if (record.epoch !== managerInitialization.ordinal) throw new Error('Manager initialization requires contiguous chronological voice starts');
+    }
+    initialRandomState = primary ? (managerInitialization?.voiceState ?? rewindExcitationRandom(record.randomState, draws)) : secondaryFrequencySeed(predicted.noteIndex);
     variation = varyExcitationFrequencies({frequency: predicted.frequency, columns: predicted.cols, spread, offset, randomState: initialRandomState});
-    if (primary && variation.randomState.some((x, i) => x !== record.randomState[i])) throw new Error('RNG rewind/forward roundtrip failed');
+    if (primary) {
+      if (!Array.isArray(record.randomState) || record.randomState.length !== 4 || !record.randomState.every(x => Number.isInteger(x) && x >= 0 && x <= 0xffffffff))
+        throw new Error('Complete post-jitter RNG comparison target required');
+      const count = variation.randomState.filter((x, i) => x !== record.randomState[i]).length;
+      randomStateMismatches += count;
+      managerRandomStateChecks.push({epoch: record.epoch, predicted: variation.randomState, actual: record.randomState, mismatches: count});
+    }
   }
   const arrays = {}, tableHashes = {}, columnHashes = {}, predictedSource = {};
   for (const [name, field] of [['frequency', 'frequency'], ['decay', 'decay'], ['amplitude', 'normalizedAmplitude'], ['phase', 'phase']]) {
@@ -127,7 +141,7 @@ for (const record of capture.records) {
     decay: decayModel && {controls: decayControls, model: decayModel},
     frequencyVariation: variation && {controls: variationControls, initialRandomState, randomState: variation.randomState,
       randomDraws: variation.randomDraws, spacingCorrections: variation.spacingCorrections,
-      initialStateSource: input.mode === 0 ? 'rewound captured post-jitter RNG state' : 'note index LCG initialization'},
+      managerInitialization, initialStateSource: input.mode === 0 ? (managerRandom ? 'manager reset and event draws' : 'rewound captured post-jitter RNG state') : 'note index LCG initialization'},
     mix: mix && {coefficients: mix.coefficients, blend: mix.blend, control: mix.control, weight: mix.weight, upper: mix.upper}});
 }
 if (checks.length !== capture.spectrumCount || !checks.length || epochs.size !== capture.starts || [...epochs.values()].some(n => n !== predictions.size))
@@ -150,7 +164,8 @@ const stability = [...hashes].map(([key, rows]) => ({key, observations: rows.len
   uniqueFingerprintsByArray: Object.fromEntries(Object.keys(rows[0].hashes).map(name => [name, new Set(rows.map(r => r.hashes[name])).size])),
   uniqueFingerprintsByColumn: Object.fromEntries(Object.keys(rows[0].columnHashes).map(name => [name,
     rows[0].columnHashes[name].map((_, column) => new Set(rows.map(r => r.columnHashes[name][column])).size)])), rows}));
-const result = {passed: mismatches === 0, compatible: mismatches === 0, bindingAuditOnly: true,
+if (managerRandom && managerRandom.starts !== capture.starts) throw new Error('Incomplete manager random stream');
+const result = {passed: mismatches === 0 && randomStateMismatches === 0, compatible: mismatches === 0 && randomStateMismatches === 0, bindingAuditOnly: true,
   comparedValues, mismatches, captureSha256: sha(captureBytes), candidateSha256: sha(candidateBytes), checks, failures, stability, presetComparison,
   candidateAmplitudeNormalizationOriginallyObserved: false, correctionFitApplied: false,
   amplitudeMixComputedFromArchive: Boolean(mixBank), mixArchiveSha256,
@@ -163,8 +178,12 @@ const result = {passed: mismatches === 0, compatible: mismatches === 0, bindingA
   decayControlsComputedFromArchive: Boolean(decayPreset), decayPresetSha256: decayPresetBytes ? sha(decayPresetBytes) : undefined,
   decayRuntimeBranchSupplied: decayPreset ? 'ordinary-host-zero' : undefined, decayRuntimeBranchNewlyObserved: false,
   frequencyVariationComputedFromArchive: Boolean(frequencySource), frequencyInstrumentModeSupplied: frequencySource ? 1 : undefined,
-  frequencyInstrumentModeNewlyObserved: false, primaryInitialRandomStateIndependentlyProduced: false,
-  primaryRandomStateStillObserved: Boolean(frequencySource), compatibleWithCapturedContextOnly: true,
+  frequencyInstrumentModeNewlyObserved: false, primaryInitialRandomStateIndependentlyProduced: Boolean(managerRandom),
+  primaryRandomStateStillObserved: Boolean(frequencySource) && !managerRandom,
+  managerConfigurationSeedSupplied: managerRandom ? 0 : undefined, managerEventBranchSupplied: managerRandom ? 'velocity-randomization-enabled' : undefined,
+  managerRuntimeConditionsNewlyObserved: false, managerDraws: managerRandom?.draws,
+  randomStateComparedWords: managerRandomStateChecks.length * 4, randomStateMismatches, managerRandomStateChecks,
+  compatibleWithCapturedContextOnly: true,
   substitutedIntoVoice: false, sameRunModelGenerationVerified: false, finalStereoVerified: false};
 fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
 console.log(JSON.stringify({...result, failures: undefined, checks: undefined, stability: stability.map(({rows, ...r}) => r)}));
