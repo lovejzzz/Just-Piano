@@ -29,10 +29,15 @@ def main():
     parser.add_argument('capture', type=Path)
     parser.add_argument('directory', type=Path)
     parser.add_argument('report', type=Path)
+    parser.add_argument('--stage', choices=('consumerPost', 'audioReturn'))
     args = parser.parse_args()
     data = json.loads(args.capture.read_text())
     assert data['complete'] and not data['errors'] and data['consumerPost']
     manifest = json.loads((args.directory / 'manifest.json').read_text())
+    endpoint = manifest.get('endpoint', 'consumerPost')
+    assert endpoint in ('consumerPost', 'audioReturn') and (args.stage is None or args.stage == endpoint)
+    if endpoint == 'audioReturn':
+        assert data.get('voiceRattleAudio') and manifest['rattlePrimaryInputObserved'] is False
     assert manifest['computedSamples'] and not manifest['normalization']
     assert len(manifest['files']) == 15
     seen, total = set(), 0
@@ -40,7 +45,7 @@ def main():
         epoch, group = entry['epoch'], entry['group']
         assert (epoch, group) not in seen and 0 <= epoch < 5 and 0 <= group < 3
         seen.add((epoch, group))
-        targets = [r for r in data['records'] if r['stage'] == 'consumerPost' and r['epoch'] == epoch]
+        targets = [r for r in data['records'] if r['stage'] == endpoint and r['epoch'] == epoch]
         assert targets and targets[0]['counter'] == entry['firstComparedCounter']
         assert all(r['counter'] == targets[0]['counter'] + 64 * i for i, r in enumerate(targets))
         if manifest.get('allVoiceStartsAtZero'):
@@ -54,7 +59,7 @@ def main():
         assert payload == expected, ('Native PCM differs', epoch, group)
         assert hashlib.sha256(payload).hexdigest() == entry['pcmSha256']
         total += len(payload) // 4
-    result = dict(passed=True, files=len(seen), comparedFloat32Samples=total,
+    result = dict(passed=True, nativeStage=endpoint, files=len(seen), comparedFloat32Samples=total,
                   allVoiceStartsAtZero=manifest.get('allVoiceStartsAtZero', False),
                   groupEnvelopeSeedObserved=manifest.get('groupEnvelopeSeedObserved'),
                   finalStereo=False, observedModelAndControlInputsRemain=True)

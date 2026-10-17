@@ -19,6 +19,11 @@ INTERIOR=os.environ.get('PIANOTEQ_WORKER_INTERIOR_SITES')=='1'
 assert not INTERIOR or DEFER
 POLL_WORKER=os.environ.get('PIANOTEQ_READ_STOPPED_WORKERS')=='1'
 assert not POLL_WORKER or DEFER
+AUDIO=os.environ.get('PIANOTEQ_VOICE_RATTLE_AUDIO')=='1'
+assert not AUDIO or EARLY and DEFER
+if AUDIO:
+ from pianoteq_capture_voice_mid import controls as mid_controls,groups as mid_groups
+ from pianoteq_capture_rattle_burst import state as rattle_state,samples as audio_samples
 if INTERIOR:
  base.POINTS['coefficients']=0x100472f54
  base.POINTS['envelopeResult']=0x100472fd4
@@ -27,12 +32,14 @@ source_role='weights';source_pending=None;post_pending=None;main_thread=None;sou
 group_pending=None
 slot_updates=[]
 worker_seen={};stopped_worker_reads=[];STOPPED_FRAME=object()
+audio_pending={};audio_tables=set()
 
 def save(force=False):
  global last_saved_rows
  if not force and not errors and not base.complete and len(records)-last_saved_rows<256:return
  data={'schema':1,'sourceCommits':True,'sourceDispatchGates':True,'consumerCross':CROSS,'allObservationBarriers':CROSS,'consumerPost':True,'consumerDelay':True,'consumerInjection':True,'injectionEntryObserved':False,'dispatchControls':True,'workerOutputs':True,'windowBlocks':None,'fixedSites':False,'siteCount':6,'records':records,'errors':errors,'starts':base.starts,'spectrumCount':base.spectrum_calls,'finalCount':base.final_calls,'copyCount':base.copies,'initializations':len(base.initialized),'envelopeBlocks':base.blocks,'duplicateEnvelopeReturns':base.duplicates,'envelopePending':len(base.envelope_pending),'coefficientCount':base.coefficients,'refreshCount':sum(r['stage']=='refresh' for r in records),'renderCount':sum(r['stage']=='envelopeResult' and 'render' in r for r in records),'pending':len(base.pending),'complete':base.complete,'activeSites':sum(h.IsEnabled() for h in hooks.values()),'transitions':base.transitions,'slotTransitions':slot_transitions,'sourceRole':source_role,'sourcePending':source_pending,'postPending':post_pending,'slotBarriers':True,'acknowledgedTransitions':acknowledged_transitions}
  if EARLY:data.update(earlyConsumer=True,groupControlPending=group_pending,groupEnvelopeControl=True,slotUpdatesDeferred=DEFER,pendingSlotUpdates=len(slot_updates),workerInteriorSites=INTERIOR,readStoppedWorkerFrames=POLL_WORKER,stoppedWorkerReads=stopped_worker_reads)
+ if AUDIO:data.update(voiceRattleAudio=True,audioPending=len(audio_pending),observedRattleTables=True,rattleTableCount=len(audio_tables))
  (ROOT/'runtime.json').write_text(json.dumps(data,indent=None if CROSS else 2,allow_nan=False));last_saved_rows=len(records)
 base.save=save
 
@@ -136,8 +143,37 @@ def observed(frame,location,_):
    records.append({'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'channels':channels(frame),'auxiliary':auxiliary_matrix(frame,register(frame,'x21'))})
    post_pending=None
    next_name,address=('rattleSource',0x10085ed9c) if EARLY else ('consumer',0x100460908)
+   if AUDIO:
+    assert thread==main_thread and thread not in audio_pending
+    matrix=register(frame,'x23');records[-1]['midControls']=mid_controls(frame,h)
+    audio_pending[thread]={'voice':h,'counter':age,'matrix':matrix,'phase':'cross'}
+    next_name,address='audioGain',0x100460c84
    replace(frame,name,next_name,address)
    if EARLY:source_role=next_name
+  elif name in ('audioGain','audioEntry','audioReturn'):
+   assert AUDIO and thread==main_thread
+   c=audio_pending[thread];h=c['voice'];age=scalar(frame,h+0x6c,'I');assert age==c['counter']
+   row={'stage':name,'thread':thread,'site':site,'epoch':base.voices[h],'voice':hex(h),'counter':age,'midControls':mid_controls(frame,h),'channels':mid_groups(frame,c['matrix'])}
+   if name=='audioGain':
+    assert c['phase']=='cross' and register(frame,'x19')==h and register(frame,'x23')==c['matrix']
+    c['phase']='gain';next_name,address='audioEntry',0x10030bd30
+   elif name=='audioEntry':
+    target=frame.GetThread().GetProcess().GetTarget();caller=target.ResolveLoadAddress(register(frame,'x30')).GetFileAddress()
+    assert c['phase']=='gain' and caller==0x100460de4
+    obj=register(frame,'x0');descriptor=register(frame,'x1');assert obj==h+0x28a8 and descriptor==register(frame,'x2')
+    c.update(obj=obj,descriptor=descriptor,phase='entry')
+    row.update(control=regfloat(frame,'s0','f'),cachedControl=scalar(frame,h+0x2f38),input=audio_samples(frame,descriptor),state=rattle_state(frame,obj))
+    if row['control']!=0 or row['state']['active']:
+     bank=scalar(frame,obj+0x10,'Q');pointer,count=unpack(frame,bank,'QQ');assert 0<count<=131072
+     row['sourceTable']={'pointer':hex(pointer),'count':count}
+     if (pointer,count) not in audio_tables:
+      row['sourceTable']['values']=list(unpack(frame,pointer,'f'*count));audio_tables.add((pointer,count))
+    next_name,address='audioReturn',0x10030c104
+   else:
+    assert c['phase']=='entry' and register(frame,'x19')==c['obj'] and register(frame,'x20')==c['descriptor']
+    row.update(output=audio_samples(frame,c['descriptor']),state=rattle_state(frame,c['obj']))
+    audio_pending.pop(thread);next_name,address='rattleSource',0x10085ed9c
+   records.append(row);replace(frame,name,next_name,address);source_role=next_name
   else:
    begin=len(records);result=base.observed(frame,location,_)
    for r in records[begin:]:r.setdefault('site',site);r.setdefault('thread',thread)
@@ -181,12 +217,15 @@ def finish(debugger):
  if EARLY:
   assert group_pending is None and not slot_updates and 'copy' in hooks
   assert sum(r['stage']=='groupControl' for r in records)==sum(r['stage']=='groupControlAfter' for r in records)>0
+ if AUDIO:assert not audio_pending and audio_tables
  assert sum(r['stage']=='rattleSource' for r in records)==sum((r['stage']=='rattleCommit' and r['caller']=='0x100460260') or r['stage']=='rattleSkip' for r in records)
  for epoch in range(5):
   expected=[r['counter'] for r in records if r['stage']=='consumer' and r['epoch']==epoch]
   for stage in (['consumerPost','consumerCross'] if CROSS else ['consumerPost']):assert expected==[r['counter'] for r in records if r['stage']==stage and r['epoch']==epoch]
   if EARLY:
    assert expected==[r['counter'] for r in records if r['stage']=='copy' and r['epoch']==epoch]
+  if AUDIO:
+   for stage in ('audioGain','audioEntry','audioReturn'):assert expected==[r['counter'] for r in records if r['stage']==stage and r['epoch']==epoch]
  base.finish();window_complete=True
 
 def resume_owned_stops(debugger):

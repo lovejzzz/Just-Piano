@@ -18,8 +18,9 @@ const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(captureP
 if(baselineRun.error)throw baselineRun.error;
 if(baselineRun.status!==0)throw new Error('Joint baseline failed: '+baselineRun.stderr.slice(-800));
 const baseline=JSON.parse(fs.readFileSync(baselinePath));
-if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed)throw new Error('Full parent and components must pass');
-const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs,r.cross?.outputs])).digest('hex');
+if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed||base.voiceRattleAudio&&!baseline.rattleAudio?.passed)throw new Error('Full parent and components must pass');
+if(base.voiceRattleAudio&&(!baseline.rattleAudio.births.length||!baseline.rattleAudio.changedOutputSamples||!baseline.rattleAudio.zeroControlTailBlocks))throw new Error('Active Rattle births, changed audio and zero-control tail coverage required');
+const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.continuousOutputs,r.consumerOutputs,r.injection.outputs,r.cross?.outputs,r.rattleAudio?.outputs])).digest('hex');
 const expected=hash(baseline),first=(d,stage)=>d.records.find(r=>r.stage===stage);
 const activePre=d=>{const seen=new Set();for(const r of d.records)if(r.stage==='consumer'&&(d.earlyConsumer||!seen.has(r.epoch))){seen.add(r.epoch);if(r.injectionPre.envelope.active===1)return r;}throw new Error('Active envelope required by this fixture');};
 const activePost=d=>{const pre=activePre(d);return d.records.find(r=>r.stage==='consumerPost'&&r.epoch===pre.epoch&&r.counter===pre.counter);};
@@ -66,6 +67,24 @@ if(archive)cases.push(
  ['unsupported-archive-runtime-mode',()=>{},'reject',m=>{m.runtimeMode='unknown';}],
  ['incomplete-archive-curves',()=>{},'reject',m=>{m.baseFields[0].value.curves.pop();}],
  ['archive-preset-identity-mismatch',()=>{},'reject',m=>{m.presetSha256='0'.repeat(64);}],
+);
+if(base.voiceRattleAudio)cases.push(
+ ['gain-audio-target',d=>{first(d,'audioGain').channels[0][8]+=.125;},'one-same'],
+ ['rattle-entry-groups-target',d=>{first(d,'audioEntry').channels[0][8]+=.125;},'one-same'],
+ ['rattle-entry-primary-target',d=>{first(d,'audioEntry').input[8]+=.125;},'one-same'],
+ ['rattle-argument-target',d=>{first(d,'audioEntry').control+=.125;},'one-same'],
+ ['rattle-cached-control-target',d=>{first(d,'audioEntry').cachedControl+=.125;},'one-same'],
+ ['rattle-return-audio-target',d=>{first(d,'audioReturn').output[8]+=.125;},'one-same'],
+ ['rattle-return-secondary-target',d=>{first(d,'audioReturn').channels[1][8]+=.125;},'one-same'],
+ ['rattle-return-state-target',d=>{first(d,'audioReturn').state.peak+=.125;},'one-same'],
+ ['rattle-table-source',d=>{d.records.find(r=>r.sourceTable?.values).sourceTable.values[8]+=.125;},'many-different'],
+ ['rattle-initial-scale-source',d=>{first(d,'audioEntry').state.controls.scale*=.5;},'many-different'],
+ ['nonzero-rattle-initial-state',d=>{first(d,'audioEntry').state.elapsed=.5;},'reject'],
+ ['missing-audio-gain',d=>{d.records.splice(d.records.indexOf(first(d,'audioGain')),1);},'reject'],
+ ['missing-rattle-entry',d=>{d.records.splice(d.records.indexOf(first(d,'audioEntry')),1);},'reject'],
+ ['missing-rattle-return',d=>{d.records.splice(d.records.indexOf(first(d,'audioReturn')),1);},'reject'],
+ ['wrong-rattle-address',d=>{first(d,'audioEntry').site.fileAddress+=4;},'reject'],
+ ['unsupported-mid-processor',d=>{first(d,'consumerCross').midControls.primaryProcessorEnabled=1;},'reject'],
 );
 if(base.consumerCross){
  const auxiliaryKept=!!(first(base,'consumerPost').crossControls.keepAuxiliary&1);
