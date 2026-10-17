@@ -106,6 +106,7 @@ export function bindPreparedSources(bytes, captureSha256) {
     metadata: {reportSha256: sha(bytes), captureSha256, tables: entries.size, comparedValues: count,
       crossRunHistoricalBridge: true, sameRunModelGenerationVerified: false,
       candidateFromArchiveCoupledSource:report.candidateFromArchiveCoupledSource===true,
+      candidateSourceRuntimeControlsComputed:report.candidateSourceRuntimeControlsComputed===true,
       candidateNativeRootAlgorithm:report.candidateNativeRootAlgorithm,
       candidateArchiveInputsStillObserved:report.candidateArchiveInputsStillObserved,
       primaryRandomStateStillObserved: !forwardRandom, primaryInitialRandomStateIndependentlyProduced: forwardRandom,

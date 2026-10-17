@@ -2,7 +2,8 @@
 // Targets are compared after prediction; no target pole/table enters production.
 import fs from 'node:fs';import crypto from 'node:crypto';
 import {constructArchiveSourceContext,prepareArchiveSourceTables} from '../dsp/archive-source-context.mjs';
-const [configPath,output]=process.argv.slice(2);if(!output)throw new Error('Private path configuration and NEW report required');
+const [configPath,output,option,...extra]=process.argv.slice(2),archiveRuntime=option==='--archive-runtime-controls';
+if(!output||(option!==undefined&&!archiveRuntime)||extra.length)throw new Error('Private path configuration, NEW report and optional --archive-runtime-controls required');
 const paths=JSON.parse(fs.readFileSync(configPath)),d={},sources={};
 const names=['base','preset','stretched','anchor','stretchWeights','counts','constants','weightConstants','source','normalized','amplitude','poles','grids','before','radius','polynomial'];
 for(const k of names){if(typeof paths[k]!=='string')throw new Error('Missing path '+k);const bytes=fs.readFileSync(paths[k]);d[k]=JSON.parse(bytes);sources[k]=crypto.createHash('sha256').update(bytes).digest('hex');}
@@ -36,10 +37,15 @@ for(const mode of [0,1]){
  const phaseNames=['globalDegrees','evenOffset','oddDegrees','evenDegrees','oddDelay','evenDelay'],phaseOffsets=['0x400','0x418','0x430','0x448','0x460','0x478'];
  const own=prepareArchiveSourceTables(context,{note:r.note,noteIndex:r.note_index,amplitudeCurveModes,instrumentMode:1,phaseCurveMode:ordinary,
   weightSource:{runtimeCurveModes,harmonicCurveModes:{preset:grid.map(()=>ordinary),base:baseGrid.map(()=>ordinary)},weightOffset},
-  integerScale:constants.integer_amplitude_scale,phaseConstant:constants.phase_constant,jitterAmount:c['0x140'],sampleRate:g['0x98'],frequencyCutoff:c['0xf8'],
-  polynomialControls:{kappa:poly.kappa,gamma:poly.gamma,decayFloorRatio:c['0x110']},
+  integerScale:constants.integer_amplitude_scale,phaseConstant:constants.phase_constant,sampleRate:g['0x98'],
+  ...(archiveRuntime?{sourceRuntimeCurveMode:ordinary,polynomialControls:{kappa:poly.kappa,gamma:poly.gamma}}:
+    {jitterAmount:c['0x140'],frequencyCutoff:c['0xf8'],polynomialControls:{kappa:poly.kappa,gamma:poly.gamma,decayFloorRatio:c['0x110']}}),
   impedanceRuntime:{mode,runtimeCurveMode:'linear-clamp',phaseCurveMode:phaseMode,frequencyCurveModes:gridConfig.frequency_curves.map(scalar),polarRadius:radius},
   phaseOffsetControls:Object.fromEntries(phaseNames.map((name,i)=>[name,g[phaseOffsets[i]]]))});
+ if(archiveRuntime){
+  if(!own.archiveRuntimeControlsComputed)throw new Error('Archive runtime controls must be consumed');
+  compare(`${mode}:source-runtime`,[own.runtimeSourceControls.frequencyCutoff,own.runtimeSourceControls.jitterAmount,own.runtimeSourceControls.decayFloorRatio],[c['0xf8'],c['0x140'],c['0x110']],true);
+ }
  if(!own.coupledPolesComputed||!own.coupledImpedanceFromArchive||!own.harmonicWeightsComputed||own.independentPolesComputed||own.rows!==rows||own.columns!==3)throw new Error('Expected complete own pure-coupled archive source');
  for(const [name,offset] of [['frequency','0x10'],['decay','0x38'],['amplitude','0x60'],['phase','0x88']])compare(`${mode}:${name}`,own[name],r.matrices[offset].values,true);
  compare(`${mode}:normalized-amplitude`,own.normalizedAmplitude,n.matrices['0x60'].values,true);
@@ -60,6 +66,7 @@ for(const mode of [0,1]){
 if(usedPoles.size!==36)throw new Error('Incomplete 36-row coverage');
 const report={schema:'pianoteq-archive-coupled-source-pass168',passed:!failures.length,float32Values,doubleValues,indices,checks,failures,predictions,sources,sourceRows:36,sourceConfigurations:2,
  rootAlgorithm:'recovered-native-cubic-qr',archivePhysicalTuningWeightsAmplitudeComputed:true,archiveImpedanceAndPolesComputed:true,
- remainingObservedInputs:['tuning/weight/phase/amplitude registry constants','instrument and scalar curve modes','sample rate, cutoff, coupling jitter, decay floor ratio','impedance polar radius and mode','G phase offsets','polynomial kappa/gamma'],
+ archiveRuntimeControlsComputed:archiveRuntime,sourceRuntimeControlValues:archiveRuntime?6:0,
+ remainingObservedInputs:['tuning/weight/phase/amplitude registry constants','instrument and scalar curve modes',archiveRuntime?'sample rate':'sample rate, cutoff, coupling jitter, decay floor ratio','impedance polar radius and mode','G phase offsets','polynomial kappa/gamma'],
  scope:'Cross-historical complete A4 coupled source matrices; not a new same-run voice or audio capture',sameRunPresetIdentityVerified:false,newAudioRendered:false,completeVoiceVerified:false};
 fs.writeFileSync(output,JSON.stringify(report,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({...report,predictions:undefined,checks:undefined,sources:undefined}));if(!report.passed)process.exitCode=1;

@@ -41,7 +41,8 @@ if (!capture.complete || capture.errors?.length !== 0 || !capture.records?.lengt
 if(archiveCoupledSource){
   if(candidate.schema!=='pianoteq-archive-coupled-source-pass168'||candidate.passed!==true||candidate.rootAlgorithm!=='recovered-native-cubic-qr'||
     candidate.archivePhysicalTuningWeightsAmplitudeComputed!==true||candidate.archiveImpedanceAndPolesComputed!==true||
-    candidate.sourceRows!==36||candidate.sourceConfigurations!==2||candidate.float32Values!==648||candidate.doubleValues!==216||candidate.indices!==2||
+    candidate.sourceRows!==36||candidate.sourceConfigurations!==2||candidate.float32Values!==(candidate.archiveRuntimeControlsComputed===true?654:648)||
+    (candidate.archiveRuntimeControlsComputed===true&&candidate.sourceRuntimeControlValues!==6)||candidate.doubleValues!==216||candidate.indices!==2||
     candidate.predictions.length!==2||!candidate.checks?.length||candidate.checks.some(x=>x.mismatches!==0))
     throw new Error('Complete native-QR archive coupled-source verification required');
 }else if(candidate.verifiedStagesPassed!==true||!candidate.frequencyAndRawDecayFromComputedPoles||!candidate.harmonicWeightsFromComputedReport)
@@ -217,6 +218,7 @@ const result = {passed: mismatches === 0 && randomStateMismatches === 0 && veloc
   comparedValues, mismatches, captureSha256: sha(captureBytes), candidateSha256: sha(candidateBytes), checks, failures, stability, presetComparison,
   candidateAmplitudeNormalizationOriginallyObserved: false, correctionFitApplied: false,
   candidateFromArchiveCoupledSource:archiveCoupledSource,candidateNativeRootAlgorithm:archiveCoupledSource?candidate.rootAlgorithm:undefined,
+  candidateSourceRuntimeControlsComputed:archiveCoupledSource&&candidate.archiveRuntimeControlsComputed===true,
   candidateArchiveInputsStillObserved:archiveCoupledSource?candidate.remainingObservedInputs:undefined,
   amplitudeMixComputedFromArchive: Boolean(mixBank), mixArchiveSha256,
   mixArchiveIndex: mixArchive?.[1], mixRuntimeCurveModeSupplied: mixBank ? 'linear-clamp' : undefined,

@@ -11,6 +11,7 @@ import {archivePhaseAmount} from './source-phase-controls.mjs';
 import {prepareEndpointSourceTables} from './endpoint-source-reference.mjs';
 import {constructArchiveSourceWeights} from './archive-source-weights.mjs';
 import {archiveWeightControls} from './source-weight-controls.mjs';
+import {archiveSourceRuntimeControls} from './source-runtime-controls.mjs';
 const contexts=new WeakMap(),f=Math.fround;
 const registryNames=['middleWeight','gramScale','pitchScale','referenceNote','anchorMultiplier'];
 const physicalCurveNames=['B1b40','B1b98','B2560','A490','A4e0','Af48'];
@@ -84,12 +85,20 @@ export function archiveNoteSourceInputs(context,{note,noteIndex=note,amplitudeCu
 export function prepareArchiveIndependentTables(context,options){return prepareArchiveTables(context,options,true);}
 export function prepareArchiveSourceTables(context,options){return prepareArchiveTables(context,options,false);}
 function prepareArchiveTables(context,{note,noteIndex=note,amplitudeCurveModes,instrumentMode,phaseCurveMode,
-  weights,weightSource,integerScale,phaseConstant,jitterAmount,sampleRate,frequencyCutoff,impedanceRuntime,phaseOffsetControls,polynomialControls},independentOnly){
+  weights,weightSource,integerScale,phaseConstant,jitterAmount,sampleRate,frequencyCutoff,impedanceRuntime,phaseOffsetControls,polynomialControls,sourceRuntimeCurveMode},independentOnly){
   const own=state(context),source=archiveNoteSourceInputs(context,{note,noteIndex,amplitudeCurveModes,instrumentMode,phaseCurveMode});
   if(independentOnly&&source.modal.blend!==0)throw new RangeError('This archive requires a coupled endpoint; independent-only constructor cannot replace it');
   if(!Number.isInteger(integerScale)||!Number.isFinite(phaseConstant)||!impedanceRuntime)
     throw new RangeError('Explicit amplitude integer scale, phase constant and impedance runtime modes required');
   if(weightSource!==undefined&&weights!==undefined)throw new RangeError('Choose archive spectrum or explicit weights, not both');
+  const runtimeControls=sourceRuntimeCurveMode===undefined?undefined:archiveSourceRuntimeControls({baseFields:own.baseFields,note,
+    cacheMode:impedanceRuntime.mode,instrumentMode,runtimeCurveMode:sourceRuntimeCurveMode});
+  if(runtimeControls){
+    if(jitterAmount!==undefined||frequencyCutoff!==undefined||polynomialControls?.decayFloorRatio!==undefined)
+      throw new RangeError('Archive source runtime controls cannot mix with supplied cutoff, jitter or decay floor');
+    ({jitterAmount,frequencyCutoff}=runtimeControls);
+    polynomialControls={...polynomialControls,decayFloorRatio:runtimeControls.decayFloorRatio};
+  }
   const spectrum=weightSource===undefined?undefined:archiveNoteSourceWeights(context,{...weightSource,note,noteIndex});
   const modal=source.modal;
   const independentSource=modal.blend<1?{poleControls:{coordinateScale:modal.coordinateScale,coordinates:modal.coordinates,note,
@@ -103,6 +112,7 @@ function prepareArchiveTables(context,{note,noteIndex=note,amplitudeCurveModes,i
   const phaseOffsets=phaseOffsetControls===undefined?undefined:{coordinates:modal.coordinates,controls:phaseOffsetControls,phaseConstant};
   const tables=prepareEndpointSourceTables({prepared:source.prepared,independentSource,coupledSource,phaseOffsets});
   return {...tables,archivePhysicalSourceComputed:true,archiveTuningComputed:true,archiveAmplitudeSourceComputed:true,
+    archiveRuntimeControlsComputed:runtimeControls!==undefined,runtimeSourceControls:runtimeControls,
     harmonicWeightsComputed:spectrum?.harmonicEditsComputed===true,archiveSpectrumComputed:spectrum!==undefined,harmonicEditsExplicit:spectrum?.harmonicEditsExplicit===true,registryConstantsExplicit:true};
 }
 

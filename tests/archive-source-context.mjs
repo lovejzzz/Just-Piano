@@ -4,12 +4,13 @@ const scalar={flags:0,special:0,dimension:1},curve=x=>({x:[0,127],y:[x,x]}),fiel
 const physicalNames=['B1b40','B1b98','B2560','A490','A4e0','Af48'];
 const sourceCurveModes=Object.fromEntries(physicalNames.map(k=>[k,scalar]));
 const model={indexmap:Array(128).fill(2),vectors:[[1],[1],[1]],scalar9d:0,curves:Array.from({length:10},()=>curve(0))};model.curves[0]=curve(1);
-const impedance={curves:[curve(1),curve(1),curve(1),curve(0)],curves248:[curve(1),curve(1),curve(1)],scalar148:0,
+const impedance={scalars:[1,0],scalar154:3000,curves:[curve(1),curve(1),curve(1),curve(0)],curves248:[curve(1),curve(1),curve(1)],scalar148:0,
  vectors:[[],[]],curve_list478:{coordinates:[0],curves:[{x:[],y:[0]}]}};
 const baseFields=[field(0x2548,model),field(0x1b40,{x:[],y:[]}),field(0x1b98,curve(0)),field(0x14e0,10),field(0x1b30,60),field(0x1b24,0),field(0x1b3c,1),
  field(0x1b38,0),field(0x1b2c,0),field(0x1bf8,[0,127]),field(0x1d30,[0,0,0,0]),field(0x1b34,440),field(0x1be8,0),
  field(0x1c28,Array.from({length:127},()=>[1,1,1])),field(0x1c40,Array.from({length:127},()=>[1,2,3])),field(0x1c58,Array(127).fill(1)),field(0x1bec,0),
  field(0x2a38,impedance),field(0x1d48,[2,2]),field(0x1d18,[1,1]),field(0x1d60,[0,0])];
+baseFields.push(field(0x164,3000));model.curves[6]=curve(1e6);
 const presetFields=[field(0x1398,0),field(0xf40,10),field(0xf48,curve(1)),field(0x470,{a:1,b:1,c:0,curves_ab:[curve(1),curve(0)],curve_c:curve(0)}),
  field(0x318,{kind:1,controls:[1,0],values:Array.from({length:12},(_,i)=>(i+1)*100),midi:{float:440,flag:70,notes:[60,69],map:[]}}),
  field(0x3b0,curve(0)),field(0x46c,0),field(0x458,0),field(0x400,{index:12,curve:curve(1)}),field(0x588,{curves:[curve(1),curve(1),curve(1)],scalars:[1,1,1]})];
@@ -79,6 +80,11 @@ for(const blend of [1,.5]){
   polynomialControls:{kappa:Math.PI,gamma:0,decayFloorRatio:1e6},
   impedanceRuntime:{mode:0,runtimeCurveMode:'linear-clamp',phaseCurveMode:scalar,frequencyCurveModes:[scalar],polarRadius:1}};
  const nativeTables=prepareArchiveSourceTables(nativeContext,options);
+ const {jitterAmount,frequencyCutoff,polynomialControls,...runtimeOptions}=options;
+ const ownRuntime=prepareArchiveSourceTables(nativeContext,{...runtimeOptions,sourceRuntimeCurveMode:scalar,polynomialControls:{kappa:Math.PI,gamma:0}});
+ assert.equal(ownRuntime.archiveRuntimeControlsComputed,true);assert.equal(ownRuntime.runtimeSourceControls.frequencyCutoff,3000);
+ for(const name of ['frequency','decay','amplitude','phase','normalizedAmplitude'])assert.deepEqual(ownRuntime[name],nativeTables[name]);
+ assert.throws(()=>prepareArchiveSourceTables(nativeContext,{...options,sourceRuntimeCurveMode:scalar}),/cannot mix/);
  assert.equal(nativeTables.coupledPolesComputed,true);assert.equal(nativeTables.coupledImpedanceFromArchive,true);
  assert.equal(nativeTables.independentPolesComputed,blend<1);assert.equal(nativeTables.archiveSpectrumComputed,true);assert.equal(nativeTables.harmonicWeightsComputed,true);
  assert.equal(nativeTables.columns,2);assert.ok(nativeTables.rows>0);assert.ok([...nativeTables.normalizedAmplitude].every(Number.isFinite));

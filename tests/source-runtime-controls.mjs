@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {archiveSourceRuntimeControls} from '../dsp/source-runtime-controls.mjs';
+const scalar={flags:0,special:0,dimension:1},field=(object_offset,value)=>({object_offset,value});
+const model={curves:Array.from({length:10},()=>({x:[],y:[0]}))};model.curves[6]={x:[21,108],y:[.5,2000000]};
+const fields=[field(0x164,15000),field(0x2a38,{version:10,scalars:[1500,.12],scalar154:5000}),field(0x2548,model)];
+const run=(note,cacheMode=0,instrumentMode=1)=>archiveSourceRuntimeControls({baseFields:fields,note,cacheMode,instrumentMode,runtimeCurveMode:scalar});
+assert.equal(run(0).decayFloorRatio,1);assert.equal(run(127).decayFloorRatio,1e6);
+assert.equal(run(69).frequencyCutoff,15000);assert.equal(run(69,1).frequencyCutoff,5000);
+assert.equal(run(69).jitterAmount,Math.fround(.12));
+for(const mode of [0,2,255])assert.equal(run(69,0,mode).jitterAmount,0);
+fields[1].value.scalars[0]=999;assert.equal(run(69).jitterAmount,Math.fround(.12));
+fields[1].value.scalars[1]=.3;assert.equal(run(69).jitterAmount,Math.fround(.3));
+for(const value of [-2,1,2,1e6,2e6]){model.curves[6]={x:[],y:[value]};assert.equal(run(69).decayFloorRatio,Math.max(1,Math.min(1e6,value)));}
+fields[1].value.scalar154=6000;assert.equal(run(69,1).frequencyCutoff,6000);assert.equal(run(69).frequencyCutoff,15000);
+assert.throws(()=>run(69,2),/cache mode/);assert.throws(()=>run(128),/MIDI/);
+assert.throws(()=>archiveSourceRuntimeControls({baseFields:fields,note:69,cacheMode:0,instrumentMode:1}),/B2740/);
+const bad=structuredClone(fields);bad[1].value.scalars=[];
+assert.throws(()=>archiveSourceRuntimeControls({baseFields:bad,note:69,cacheMode:0,instrumentMode:1,runtimeCurveMode:scalar}),/finite runtime/);
+assert.equal(archiveSourceRuntimeControls({baseFields:bad,note:69,cacheMode:0,instrumentMode:0,runtimeCurveMode:scalar}).jitterAmount,0);
+console.log('Archive cutoff mode selection, instrument-gated jitter field and decay-floor curve clamps passed');
