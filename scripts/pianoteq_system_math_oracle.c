@@ -44,6 +44,14 @@ int main(int argc, char **argv) {
         if (argc != 4) return 2;
         result = powf((float)x, (float)y);
     }
+    else if (!strcmp(argv[1], "hypotf")) {
+        if (argc != 4) return 2;
+        result = hypotf((float)x, (float)y);
+    }
+    else if (!strcmp(argv[1], "atan2f")) {
+        if (argc != 4) return 2;
+        result = atan2f((float)x, (float)y);
+    }
     else if (!strcmp(argv[1], "log")) result = log(x);
     else if (!strcmp(argv[1], "sincos")) {
         double sine, cosine;

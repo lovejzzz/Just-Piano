@@ -2,23 +2,42 @@
 // This is a binding audit, not a parameter fit or a whole-engine sound test.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 import { archiveExcitationMixCoefficients, mixExcitationComponents } from '../dsp/excitation-component-mix.mjs';
+import {archiveNeighborControls, mixNeighborExcitation} from '../dsp/excitation-neighbor-controls.mjs';
 const [capturePath, candidatePath, outputPath, ...options] = process.argv.slice(2);
 if (!outputPath) throw new Error('Capture, computed source and new output paths required');
-let presetPair, mixArchive;
+let presetPair, mixArchive, neighborOracle;
 for (let i = 0; i < options.length;) {
-  const option = options[i++], first = options[i++], second = options[i++];
+  const option = options[i++], first = options[i++];
+  if (option === '--neighbor-math-oracle' && first && !neighborOracle) {neighborOracle = first; continue;}
+  const second = options[i++];
   if (!first || !second) throw new Error('Each option requires two arguments');
   if (option === '--preset-pair' && !presetPair) presetPair = [first, second];
   else if (option === '--mix-archive' && !mixArchive && /^\d+$/.test(second)) mixArchive = [first, Number(second)];
   else throw new Error('Expected unique --preset-pair first.json second.json or --mix-archive banks.json index');
 }
+if (neighborOracle && !mixArchive) throw new Error('Neighbor preparation requires explicit mix archive');
 const captureBytes = fs.readFileSync(capturePath), candidateBytes = fs.readFileSync(candidatePath);
 const capture = JSON.parse(captureBytes), candidate = JSON.parse(candidateBytes);
 if (!capture.complete || capture.errors?.length !== 0 || !capture.records?.length || candidate.verifiedStagesPassed !== true ||
     candidate.failures?.length !== 0 || !candidate.frequencyAndRawDecayFromComputedPoles || !candidate.harmonicWeightsFromComputedReport ||
     !candidate.predictions?.length) throw new Error('Complete capture and verified computed source required');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const mathCalls = new Map(), mathWord = new DataView(new ArrayBuffer(8));
+const encode = value => {mathWord.setFloat64(0, value); return mathWord.getBigUint64(0).toString(16).padStart(16, '0');};
+const nativeMath = operation => (x, y) => {
+  const key = [operation, encode(x), encode(y)].join(':');
+  if (!mathCalls.has(key)) {
+    const result = spawnSync(neighborOracle, [operation, encode(x), encode(y)], {encoding: 'utf8'});
+    if (result.status !== 0 || !/^[0-9a-f]{16}\s*$/.test(result.stdout)) throw new Error('Native neighbor math oracle failed');
+    mathWord.setBigUint64(0, BigInt('0x' + result.stdout.trim()));
+    const value = mathWord.getFloat64(0);
+    if (!Number.isFinite(value)) throw new Error('Nonfinite neighbor math result');
+    mathCalls.set(key, {operation, x, y, value});
+  }
+  return mathCalls.get(key).value;
+};
 let mixBank, mixArchiveSha256;
 if (mixArchive) {
   const bytes = fs.readFileSync(mixArchive[0]);
@@ -54,9 +73,15 @@ for (const record of capture.records) {
     ...archiveExcitationMixCoefficients(mixBank, input.note, {runtimeMode: 'linear-clamp'}),
     velocity: input.controls?.velocity, attenuation: input.controls?.attenuation,
     blendFloor: input.controls?.blendFloor, inputBlend: input.controls?.inputBlend }) : undefined;
+  const neighborControls = neighborOracle ? archiveNeighborControls(mixBank, input.note,
+    {runtimeMode: 'linear-clamp', hypotf: nativeMath('hypotf'), atan2f: nativeMath('atan2f')}) : undefined;
+  const neighbor = neighborControls ? mixNeighborExcitation({amplitude: mix.amplitude, phase: predicted.phase, columns: predicted.cols},
+    {...neighborControls, floor: input.controls.blendFloor, blend: input.controls.inputBlend,
+      mix: Math.max(Math.fround(input.controls.blendFloor), Math.fround(input.controls.inputBlend))}) : undefined;
   const arrays = {}, tableHashes = {}, columnHashes = {};
   for (const [name, field] of [['frequency', 'frequency'], ['decay', 'decay'], ['amplitude', 'normalizedAmplitude'], ['phase', 'phase']]) {
-    const actual = input.source[name], calculated = name === 'amplitude' && mix ? mix.amplitude : predicted[field];
+    const actual = input.source[name], calculated = name === 'amplitude' && mix ? (neighbor?.amplitude ?? mix.amplitude)
+      : name === 'phase' && neighbor ? neighbor.phase : predicted[field];
     if (actual?.length !== calculated.length || !actual.every(Number.isFinite)) throw new Error('Complete native source arrays required');
     const perColumn = Array(predicted.cols).fill(0); let count = 0;
     for (let i = 0; i < actual.length; i++) {
@@ -74,6 +99,7 @@ for (const record of capture.records) {
   if (!hashes.has(key)) hashes.set(key, []);
   hashes.get(key).push({epoch: record.epoch, hashes: tableHashes, columnHashes});
   checks.push({epoch: record.epoch, mode: input.mode, rows: predicted.rows, columns: predicted.cols, arrays,
+    neighbor: neighbor && {controls: neighborControls, amplitudeGain: neighbor.amplitudeGain, phaseDelta: neighbor.phaseDelta},
     mix: mix && {coefficients: mix.coefficients, blend: mix.blend, control: mix.control, weight: mix.weight, upper: mix.upper}});
 }
 if (checks.length !== capture.spectrumCount || !checks.length || epochs.size !== capture.starts || [...epochs.values()].some(n => n !== predictions.size))
@@ -102,6 +128,9 @@ const result = {passed: mismatches === 0, compatible: mismatches === 0, bindingA
   amplitudeMixComputedFromArchive: Boolean(mixBank), mixArchiveSha256,
   mixArchiveIndex: mixArchive?.[1], mixRuntimeCurveModeSupplied: mixBank ? 'linear-clamp' : undefined,
   mixRuntimeCurveModeNewlyObserved: false, interveningSourceTransformsFullyReconstructed: false,
+  neighborControlsComputedFromArchive: Boolean(neighborOracle), neighborSystemMathRequired: Boolean(neighborOracle),
+  neighborOracleSha256: neighborOracle ? sha(fs.readFileSync(neighborOracle)) : undefined,
+  neighborMathCalls: [...mathCalls.values()], decayPreparationReconstructed: false,
   substitutedIntoVoice: false, sameRunModelGenerationVerified: false, finalStereoVerified: false};
 fs.writeFileSync(outputPath, JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
 console.log(JSON.stringify({...result, failures: undefined, checks: undefined, stability: stability.map(({rows, ...r}) => r)}));
