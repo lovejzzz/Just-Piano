@@ -2,10 +2,11 @@
 //   [--source-controls-report computed-source-controls.json]
 //   [--archives base-models.json decoded-preset.json]
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import {nativeStretchMath} from '../dsp/native-stretch-math.mjs';
 import { spawnSync } from 'node:child_process';
-import { archiveStretchControls, stretchIntervalRatio, stretchPartialLimit, stretchPartialCounts, stretchRawConstraints, stretchConstraintRhs } from '../dsp/stretch-rhs.mjs';
-import { stretchSines, buildStretchMatrix, stretchTableFromLogSolution } from '../dsp/stretch-system.mjs';
-import { stretchLuFactor, stretchLuSolve } from '../dsp/stretch-linear.mjs';
+import {archiveStretchControls} from '../dsp/stretch-rhs.mjs';
+import {constructStretchTable} from '../dsp/construct-stretch-table.mjs';
 const [countsPath, rawPath, filterPath, weightsPath, tablePath, oracle, reportPath, ...options] = process.argv.slice(2);
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
 function capture(path, schema, stage, point) {
@@ -19,8 +20,9 @@ const raw = capture(rawPath, 1, 'raw', '0x100327de0');
 const filter = capture(filterPath, 1, 'filter', '0x10089755c');
 const weights = capture(weightsPath, 2, 'weights', '0x100327388');
 const table = capture(tablePath, 2, 'table', '0x1003283d8');
-let stiffness = counts.stiffness_table, stiffnessComputedFromArchive = false, archiveControls = null;
+let stiffness = counts.stiffness_table, stiffnessComputedFromArchive = false, archiveControls = null, nativeMath = false, sourceControlsDependency;
 for (let i = 0; i < options.length; i++) {
+  if (options[i] === '--native-math' && !nativeMath) { nativeMath = true; continue; }
   if (options[i] === '--archives') {
     const base = read(options[++i])[0], preset = read(options[++i]);
     archiveControls = archiveStretchControls(base.fields, preset.decoded_tail.fields,
@@ -28,7 +30,7 @@ for (let i = 0; i < options.length; i++) {
     continue;
   }
   if (options[i] !== '--source-controls-report') throw new Error('Expected --source-controls-report or --archives');
-  const report = read(options[++i]);
+  const sourcePath = options[++i], sourceBytes = fs.readFileSync(sourcePath), report = JSON.parse(sourceBytes);
   if (report.schema !== 'pianoteq-source-controls-pass17' || report.passed !== true || report.nativeDoubleValues !== 128 ||
       report.nativeDoubleMismatches !== 0 || report.nativeIntermediateStiffnessDoubleVerified !== true ||
       report.archiveCurvesVerified !== true || report.stiffnessTable?.length !== 128 ||
@@ -36,6 +38,8 @@ for (let i = 0; i < options.length; i++) {
     throw new Error('Verified archive stiffness table required');
   stiffness = report.stiffnessTable.map(x => x.stiffnessDouble);
   stiffnessComputedFromArchive = true;
+  sourceControlsDependency = {path: sourcePath, sha256: crypto.createHash('sha256').update(sourceBytes).digest('hex'),
+    platformTranscendentalOracleRequired: report.platformTranscendentalOracleRequired ?? null};
 }
 const word = new DataView(new ArrayBuffer(8));
 const bits = x => { word.setFloat64(0, x); return word.getBigUint64(0).toString(16).padStart(16, '0'); };
@@ -44,10 +48,17 @@ const calls = new Map();
 const math = Object.fromEntries(['sin', 'exp2', 'log2', 'pow', 'sincos'].map(name => [name, (...args) => {
   const inputs = args.map(bits), key = `${name}:${inputs.join(':')}`;
   if (!calls.has(key)) {
-    const result = spawnSync(oracle, [name, ...inputs], { encoding: 'utf8' });
-    const pattern = name === 'sincos' ? /^[0-9a-f]{16} [0-9a-f]{16}\s*$/ : /^[0-9a-f]{16}\s*$/;
-    if (result.status !== 0 || !pattern.test(result.stdout)) throw new Error('Independent system math oracle failed');
-    calls.set(key, { name, inputs, output: result.stdout.trim() });
+    let output;
+    if (nativeMath) {
+      const value = nativeStretchMath[name](...args);
+      output = name === 'sincos' ? `${bits(value.sin)} ${bits(value.cos)}` : bits(value);
+    } else {
+      const result = spawnSync(oracle, [name, ...inputs], { encoding: 'utf8' });
+      const pattern = name === 'sincos' ? /^[0-9a-f]{16} [0-9a-f]{16}\s*$/ : /^[0-9a-f]{16}\s*$/;
+      if (result.status !== 0 || !pattern.test(result.stdout)) throw new Error('Independent system math oracle failed: ' + (result.stderr || result.error?.message || 'incomplete output'));
+      output = result.stdout.trim();
+    }
+    calls.set(key, { name, inputs, output });
   }
   const output = calls.get(key).output.split(' ');
   return name === 'sincos' ? { sin: decode(output[0]), cos: decode(output[1]) } : decode(output[0]);
@@ -77,39 +88,34 @@ for (const axis of ['x', 'y']) compare(`archive-weight-curve-${axis}`, controls.
 compare('stiffness-counts', stiffness, counts.stiffness_table);
 compare('stiffness-raw', stiffness, raw.stiffness_table);
 compare('stiffness-table', stiffness, table.stiffness_table);
-const rational = stretchIntervalRatio(controls.interval, math), partialLimit = stretchPartialLimit(rational);
+const built = constructStretchTable({controls, stiffnessTable: stiffness, middleWeight: weights.middle_weight, gramScale: weights.gram_scale}, math);
+const {rational, partialLimit, partials, constraints, prepared, sines, matrix, solution} = built;
 compare('rational-and-limit', [rational.ratio, rational.numerator, rational.denominator, partialLimit],
   [counts.interval_ratio, counts.rational_numerator, counts.rational_denominator, counts.partial_limit]);
-const partials = stretchPartialCounts(controls.weightCurve, rational);
 compare('partials', partials, counts.partials);
-const constraints = stretchRawConstraints({ interval: controls.interval, ratio: rational.ratio, partials,
-  stiffnessTable: stiffness, stretch: controls.stretch }, math);
 compare('scaled-low-stiffness', constraints.scaledLow, raw.scaled_low);
 compare('scaled-high-stiffness', constraints.scaledHigh, raw.scaled_high);
 compare('raw-log-constraints', constraints.raw, raw.raw, true);
 compare('raw-copy', constraints.raw, raw.normalized, true);
-const prepared = stretchConstraintRhs({ interval: controls.interval, raw: constraints.raw,
-  referenceHz: controls.referenceHz, smoothing: controls.smoothing }, math);
 if (!prepared.filtered) throw new Error('Expected active smoothing branch');
 compare('normalized-filter-input', prepared.normalized, filter.input, true);
 compare('filter-coefficients', prepared.filtered.coefficients, filter.coefficients, true);
 compare('filter-delay', [prepared.filtered.delay], [filter.delay]);
 compare('filtered-constraints', prepared.filtered.values, filter.output, true);
 compare('complete-rhs', prepared.rhs, table.rhs);
-const sines = stretchSines(math);
 compare('sines', sines, weights.sines);
-const matrix = buildStretchMatrix({ interval: controls.interval, sines, middleWeight: weights.middle_weight, gramScale: weights.gram_scale });
 compare('matrix', matrix.values, table.matrix.values);
-const solution = stretchLuSolve(stretchLuFactor(matrix), prepared.rhs);
 compare('solution', solution, table.solution);
-const predictedTable = stretchTableFromLogSolution(solution, math);
+const predictedTable = built.table;
 compare('frequency-table', predictedTable, table.table, true);
 const result = { schema: 'pianoteq-stretch-rhs-pass19', passed: checks.every(x => x.bitExact), checks, failures,
-  stiffnessComputedFromArchive, stiffnessStillCaptured: !stiffnessComputedFromArchive,
+  stiffnessComputedFromArchive, stiffnessStillCaptured: !stiffnessComputedFromArchive, sourceControlsDependency,
   rhsStillCaptured: false, registryWeightsStillCaptured: true, tuningControlsComputedFromArchive: Boolean(archiveControls),
   tuningControlsAndCurveStillCaptured: !archiveControls, runtimeCurveModesStillCaptured: true,
-  nativeMathOracleRequired: true, browserAudioFidelityVerified: false,
-  predictedRhs: Array.from(prepared.rhs), predictedTable: Array.from(predictedTable), oracleCalls: [...calls.values()] };
+  nativeMathOracleRequired: !nativeMath, recoveredNativeMathImplemented: nativeMath, oracleUniqueCalls: nativeMath ? 0 : calls.size,
+  browserCompatibleStretchBuilderUsed: true,
+  computedMathCalls: nativeMath ? [...calls.values()] : [], browserAudioFidelityVerified: false,
+  predictedRhs: Array.from(prepared.rhs), predictedTable: Array.from(predictedTable), oracleCalls: nativeMath ? [] : [...calls.values()] };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
-console.log(JSON.stringify({ ...result, predictedRhs: undefined, predictedTable: undefined, oracleCalls: undefined }, null, 2));
+console.log(JSON.stringify({ ...result, predictedRhs: undefined, predictedTable: undefined, oracleCalls: undefined, computedMathCalls: undefined }, null, 2));
 if (!result.passed) process.exitCode = 1;

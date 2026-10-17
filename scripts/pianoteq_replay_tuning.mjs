@@ -1,5 +1,6 @@
 // Usage: node SCRIPT base.json preset.json final.json stretched.json anchor.json oracle [report]
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import {nativeSourceMath} from '../dsp/native-source-math.mjs';
 import { spawnSync } from 'node:child_process';
 import { equalTemperamentBase, stretchFrequency, anchorFrequencyScale, finishTuning } from '../dsp/source-tuning.mjs';
@@ -14,10 +15,14 @@ for (const data of [final, stretched, anchor]) if (!data.records.length || data.
 if (final.point !== '0x1008a3c60' || stretched.point !== '0x1009626b4' || anchor.point !== '0x1004c3898' ||
     final.configurations.length !== 1 || stretched.configurations.length !== 1) throw new Error('Unexpected capture stages');
 const cfg = stretched.configurations[0], b = new Map(base.fields.map(x => [x.object_offset, x.value]));
-let stretchTable = cfg.stretch_table, stretchTableComputedFromSystem = false, stretchRhsStillCaptured = true;
+let stretchTable = cfg.stretch_table, stretchTableComputedFromSystem = false, stretchRhsStillCaptured = true, stretchSource;
 if (options.length) {
   if (options.length !== 2 || options[0] !== '--stretch-report') throw new Error('Expected --stretch-report path');
   const report = read(options[1]);
+  stretchSource = {path: options[1], sha256: crypto.createHash('sha256').update(fs.readFileSync(options[1])).digest('hex'),
+    registryWeightsStillCaptured: report.registryWeightsStillCaptured ?? null, runtimeCurveModesStillCaptured: report.runtimeCurveModesStillCaptured ?? null,
+    stiffnessStillCaptured: report.stiffnessStillCaptured ?? null, nativeMathOracleRequired: report.nativeMathOracleRequired ?? null,
+    sourceControlsDependency: report.sourceControlsDependency};
   if (!['pianoteq-stretch-system-pass18', 'pianoteq-stretch-rhs-pass19'].includes(report.schema) || report.passed !== true ||
       report.predictedTable?.length !== 128 || !report.predictedTable.every(Number.isFinite) ||
       !report.checks.some(x => x.name === 'frequency-table' && x.count === 128 && x.bitExact === true && x.mismatches === 0))
@@ -118,7 +123,7 @@ if (stretchedKeys.size !== prepared.size) throw new Error('Stretched capture has
 const result = { schema: 'pianoteq-source-tuning-pass17', uniqueNotes: prepared.size, finalRecords: final.records.length, stretchedRecords: stretched.records.length,
   floatValues, floatMismatches, calculatedAnchorScale: scale, anchorInputVerified: true,
   archivePitchCurveVerified: true, stretchTableProducerReconstructed: false, stretchTableComputedFromSystem,
-  stretchRhsStillCaptured, nativeMathOracleRequired: !nativeMath, recoveredNativeMathImplemented: nativeMath,
+  stretchRhsStillCaptured, stretchSource, nativeMathOracleRequired: !nativeMath, recoveredNativeMathImplemented: nativeMath,
   predictedSources: [...prepared].map(([key, value]) => ({ key, frequency: value.output.frequency })),
   nativeUniqueRequests: nativeCalls.size, oracleUniqueCalls: nativeMath ? 0 : nativeCalls.size,
   computedMathCalls: nativeMath ? [...nativeCalls.values()] : [], checks, oracleCalls: nativeMath ? [] : [...nativeCalls.values()], failures, passed: failures.length === 0 };
