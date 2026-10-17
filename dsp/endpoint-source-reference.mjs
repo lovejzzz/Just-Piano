@@ -27,7 +27,7 @@ export function endpointReferenceFrequency(prepared){
 export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffsets,independentSource}){
   const referenceFrequency=endpointReferenceFrequency(prepared);
   const assemble=prepared.blend<1&&independentSource!==undefined;
-  let construct=false,polesComputed=false;
+  let construct=false,polesComputed=false,archiveImpedance=false;
   if(assemble){
     if(separate!==undefined)throw new RangeError('Choose component assembly or an explicit independent endpoint');
     polesComputed=independentSource.poleControls!==undefined;
@@ -35,6 +35,7 @@ export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffs
       if(independentSource.componentPoles!==undefined||independentSource.components!==undefined)
         throw new RangeError('Computed poles cannot use supplied pole or component tables');
       const own=constructIndependentPoles({...independentSource.poleControls,prepared});
+      archiveImpedance=own.impedanceFromArchive;
       if(independentSource.rowLimit!==undefined&&independentSource.rowLimit!==own.rowLimit)
         throw new RangeError('Row limit must equal the computed modal coordinate count');
       independentSource={...independentSource,componentPoles:own.componentPoles,rowLimit:own.rowLimit};
@@ -54,5 +55,6 @@ export function prepareEndpointSourceTables({coupled,separate,prepared,phaseOffs
   return {...mixed,...(adjusted?{phase:adjusted.phase,phaseOffsetSummary:adjusted.summary}:{}),referenceFrequency,referenceIndex,normalizedAmplitude:normalization.values,
     normalizationMaximum:normalization.maximum,normalizationScale:normalization.scale,
     laterPhaseControlsApplied:Boolean(adjusted),independentComponentsAssembled:assemble,
-    independentComponentsConstructed:construct,independentPolesComputed:polesComputed,completeCacheVerified:false};
+    independentComponentsConstructed:construct,independentPolesComputed:polesComputed,
+    independentImpedanceFromArchive:archiveImpedance,completeCacheVerified:false};
 }
