@@ -7,7 +7,7 @@ if(!capturePath||!reportPath||!directory||extra.length)throw new Error('Usage: c
 const capture=JSON.parse(fs.readFileSync(capturePath)),report=JSON.parse(fs.readFileSync(reportPath));
 if(!capture.complete||!report.passed||report.mismatches||!report.statesCarried||!report.coefficientsComputed||!report.observationResumes)throw new Error('Verified complete Rattle replay required');
 const targets=new Map(capture.records.filter(r=>r.stage==='after').map(r=>[`${r.epoch}:${r.counter}`,r]));
-const sampleRate=capture.records[0].state.controls.sampleRate,files=[];let total=0;
+const sampleRate=capture.records.find(r=>r.stage==='before')?.state.controls.sampleRate,files=[];let total=0;
 if(!Number.isInteger(sampleRate)||sampleRate<8000||sampleRate>192000)throw new Error('Explicit sample rate required');
 for(let epoch=0;epoch<5;epoch++){
  const rows=report.outputs.filter(r=>r.epoch===epoch),pcm=Buffer.alloc(rows.length*64*4),actual=Buffer.alloc(4);let offset=0,peak=0,squares=0;
@@ -31,5 +31,5 @@ for(let epoch=0;epoch<5;epoch++){
 if(total!==report.outputSamples||targets.size!==report.blocks)throw new Error('Complete component sample coverage required');
 fs.mkdirSync(directory);
 for(const file of files)fs.writeFileSync(path.join(directory,file.name),file.data,{flag:'wx'});
-const manifest={sampleRate,format:'IEEE float32 mono',normalization:false,computedComponentSamples:true,upstreamPrimaryInputObserved:true,sourceTableObserved:true,fullIndependentVoice:false,finalStereo:false,files:files.map(({data,...metadata})=>metadata)};
+const manifest={sampleRate,format:'IEEE float32 mono',normalization:false,computedComponentSamples:true,upstreamPrimaryInputObserved:report.primaryInputObserved,upstreamCrossInputObserved:report.midInputObserved===true,groupGainComputed:report.midToRattleInputComputed===true,sourceTableObserved:true,fullIndependentVoice:false,finalStereo:false,files:files.map(({data,...metadata})=>metadata)};
 fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify(manifest,null,2)+'\n',{flag:'wx'});console.log(JSON.stringify({files:files.length,totalComparedSamples:total}));

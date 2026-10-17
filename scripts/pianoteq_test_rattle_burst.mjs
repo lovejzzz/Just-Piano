@@ -15,7 +15,7 @@ const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(captureP
 if(baselineRun.error)throw baselineRun.error;
 if(baselineRun.status!==0)throw new Error('Rattle baseline failed: '+baselineRun.stderr);
 const baseline=JSON.parse(fs.readFileSync(baselinePath));if(!baseline.passed||!baseline.births.length)throw new Error('Active Rattle baseline required');
-const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero(r.outputs)).digest('hex'),expected=hash(baseline);
+const hash=r=>crypto.createHash('sha256').update(stringifyWithNegativeZero([r.outputs,r.midOutputs])).digest('hex'),expected=hash(baseline);
 const first=d=>d.records.find(r=>r.stage==='before');
 const active=(d,stage)=>d.records.find(r=>r.stage===stage&&r.state.active>0);
 const slot=r=>r.state.slots[r.state.head];
@@ -40,6 +40,17 @@ const cases=[
  ['unaudited-stop',d=>{first(d).site.stopId+=1000000;},'reject'],
  ['wrong-fixed-site',d=>{first(d).site.fileAddress+=4;},'reject'],
 ];
+if(base.midChain)cases.push(
+ ['computed-primary-entry-target',d=>{first(d).input[8]=.125;},'one-same'],
+ ['gain-output-target',d=>{d.records.find(r=>r.stage==='gain').channels[0][8]=.125;},'one-same'],
+ ['entry-secondary-target',d=>{first(d).channels[1][8]=.125;},'one-same'],
+ ['return-secondary-target',d=>{d.records.find(r=>r.stage==='after').channels[1][8]=.125;},'one-same'],
+ ['gain-control-target',d=>{d.records.find(r=>r.stage==='gain').midControls.level=.5;},'one-same'],
+ ['cross-audio-source',d=>{d.records.find(r=>r.stage==='cross').channels[0][8]=2;},'many-different'],
+ ['initial-level-source',d=>{d.records.find(r=>r.stage==='cross').midControls.level*=.5;},'many-different'],
+ ['unsupported-active-mid-processor',d=>{d.records.find(r=>r.stage==='cross').midControls.primaryProcessorEnabled=1;},'reject'],
+ ['missing-gain-endpoint',d=>{d.records.splice(d.records.findIndex(r=>r.stage==='gain'),1);},'reject'],
+);
 const results=[];
 for(const [name,mutate,expect] of cases){
  const d=structuredClone(base);mutate(d);const input=path.join(directory,'case.json'),output=path.join(directory,name+'.json');fs.writeFileSync(input,stringifyWithNegativeZero(d));

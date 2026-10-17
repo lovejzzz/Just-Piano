@@ -1,7 +1,16 @@
 // 428784 group envelope and the four-lane 322148 multiplicative ramp.
+import {nativeScalarExp} from './native-scalar-exp.mjs';
 const f=Math.fround;
 const fromBits=x=>{const v=new DataView(new ArrayBuffer(4));v.setUint32(0,x);return v.getFloat32(0);};
 const minimumGain=fromBits(0x2edbe6ff),minimumStep=fromBits(0x3727c5ac);
+// 6edcf8: reactivation preserves the gain carried by the previous ramp.
+export function activateVoiceGroupEnvelope(state,strength){
+ if(!Number.isFinite(strength)||!Number.isFinite(state.rate)||!Number.isInteger(state.active)||state.active<0||state.active>255||!Number.isInteger(state.duration)||state.duration<=0||state.duration>0xffffffff)throw new Error('Finite group-envelope control and positive duration required');
+ if(state.active&1)return;
+ state.active=1;state.elapsed=0;
+ const speed=f(f(-f(f(state.rate)*Math.max(f(strength),fromBits(0x358637bd))))/f(state.duration));
+ state.step=speed===0?1:nativeScalarExp(f(speed*fromBits(0x3debc8e3)));
+}
 function ramp(input,gain,step){
  gain=gain<minimumGain?0:f(gain);step=Math.max(minimumStep,f(step));
  const lanes=[gain];for(let i=1;i<4;i++)lanes.push(f(step*lanes[i-1]));

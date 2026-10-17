@@ -24,7 +24,7 @@ main_thread = None
 
 def save():
     ROOT.mkdir(parents=True, exist_ok=True)
-    data = dict(schema=1, fixedSites=True, siteCount=2, complete=complete,
+    data = dict(schema=1, fixedSites=True, siteCount=len(POINTS), complete=complete,
                 records=records, errors=errors, voices=len(voices), pending=len(pending),
                 observedPrimaryInputs=True, observedSourceTables=True,
                 activeSites=sum(h.IsEnabled() for h in hooks.values()))
@@ -128,16 +128,17 @@ def finish(debugger):
     save()
 
 
-def resume_owned_stops(debugger):
+def resume_owned_stops(debugger, owner=None):
     import lldb
+    c=sys.modules[__name__] if owner is None else owner
     target = debugger.GetSelectedTarget()
     process = target.GetProcess()
     debugger.SetAsync(False)
     deadline = time.monotonic()+40
     while process.GetState() == lldb.eStateStopped and time.monotonic() < deadline:
-        assert not errors and not complete
-        assert target.GetNumBreakpoints() == len(hooks) == 2
-        assert all(h.IsEnabled() and h.IsHardware() for h in hooks.values())
+        assert not c.errors and not c.complete
+        assert target.GetNumBreakpoints() == len(c.hooks) == len(c.POINTS) <= 6
+        assert all(h.IsEnabled() and h.IsHardware() for h in c.hooks.values())
         matched = False
         details = []
         internal = target.FindBreakpointByID(-2)
@@ -149,7 +150,7 @@ def resume_owned_stops(debugger):
             frame = thread.GetFrameAtIndex(0)
             pc = frame.GetPCAddress()
             ids = [thread.GetStopReasonDataAtIndex(i) for i in range(thread.GetStopReasonDataCount())]
-            seen = last_seen.get(thread.GetThreadID())
+            seen = c.last_seen.get(thread.GetThreadID())
             own = seen and pc.GetFileAddress() in (seen['fileAddress'],seen['fileAddress']+4)
             if reason == lldb.eStopReasonBreakpoint and ids and ids[0] == (1<<64)-2:
                 assert len(ids) == 2 and any(a.GetModule().GetFileSpec().GetFilename() == 'libsystem_pthread.dylib' and a.GetLoadAddress(target) == frame.GetPC() for a in locations)
@@ -167,11 +168,11 @@ def resume_owned_stops(debugger):
             matched = True
             details.append(dict(thread=thread.GetThreadID(),pc=hex(pc.GetFileAddress()),reason=reason,ids=ids,lastOwned=seen))
         assert matched
-        with (ROOT/'owned-resumes.jsonl').open('a') as output:
-            output.write(json.dumps(dict(stopId=process.GetStopID(),records=len(records),threads=details))+'\n')
+        with (c.ROOT/'owned-resumes.jsonl').open('a') as output:
+            output.write(json.dumps(dict(stopId=process.GetStopID(),records=len(c.records),threads=details))+'\n')
         error = process.Continue()
         assert error.Success(), str(error)
-    save()
+    c.save()
 
 
 def __lldb_init_module(debugger, _):
@@ -187,5 +188,5 @@ def __lldb_init_module(debugger, _):
         hook = target.GetBreakpointAtIndex(target.GetNumBreakpoints()-1)
         hook.SetScriptCallbackFunction(__name__+'.observed'); hook.SetAutoContinue(False)
         hooks[name] = hook
-    assert target.GetNumBreakpoints() == 2 and all(h.IsHardware() for h in hooks.values())
+    assert target.GetNumBreakpoints() == len(POINTS) <= 6 and all(h.IsHardware() for h in hooks.values())
     save()
