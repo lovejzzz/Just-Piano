@@ -54,7 +54,7 @@ B完整WAV同为148224帧，但44903个交错采样不同、最大整数差2，�
 
 确认B终止后，C将主线程恢复限定为consumer、consumerPost、consumerCross、audioGain、audioEntry、audioReturn、audioAfterGains、audioTail。每个角色正常观察后立即被替换，固定copy/before/final及工作点不进入此主线程分支，验证器也拒绝这些角色冒充新主线程观察。旧pass108的36503次替换及2次真实工作线程读取回归通过，伪造主线程角色拒绝。此修改尚需C实际验证，未宣称底层调试问题根因解决。
 
-C位于debug-pass110-tail-envelope-c，采集器重新冻结。驱动每40秒完成一次安全检查后，才检查stop-driver文件并决定继续；如需停止，可在下一边界返回提示符，不必在槽替换途中中断。新完整捕获、主线程恢复实际覆盖、严格全链及音频结果仍待完成。
+C位于debug-pass110-tail-envelope-c，采集器重新冻结（后续完成结果见下）。驱动每40秒完成一次安全检查后，才检查stop-driver文件并决定继续；如需停止，可在下一边界返回提示符，不必在槽替换途中中断。新完整捕获、主线程恢复实际覆盖、严格全链及音频结果仍待完成。
 
 ## 组与辅助信号的独立音轨验收准备
 
@@ -63,3 +63,19 @@ C位于debug-pass110-tail-envelope-c，采集器重新冻结。驱动每40秒完
 新增独立Python验收器pianoteq_audit_voice_tail_stems.py，逐块从原生channels及auxiliary.values重建预期PCM，读取真实RIFF/fmt/fact/data，核对全部30种身份、从counter0的连续覆盖、原始float32字节及摘要。新分支的真实正向验收仍待C完成，未以合成文件冒充音频证据。
 
 共享导出器的旧Rattle路径回归已经完成：从原先通过报告重新导出15条真实组音轨，独立旧Python验收器核对636288个float32采样字节同，端点audioReturn不变（pass110-stem-writer-legacy-rattle-audit.json）。未修改正在采集的任何既有Python脚本；新验收器是未被采集器导入的新文件。
+
+## C完整采集、同次计算与真实组件音轨
+
+C原生88953正常exit0，完成原始finish检查后complete=true，无错误或挂起上下文；LLDB已退出。55203条记录、3349个系数/工作返回块，copy/consumer/Gain/Entry/Return/AfterGains/Tail各3314块，五声部均从counter0连续覆盖。六槽43136次替换、50432次普通Continue审计；3317个源事件为3314次提交及3次合法跳过。
+
+C有两次真实工作线程停止帧读取：epoch3 coefficients/counter192/stop5310，epoch4 envelopeResult/counter14144/stop32123，均通过实际PC、当前stop及Continue来源审计。主线程恢复事件为0，因此C不能证明该新恢复分支解决了A的缺失入口根因；固定copy观察保持逐块唯一。启动时列出的全部Python源在采集终止前哈希一致，未中途修改。
+
+独立同次源→工作块→延迟/释放/组包络/cross→Rattle→终端包络回放正常exit0，共14212052项零差异。新增终端部分2843412项零差异，1093个主包络活动块；step/target由float32/FMA/expf计算，动态gain自行携带。次包络与时间包络活动块均为0，不能由旁路吻合宣称活动公式已动态验证。九次启用字段变化仍是观察输入，模型slope/scale、辅助入口及时间初态仍观察。
+
+Rattle部分2552292项零差异，333次触发、40752个变化主组采样及73个控制归零的活动尾块。主要音频来自本次自算cross，不以原生Rattle入口/返回采样驱动；随后主组三路继续来自该计算结果。终端输出不从观察结果重置自有状态。
+
+已实际导出30条audioTail float32 mono组/辅助音轨；独立Python按真实RIFF/fmt/fact/data重新读取，组636288、辅助636288，共1272576个float32采样全部与原生对应数据逐字节一致，五声部起点均为0。不是立体声，也未做归一化、对齐或容差处理。
+
+C完整原生WAV仍严格失败：148224帧相同，但62348个交错采样不同，最大24-bit整数差5，首差异frame14989，归一化RMS差6.488028840691472e-8。组件通过不覆盖此失败。完整立体声和网页仍未接通。
+
+新的完整C反向测试正在运行，尚不计为通过。私有证据：pass110-tail-chain-c-report.json、pass110-tail-chain-c.log、pass110-voice-tail-stems-c/、pass110-voice-tail-stems-c-audit.json、pass110-c-audio-audit.json、pass110-tail-chain-negatives-c/。
