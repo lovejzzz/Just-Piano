@@ -5,16 +5,18 @@
 // --curve-modes is {B1b40:{flags,special,dimension}, ...}; archive version
 // words are not runtime flags. Assumed modes are reported as unverified.
 import fs from 'node:fs';
+import {nativeSourceMath} from '../dsp/native-source-math.mjs';
 import { spawnSync } from 'node:child_process';
 import { archiveSourceControls, sourceArchiveInputs, sourceStiffnessCents } from '../dsp/source-controls.mjs';
 const args = process.argv.slice(2), positional = [], capturePaths = [];
-let modePath, tuningPath, assumeLinear = false, baseIndex = 0;
+let modePath, tuningPath, assumeLinear = false, baseIndex = 0, nativeMath = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--additional-capture') capturePaths.push(args[++i]);
   else if (args[i] === '--curve-modes') modePath = args[++i];
   else if (args[i] === '--tuning-capture') tuningPath = args[++i];
   else if (args[i] === '--assume-linear-curves') assumeLinear = true;
   else if (args[i] === '--base-index') baseIndex = Number(args[++i]);
+  else if (args[i] === '--native-math' && !nativeMath) nativeMath = true;
   else if (args[i].startsWith('--')) throw new Error(`Unknown argument ${args[i]}`);
   else positional.push(args[i]);
 }
@@ -47,10 +49,14 @@ for (const op of ['powf', 'expf', 'log10f', 'log2', 'exp2', 'log2f']) {
   math[op] = (...values) => {
     const words = values.map(bits64), key = `${op}:${words.join(':')}`;
     if (!calls.has(key)) {
-      const result = spawnSync(oraclePath, [op, ...words], { encoding: 'utf8' });
-      if (result.status !== 0 || !/^[0-9a-f]{16}\s*$/.test(result.stdout))
-        throw new Error(`Native math oracle failed: ${key}: ${result.stderr}`);
-      const outputBits = result.stdout.trim();
+      let outputBits;
+      if (nativeMath) outputBits = bits64(nativeSourceMath[op](...values));
+      else {
+        const result = spawnSync(oraclePath, [op, ...words], { encoding: 'utf8' });
+        if (result.status !== 0 || !/^[0-9a-f]{16}\s*$/.test(result.stdout))
+          throw new Error(`Native math oracle failed: ${key}: ${result.stderr}`);
+        outputBits = result.stdout.trim();
+      }
       calls.set(key, { operation: op, inputBits: words, inputs: values, outputBits, result: from64(outputBits) });
     }
     return calls.get(key).result;
@@ -153,13 +159,14 @@ if (tuning) {
 }
 const report = { schema: 'pianoteq-source-controls-pass17', model: base.strings?.[0],
   configurationCount: checks.filter(row => !row.tuningOnly).length, distinctNotes: predictions.size, comparedValues, bitMismatches: failures.length,
-  platformTranscendentalOracleRequired: true, runtimeCurveModesCaptured: Boolean(tuningPath),
+  platformTranscendentalOracleRequired: !nativeMath, recoveredNativeMathImplemented: nativeMath, runtimeCurveModesCaptured: Boolean(tuningPath),
   suppliedCurveModesOnly: Boolean(modePath), archiveCurvesVerified: Boolean(tuningPath), curveChecks,
   runtimeCurveModes, ageingZeroRequiredForFullControls: true,
   nativeIntermediateStiffnessDoubleVerified: Boolean(tuningPath) && nativeDoubleMismatches === 0,
   nativeDoubleValues, nativeDoubleMismatches, tuningStiffnessValues, tuningRecords: tuning?.records.length ?? 0,
-  stiffnessTable, oracleUniqueCalls: calls.size,
-  checks, failures, oracleCalls: Array.from(calls.values()), passed: failures.length === 0 };
+  stiffnessTable, oracleUniqueCalls: nativeMath ? 0 : calls.size, computedMathUniqueCalls: nativeMath ? calls.size : 0,
+  computedMathCalls: nativeMath ? Array.from(calls.values()) : [],
+  checks, failures, oracleCalls: nativeMath ? [] : Array.from(calls.values()), passed: failures.length === 0 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
-console.log(JSON.stringify({ ...report, checks: undefined, stiffnessTable: undefined, oracleCalls: undefined }, null, 2));
+console.log(JSON.stringify({ ...report, checks: undefined, stiffnessTable: undefined, oracleCalls: undefined, computedMathCalls: undefined }, null, 2));
 if (!report.passed) process.exitCode = 1;

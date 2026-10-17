@@ -1,8 +1,12 @@
 // Usage: node SCRIPT base.json preset.json final.json stretched.json anchor.json oracle [report]
 import fs from 'node:fs';
+import {nativeSourceMath} from '../dsp/native-source-math.mjs';
 import { spawnSync } from 'node:child_process';
 import { equalTemperamentBase, stretchFrequency, anchorFrequencyScale, finishTuning } from '../dsp/source-tuning.mjs';
 const [basePath, presetPath, finalPath, stretchedPath, anchorPath, oracle, reportPath, ...options] = process.argv.slice(2);
+if (options.filter(x => x === '--native-math').length > 1) throw new Error('Duplicate native math option');
+const nativeMath = options.includes('--native-math');
+if (nativeMath) options.splice(options.indexOf('--native-math'), 1);
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
 const base = read(basePath)[0], preset = read(presetPath);
 const final = read(finalPath), stretched = read(stretchedPath), anchor = read(anchorPath);
@@ -46,9 +50,14 @@ const nativeCalls = new Map();
 const math = Object.fromEntries(['exp2f', 'exp2'].map(name => [name, value => {
   const input = bits(value), key = `${name}:${input}`;
   if (!nativeCalls.has(key)) {
-    const result = spawnSync(oracle, [name, input], { encoding: 'utf8' });
-    if (result.status !== 0 || !/^[0-9a-f]{16}\s*$/.test(result.stdout)) throw new Error('Independent system math oracle failed');
-    nativeCalls.set(key, { name, input, output: result.stdout.trim() });
+    let output;
+    if (nativeMath) output = bits(nativeSourceMath[name](value));
+    else {
+      const result = spawnSync(oracle, [name, input], { encoding: 'utf8' });
+      if (result.status !== 0 || !/^[0-9a-f]{16}\s*$/.test(result.stdout)) throw new Error('Independent system math oracle failed: ' + (result.stderr || result.error?.message || 'incomplete output'));
+      output = result.stdout.trim();
+    }
+    nativeCalls.set(key, { name, input, output });
   }
   return decode(nativeCalls.get(key).output);
 }]));
@@ -109,9 +118,10 @@ if (stretchedKeys.size !== prepared.size) throw new Error('Stretched capture has
 const result = { schema: 'pianoteq-source-tuning-pass17', uniqueNotes: prepared.size, finalRecords: final.records.length, stretchedRecords: stretched.records.length,
   floatValues, floatMismatches, calculatedAnchorScale: scale, anchorInputVerified: true,
   archivePitchCurveVerified: true, stretchTableProducerReconstructed: false, stretchTableComputedFromSystem,
-  stretchRhsStillCaptured, nativeMathOracleRequired: true,
+  stretchRhsStillCaptured, nativeMathOracleRequired: !nativeMath, recoveredNativeMathImplemented: nativeMath,
   predictedSources: [...prepared].map(([key, value]) => ({ key, frequency: value.output.frequency })),
-  nativeUniqueRequests: nativeCalls.size, checks, oracleCalls: [...nativeCalls.values()], failures, passed: failures.length === 0 };
+  nativeUniqueRequests: nativeCalls.size, oracleUniqueCalls: nativeMath ? 0 : nativeCalls.size,
+  computedMathCalls: nativeMath ? [...nativeCalls.values()] : [], checks, oracleCalls: nativeMath ? [] : [...nativeCalls.values()], failures, passed: failures.length === 0 };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(result, null, 2) + '\n');
-console.log(JSON.stringify({ ...result, checks: undefined, predictedSources: undefined, oracleCalls: undefined }, null, 2));
+console.log(JSON.stringify({ ...result, checks: undefined, predictedSources: undefined, oracleCalls: undefined, computedMathCalls: undefined }, null, 2));
 if (!result.passed) process.exitCode = 1;
