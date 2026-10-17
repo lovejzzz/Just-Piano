@@ -78,4 +78,4 @@ Rattle部分2552292项零差异，333次触发、40752个变化主组采样及73
 
 C完整原生WAV仍严格失败：148224帧相同，但62348个交错采样不同，最大24-bit整数差5，首差异frame14989，归一化RMS差6.488028840691472e-8。组件通过不覆盖此失败。完整立体声和网页仍未接通。
 
-新的完整C反向测试正在运行，尚不计为通过。私有证据：pass110-tail-chain-c-report.json、pass110-tail-chain-c.log、pass110-voice-tail-stems-c/、pass110-voice-tail-stems-c-audit.json、pass110-c-audio-audit.json、pass110-tail-chain-negatives-c/。
+原C反向测试在会话中断后未生成最终结果，不计为通过；新增逐例持久记录后，使用原始C捕获在durable-d目录重新启动，仍未完成全部用例。私有证据：pass110-tail-chain-c-report.json、pass110-tail-chain-c.log、pass110-voice-tail-stems-c/、pass110-voice-tail-stems-c-audit.json、pass110-c-audio-audit.json、pass110-tail-chain-negatives-c/。

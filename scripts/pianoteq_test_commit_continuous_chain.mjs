@@ -4,19 +4,44 @@ import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {stringifyWithNegativeZero} from './pianoteq_json_exact.mjs';
-const [capturePath,directory,archiveOption,...extra]=process.argv.slice(2);
-if(!capturePath||!directory||extra.length||archiveOption&&!archiveOption.startsWith('--archive-repeat-model='))throw new Error('Usage: completed-capture.json new-results-directory [--archive-repeat-model=source.json]');
-const archivePath=archiveOption?.slice('--archive-repeat-model='.length),archive=archivePath?JSON.parse(fs.readFileSync(archivePath)):undefined;
-if(archiveOption&&!archivePath)throw new Error('Nonempty archive model path required');
+const [capturePath,directory,...options]=process.argv.slice(2);
+const archiveOptions=options.filter(x=>x.startsWith('--archive-repeat-model=')),resume=options.includes('--resume');
+if(!capturePath||!directory||archiveOptions.length>1||options.length!==archiveOptions.length+Number(resume))throw new Error('Usage: capture.json results-directory [--archive-repeat-model=source.json] [--resume]');
+const archivePath=archiveOptions[0]?.slice('--archive-repeat-model='.length),archive=archivePath?JSON.parse(fs.readFileSync(archivePath)):undefined;
+if(archiveOptions.length&&!archivePath)throw new Error('Nonempty archive model path required');
+const journalPath=path.join(directory,'progress.json');
+if(resume&&!fs.existsSync(journalPath))throw new Error('Resume requires an existing durable progress journal; legacy partial outputs are not accepted');
 const base=JSON.parse(fs.readFileSync(capturePath));
 if(!base.complete||!base.sourceCommits||!base.consumerPost)throw new Error('Completed joint capture required');
-fs.mkdirSync(directory);
+if(!resume)fs.mkdirSync(directory);
+const digest=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const runner=fileURLToPath(new URL('./pianoteq_replay_release_continuous_chain.mjs',import.meta.url));
+const dependencies=new Set();
+function includeCode(file){
+ file=path.resolve(file);if(dependencies.has(file))return;dependencies.add(file);
+ const text=fs.readFileSync(file,'utf8');
+ if(/import\s*\(/.test(text))throw new Error('Dynamic imports need an explicit journal dependency');
+ for(const match of text.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+\.mjs)['"]/g))includeCode(path.resolve(path.dirname(file),match[1]));
+}
+includeCode(fileURLToPath(import.meta.url));includeCode(runner);
+const fingerprint={capture:path.resolve(capturePath),captureSha256:digest(capturePath),archiveSha256:archivePath?digest(archivePath):null,resumeAuditSha256:base.consumerCross?digest(path.join(path.dirname(path.resolve(capturePath)),'owned-resumes.jsonl')):null,node:process.versions.node,code:[...dependencies].sort().map(file=>[file,digest(file)])};
+const journal=resume?JSON.parse(fs.readFileSync(journalPath)):{schema:1,fingerprint,results:[]};
+if(journal.schema!==1||JSON.stringify(journal.fingerprint)!==JSON.stringify(fingerprint)||journal.failure)throw new Error('Journal inputs/code changed or a previous test failed; investigate before a new run');
+const saveProgress=()=>{fs.writeFileSync(journalPath+'.tmp',JSON.stringify(journal,null,2)+'\n');fs.renameSync(journalPath+'.tmp',journalPath);};
+const preserveUnfinished=file=>{if(fs.existsSync(file))fs.renameSync(file,file+'.unfinished-'+Date.now());};
+saveProgress();
+
 const auditOptions=base.consumerCross?['--resume-audit='+path.join(path.dirname(path.resolve(capturePath)),'owned-resumes.jsonl')]:[];
 const run=(input,output,sourcePath=archivePath)=>spawnSync(process.execPath,[runner,input,output,'--pow-candidate',...auditOptions,...(sourcePath?['--archive-repeat-model='+sourcePath]:[])],{encoding:'utf8',maxBuffer:16*1024*1024});
-const baselinePath=path.join(directory,'baseline.json'),baselineRun=run(capturePath,baselinePath);
-if(baselineRun.error)throw baselineRun.error;
-if(baselineRun.status!==0)throw new Error('Joint baseline failed: '+baselineRun.stderr.slice(-800));
+const baselinePath=path.join(directory,'baseline.json');
+if(journal.baseline){
+ if(journal.baseline.exit!==0||digest(baselinePath)!==journal.baseline.reportSha256)throw new Error('Cached baseline provenance differs');
+}else{
+ preserveUnfinished(baselinePath);const baselineRun=run(capturePath,baselinePath);
+ if(baselineRun.error)throw baselineRun.error;
+ if(baselineRun.status!==0)throw new Error('Joint baseline failed: '+baselineRun.stderr.slice(-800));
+ journal.baseline={exit:baselineRun.status,reportSha256:digest(baselinePath)};saveProgress();
+}
 const baseline=JSON.parse(fs.readFileSync(baselinePath));
 if(!baseline.passed||!baseline.injection?.passed||base.consumerCross&&!baseline.cross?.passed||base.voiceRattleAudio&&!baseline.rattleAudio?.passed||base.voiceTailEnvelopes&&!baseline.tailEnvelopes?.passed)throw new Error('Full parent and components must pass');
 if(base.voiceRattleAudio&&(!baseline.rattleAudio.births.length||!baseline.rattleAudio.changedOutputSamples||!baseline.rattleAudio.zeroControlTailBlocks))throw new Error('Active Rattle births, changed audio and zero-control tail coverage required');
@@ -122,15 +147,32 @@ if(base.consumerCross){
  );
 }
 const results=[];
-for(const [name,mutate,expect,mutateArchive] of cases){
- const d=structuredClone(base);mutate(d);const input=path.join(directory,'case.json'),output=path.join(directory,name+'.json');fs.writeFileSync(input,stringifyWithNegativeZero(d));
+function verdict(expect,status,report,predictionHash){
+ return expect==='pass-same'?status===0&&report?.passed&&predictionHash===expected:expect==='one-same'?status===1&&report?.mismatches===1&&predictionHash===expected:expect==='one-different'?status===1&&report?.mismatches===1&&predictionHash!==expected:expect==='many-different'?status===1&&report?.mismatches>1&&predictionHash!==expected:status===1&&!report;
+}
+if(new Set(cases.map(c=>c[0])).size!==cases.length||journal.results.length>cases.length)throw new Error('Unique ordered cases required');
+for(const [index,[name,mutate,expect,mutateArchive]]of cases.entries()){
+ const output=path.join(directory,name+'.json'),cached=journal.results[index];
+ if(cached){
+  if(cached.name!==name||cached.expect!==expect||(cached.reportSha256?digest(output)!==cached.reportSha256:fs.existsSync(output)))throw new Error('Cached case provenance differs: '+name);
+  const report=cached.reportSha256?JSON.parse(fs.readFileSync(output)):undefined,predictionHash=report&&hash(report);
+  if(!verdict(expect,cached.exit,report,predictionHash)||predictionHash!==cached.predictionHash)throw new Error('Cached verdict differs: '+name);
+  results.push(cached);continue;
+ }
+ preserveUnfinished(output);
+ const d=structuredClone(base);mutate(d);const input=path.join(directory,'case.json');fs.writeFileSync(input,stringifyWithNegativeZero(d));
  let sourcePath=archivePath;
  if(mutateArchive){const model=structuredClone(archive);mutateArchive(model);sourcePath=path.join(directory,'case-archive.json');fs.writeFileSync(sourcePath,stringifyWithNegativeZero(model));}
  const result=run(input,output,sourcePath);if(result.error)throw result.error;
  const report=fs.existsSync(output)?JSON.parse(fs.readFileSync(output)):undefined,predictionHash=report&&hash(report);
- const valid=expect==='pass-same'?result.status===0&&report?.passed&&predictionHash===expected:expect==='one-same'?result.status===1&&report?.mismatches===1&&predictionHash===expected:expect==='one-different'?result.status===1&&report?.mismatches===1&&predictionHash!==expected:expect==='many-different'?result.status===1&&report?.mismatches>1&&predictionHash!==expected:result.status===1&&!report;
- if(!valid)throw new Error(`Unexpected joint test verdict ${name}: ${result.stderr.slice(-800)}`);
- results.push({name,expect,exit:result.status,mismatches:report?.mismatches,predictionHash,error:result.stderr.slice(-600)});
+ if(!verdict(expect,result.status,report,predictionHash)){
+  journal.failure={name,expect,exit:result.status,mismatches:report?.mismatches,error:result.stderr.slice(-800)};saveProgress();
+  throw new Error(`Unexpected joint test verdict ${name}: ${result.stderr.slice(-800)}`);
+ }
+ const completed={name,expect,exit:result.status,mismatches:report?.mismatches,predictionHash,error:result.stderr.slice(-600),reportSha256:report?digest(output):null};
+ results.push(completed);journal.results.push(completed);saveProgress();
 }
-fs.writeFileSync(path.join(directory,'results.json'),JSON.stringify({baselineChecks:baseline.checks,predictionHash:expected,cases:results.length,results},null,2),{flag:'wx'});
+const final={baselineChecks:baseline.checks,predictionHash:expected,cases:results.length,results},finalPath=path.join(directory,'results.json');
+if(fs.existsSync(finalPath)){if(JSON.stringify(JSON.parse(fs.readFileSync(finalPath)))!==JSON.stringify(final))throw new Error('Final result differs');}
+else fs.writeFileSync(finalPath,JSON.stringify(final,null,2),{flag:'wx'});
 console.log(JSON.stringify({cases:results.length,allExpected:true}));
