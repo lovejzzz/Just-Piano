@@ -1,14 +1,19 @@
 // 19ad70 reflector vector and 3ea1ec deflation, prerequisites of native QR.
 import {fma64} from './native-double-fma.mjs';
 import {nativeComplexDivide} from './native-complex-reciprocal.mjs';
+export function nativeQrVectorSquaredNorm(input){
+  if(!input||input.length%2||![...input].every(Number.isFinite))throw new RangeError('Finite complex vector required');
+  const count=input.length/2,prefix=Math.floor(count/8)*8;
+  let sumSquares=0;
+  for(let i=0;i<prefix;i++)sumSquares+=fma64(input[2*i],input[2*i],input[2*i+1]*input[2*i+1]);
+  for(let i=prefix;i<count;i++)sumSquares+=input[2*i]*input[2*i]+input[2*i+1]*input[2*i+1];
+  return sumSquares;
+}
 export function nativeHouseholderVector(input){
   if(!input?.length||input.length%2||![...input].every(Number.isFinite))
     throw new RangeError('Nonempty finite interleaved complex vector required');
-  const values=Float64Array.from(input),count=values.length/2,prefix=Math.floor(count/8)*8;
-  let sumSquares=0;
-  // SIMD prefix computes each complex norm with FMA; scalar tail does not.
-  for(let i=0;i<prefix;i++)sumSquares+=fma64(values[2*i],values[2*i],values[2*i+1]*values[2*i+1]);
-  for(let i=prefix;i<count;i++)sumSquares+=values[2*i]*values[2*i]+values[2*i+1]*values[2*i+1];
+  const values=Float64Array.from(input),count=values.length/2;
+  const sumSquares=nativeQrVectorSquaredNorm(values);
   if(!Number.isFinite(sumSquares))throw new RangeError('Nonfinite Householder normalization is not implemented');
   let multiplier;
   if(sumSquares!==0){
