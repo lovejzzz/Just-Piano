@@ -82,11 +82,17 @@ def compare_stage(left, right, name, births):
     samples = sum(len(left[key]) // 4 for key in common)
     zero_extras = sum(all(x == 0 for x in struct.unpack('<' + 'f' * (len((left if key in left else right)[key]) // 4),
                          (left if key in left else right)[key])) for key in unmatched)
+    chronology_equal = list(left) == list(right)
+    chronology_first = next(({'ordinal': i, 'left': a, 'right': b}
+                             for i, (a, b) in enumerate(zip(left, right)) if a != b), None)
     return {'commonBlocks': len(common), 'unmatchedBlocks': unmatched, 'unmatchedNumericallyZeroBlocks': zero_extras,
             'changedCommonBlocks': changed_blocks, 'bitDifferentSamples': changed_words,
             'numericallyDifferentSamples': numeric_changes, 'firstBitDifference': first,
             'commonFloatDifferenceRms': math.sqrt(squares / samples), 'commonFloatDifferencePeak': peak,
-            'completeByteSequenceEqual': not unmatched and not changed_blocks,
+            'completeVoiceCounterAudioEqual': not unmatched and not changed_blocks,
+            'chronologicalOrderEqual': chronology_equal,
+            'firstChronologicalKeyDifference': chronology_first,
+            'completeByteSequenceEqual': not unmatched and not changed_blocks and chronology_equal,
             'diagnosticMidiFramesAreNotFinalWavAlignment': True}
 
 
@@ -111,9 +117,13 @@ def audit(directory):
     paths = sorted(directory.glob('run-*'), key=lambda p: int(p.name[4:]))
     if not 2 <= len(paths) <= 10 or [p.name for p in paths] != [f'run-{i}' for i in range(len(paths))]:
         raise ValueError('Bounded chronological native run directories required')
+    paths = [p.resolve() for p in paths]
+    if len(set(paths)) != len(paths):
+        raise ValueError('Distinct authentic runs required; duplicate directory aliases are forbidden')
     runs, stages, audio, controls = [], [], [], []
     fixture = dual = births = consumer_mode = solo_tail = None
     for ordinal, path in enumerate(paths):
+        closure = path.parent
         launch_bytes = (path / 'launch.json').read_bytes()
         launch = json.loads(launch_bytes)
         current_dual = 'sites' in launch
@@ -136,11 +146,11 @@ def audit(directory):
         sites = launch['sites'] if dual else [launch['site']]
         collector = 'pianoteq_capture_worker_tail_baseline.py' if dual else 'pianoteq_capture_worker_audio_baseline.py'
         if consumer_mode or solo_tail: collector = 'pianoteq_capture_consumer_tail_baseline.py'
-        if sites != expected_sites or sha((directory / collector).read_bytes()) != launch['collectorSha256'] or \
-                (dual and sha((directory / 'pianoteq_capture_worker_audio_baseline.py').read_bytes()) != launch['workerCollectorSha256']):
+        if sites != expected_sites or sha((closure / collector).read_bytes()) != launch['collectorSha256'] or \
+                (dual and sha((closure / 'pianoteq_capture_worker_audio_baseline.py').read_bytes()) != launch['workerCollectorSha256']):
             raise ValueError('Frozen fixed-site collectors required')
-        if (consumer_mode or solo_tail) and (set(launch['helperSha256']) != {p.name for p in directory.glob('*.py')} or
-                any(sha((directory / name).read_bytes()) != digest for name, digest in launch['helperSha256'].items())):
+        if (consumer_mode or solo_tail) and (set(launch['helperSha256']) != {p.name for p in closure.glob('*.py')} or
+                any(sha((closure / name).read_bytes()) != digest for name, digest in launch['helperSha256'].items())):
             raise ValueError('Complete frozen consumer helper closure required')
         for file, digest in [(fixture['midiPath'], fixture['midiSha256']), (fixture['resourcePath'], fixture['resourceSha256']),
                              (fixture['selection']['path'], fixture['selection']['sha256'])]:
@@ -173,7 +183,7 @@ def audit(directory):
         if consumer_mode and list(by_stage['consumer']) != list(by_stage['tail']):
             raise ValueError('Complete same-call consumer and terminal pairs required')
         stages.append(by_stage)
-        controls.append(data.get('consumerAudioRecords'))
+        controls.append(data.get('tailAudioRecords') if solo_tail else data.get('consumerAudioRecords'))
         wav_bytes = (path / 'observed.wav').read_bytes()
         with wave.open(str(path / 'observed.wav'), 'rb') as reader:
             if (reader.getnchannels(), reader.getsampwidth(), reader.getframerate()) != (2, 3, 48000):
@@ -185,6 +195,7 @@ def audit(directory):
         audio.append((pcm, values))
         runs.append({'run': ordinal, 'frames': frames, 'pcmSha256': sha(pcm), 'wavSha256': sha(wav_bytes),
                      'runtimeSha256': sha(runtime_bytes), 'launchSha256': sha(launch_bytes), 'stages': inventory,
+                     'resolvedRunDirectory': str(path), 'collectorSha256': launch['collectorSha256'],
                      'nonSourceTerminalCalls': data.get('unownedTailCalls', [])})
     pairs = []
     for i, j in itertools.combinations(range(len(runs)), 2):
@@ -196,9 +207,12 @@ def audit(directory):
                       'commonPcmDifferenceRms': math.sqrt(sum(v * v for v in differences) / len(differences)) / 8388608})
         if consumer_mode:
             pairs[-1]['consumerControls'] = compare_controls(controls[i], controls[j])
+        if solo_tail:
+            pairs[-1]['terminalControls'] = compare_controls(controls[i], controls[j])
     return {'schema': 'pianoteq-worker-audio-baseline-audit-v1', 'runs': runs, 'pairs': pairs,
             'workerAndTailSameRun': dual and not consumer_mode and not solo_tail,
             'consumerAndTailSameRun': consumer_mode, 'terminalOnly': solo_tail,
+            'identicalCollectorVersions': len({r['collectorSha256'] for r in runs}) == 1,
             'strictNativeRepeatabilityVerified': all(pair['strictFullPcmEqual'] for pair in pairs),
             'alignmentApplied': False, 'normalizationApplied': False, 'unmatchedBlocksIgnored': False,
             'unmatchedTailIgnored': False, 'nativeVariationCauseIdentified': False, 'independentEngineStereoVerified': False}

@@ -42,6 +42,32 @@ def save():
     path.write_text(json.dumps(data, indent=2, allow_nan=False))
 
 
+def record_stop_diagnostics(debugger):
+    """Read the actual stop; never resume an exception or manufacture ownership."""
+    process = debugger.GetSelectedTarget().GetProcess()
+    threads = []
+    for thread in list(process)[:64]:
+        frames = []
+        for frame in list(thread)[:8]:
+            module = frame.GetModule().GetFileSpec()
+            frames.append({'pc': hex(frame.GetPC()),
+                           'fileAddress': hex(frame.GetPCAddress().GetFileAddress()),
+                           'module': str(module), 'function': frame.GetFunctionName(),
+                           'symbol': frame.GetSymbol().GetName()})
+        threads.append({'id': thread.GetThreadID(), 'reason': thread.GetStopReason(),
+                        'description': thread.GetStopDescription(512), 'frames': frames})
+    result = {'state': process.GetState(), 'pid': process.GetProcessID(), 'threads': threads,
+              'hooks': [{'id': h.GetID(), 'hits': h.GetHitCount(),
+                         'address': hex(h.GetLocationAtIndex(0).GetAddress().GetFileAddress())}
+                        for h in base.hooks], 'targetMutation': False, 'resumeAttempted': False}
+    path = base.ROOT / 'stop-diagnostics.json'
+    if path.exists(): raise ValueError('Fresh stop diagnostic required')
+    path.write_text(json.dumps(result, indent=2))
+    path.chmod(0o600)
+    save()
+    return result
+
+
 def observed(frame, location, _):
     global main_thread
     try:

@@ -57,6 +57,25 @@ class StageIntegrity(unittest.TestCase):
         self.assertEqual(result['unmatchedBlocks'], [(0, 128)])
         self.assertEqual(result['unmatchedNumericallyZeroBlocks'], 1)
 
+    def test_interleaving_is_not_byte_sequence_equality(self):
+        a, b = bytes(768), struct.pack('<192f', *range(192))
+        left = {(0, 64): a, (1, 64): b}
+        right = {(1, 64): b, (0, 64): a}
+        result = audit.compare_stage(left, right, 'worker', [4800, 10496])
+        self.assertTrue(result['completeVoiceCounterAudioEqual'])
+        self.assertFalse(result['chronologicalOrderEqual'])
+        self.assertFalse(result['completeByteSequenceEqual'])
+
+    def test_duplicate_run_aliases_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            original = root / 'original'
+            original.mkdir()
+            for name in ('run-0', 'run-1'):
+                (root / name).symlink_to(original, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Distinct authentic runs'):
+                audit.audit(root)
+
 
 if __name__ == '__main__':
     unittest.main()
