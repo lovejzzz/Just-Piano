@@ -11,13 +11,14 @@ import { readComputedVoiceEndpoints } from './pianoteq_computed_voice_artifact.m
 import { loadOrderFixture, sha, numericalHash } from './pianoteq_order_fixture.mjs';
 
 const [directory, reportPath, packPath, drivePath, sourceDirectory, ...flags] = process.argv.slice(2);
-const velocitySourceFlags=flags.filter(x=>x.startsWith('--midi-raw-velocity-source='));
+const velocitySourceFlags=flags.filter(x=>x.startsWith('--midi-raw-velocity-source=')||x.startsWith('--midi-raw-lifecycle-source='));
 const orderFlags=flags.filter(x=>x.startsWith('--order-from=')),compactOrderFlags=flags.filter(x=>x.startsWith('--compact-order-from='));
 const voiceReportFlags = flags.filter(x => x.startsWith('--voice-report=')), voiceAudioFlags = flags.filter(x => x.startsWith('--voice-audio='));
-if (!drivePath || !sourceDirectory || velocitySourceFlags.length>1 || orderFlags.length+compactOrderFlags.length>1 || (orderFlags.length+compactOrderFlags.length)&&flags.includes('--alter-pedal-input') || voiceReportFlags.length > 1 || voiceAudioFlags.length > 1 || voiceReportFlags.length !== voiceAudioFlags.length || flags.some(x => x !== '--poison-pcm-target' && x !== '--poison-coefficient-target' && x !== '--alter-pedal-input' && !x.startsWith('--voice-report=') && !x.startsWith('--voice-audio=') && !x.startsWith('--order-from=') && !x.startsWith('--compact-order-from=') && !x.startsWith('--midi-raw-velocity-source=')) || new Set(flags).size !== flags.length || fs.existsSync(reportPath) ||
+if (!drivePath || !sourceDirectory || velocitySourceFlags.length>1 || orderFlags.length+compactOrderFlags.length>1 || (orderFlags.length+compactOrderFlags.length)&&flags.includes('--alter-pedal-input') || voiceReportFlags.length > 1 || voiceAudioFlags.length > 1 || voiceReportFlags.length !== voiceAudioFlags.length || flags.some(x => x !== '--poison-pcm-target' && x !== '--poison-coefficient-target' && x !== '--alter-pedal-input' && !x.startsWith('--voice-report=') && !x.startsWith('--voice-audio=') && !x.startsWith('--order-from=') && !x.startsWith('--compact-order-from=') && !x.startsWith('--midi-raw-velocity-source=') && !x.startsWith('--midi-raw-lifecycle-source=')) || new Set(flags).size !== flags.length || fs.existsSync(reportPath) ||
     path.resolve(reportPath).startsWith(path.resolve('.') + path.sep))
-  throw Error('Usage: complete-private-run fresh-private-report independent-ir-pack static-drive-profile complete-private-coefficient-source [--poison-pcm-target|--poison-coefficient-target|--alter-pedal-input] [--order-from=complete-private-run|--compact-order-from=complete-private-compact-run] [--midi-raw-velocity-source=current-private-archive-inputs]');
-const midiRawVelocitySource=velocitySourceFlags.length?bindMidiRawVelocitySource(velocitySourceFlags[0].slice('--midi-raw-velocity-source='.length)):null;
+  throw Error('Usage: complete-private-run fresh-private-report independent-ir-pack static-drive-profile complete-private-coefficient-source [--poison-pcm-target|--poison-coefficient-target|--alter-pedal-input] [--order-from=complete-private-run|--compact-order-from=complete-private-compact-run] [--midi-raw-velocity-source=current-private-archive-inputs|--midi-raw-lifecycle-source=current-private-archive-inputs]');
+const midiRawVelocitySource=velocitySourceFlags.length?bindMidiRawVelocitySource(velocitySourceFlags[0].slice(velocitySourceFlags[0].indexOf('=')+1)):null;
+if(midiRawVelocitySource)midiRawVelocitySource.lifecycle=velocitySourceFlags[0].startsWith('--midi-raw-lifecycle-source=');
 const fixture = loadOrderFixture(directory,{midiRawVelocitySource}), packBytes = fs.readFileSync(packPath), driveBytes = fs.readFileSync(drivePath);
 const pack = JSON.parse(packBytes), driveProfile = JSON.parse(driveBytes);
 const targetFixture=orderFlags.length?loadOrderFixture(orderFlags[0].slice('--order-from='.length),{midiRawVelocitySource}):compactOrderFlags.length?loadCompactOrderFixture(compactOrderFlags[0].slice('--compact-order-from='.length),fixture):fixture;
@@ -84,20 +85,25 @@ fixture.profile.modal.forEach((config, i) => {
 if(compactTarget)changedOrderBlocks=targetFixture.changedOrderBlocks;
 const rawData = JSON.parse(fs.readFileSync(path.join(fixture.root, fixture.data.driveLevelFile)));
 const cold = structuredClone(rawData.initial.rawKeys); for (const key of cold.keys) for (const node of key.nodes) { node.position = 0; node.intermediate = 0; }
-const rawVelocityDriver=midiRawVelocitySource?.create(rawData.initial.rawKeys,fixture.velocityKeyIndex);
-const raw = new GlobalRawKeys(cold), warmKeys = raw.process(rawData.warmups[0].rawBefore, { timeStep: 0,...(rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.warmups[0].rawBefore,0)}:{}) });
-let targetRaw=null,targetRawData=null,targetVelocityDriver=null;
+const rawLifecycle=midiRawVelocitySource?.lifecycle?midiRawVelocitySource.createLifecycle(rawData.initial.rawKeys,fixture.velocityKeyIndex):null;
+const rawVelocityDriver=!rawLifecycle?midiRawVelocitySource?.create(rawData.initial.rawKeys,fixture.velocityKeyIndex):null;
+const raw = new GlobalRawKeys(rawLifecycle?rawLifecycle.initialState(cold):cold), warmKeys = raw.process(rawLifecycle?rawLifecycle.before(rawData.warmups[0].rawBefore,0,{warmup:true}):rawData.warmups[0].rawBefore, { timeStep: 0,...(rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.warmups[0].rawBefore,0)}:{}) });
+if(rawLifecycle)rawLifecycle.after(raw);
+let targetRaw=null,targetRawData=null,targetVelocityDriver=null,targetLifecycle=null;
 if(targetFixture!==fixture&&!compactTarget){
  targetRawData=JSON.parse(fs.readFileSync(path.join(targetFixture.root,targetFixture.data.driveLevelFile)));
  const cold=structuredClone(targetRawData.initial.rawKeys);for(const key of cold.keys)for(const node of key.nodes){node.position=0;node.intermediate=0;}
- targetRaw=new GlobalRawKeys(cold);targetVelocityDriver=midiRawVelocitySource?.create(targetRawData.initial.rawKeys,targetFixture.velocityKeyIndex);
- if(numericalHash(warmKeys)!==numericalHash(targetRaw.process(targetRawData.warmups[0].rawBefore,{timeStep:0,...(targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.warmups[0].rawBefore,0)}:{})})))throw Error('Order-only premise rejected: warm raw keys differ');
+ targetLifecycle=midiRawVelocitySource?.lifecycle?midiRawVelocitySource.createLifecycle(targetRawData.initial.rawKeys,targetFixture.velocityKeyIndex):null;
+ targetRaw=new GlobalRawKeys(targetLifecycle?targetLifecycle.initialState(cold):cold);targetVelocityDriver=!targetLifecycle?midiRawVelocitySource?.create(targetRawData.initial.rawKeys,targetFixture.velocityKeyIndex):null;
+ if(numericalHash(warmKeys)!==numericalHash(targetRaw.process(targetLifecycle?targetLifecycle.before(targetRawData.warmups[0].rawBefore,0,{warmup:true}):targetRawData.warmups[0].rawBefore,{timeStep:0,...(targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.warmups[0].rawBefore,0)}:{})})))throw Error('Order-only premise rejected: warm raw keys differ');
+ if(targetLifecycle)targetLifecycle.after(targetRaw);
 }
 fixture.controls.forEach((control, block) => {
-  const keys = raw.process(rawData.records[block].rawBefore,rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.records[block].rawBefore,block*64)}:{}); delete control.modalVersions;
+  const keys = raw.process(rawLifecycle?rawLifecycle.before(rawData.records[block].rawBefore,block*64):rawData.records[block].rawBefore,rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.records[block].rawBefore,block*64)}:{}); if(rawLifecycle)rawLifecycle.after(raw);delete control.modalVersions;
   control.globalCoefficientInput = { rawKeys: keys.values, flags: keys.flags, pedal: flags.includes('--alter-pedal-input') && block === 160 ? 1 : rawData.records[block].rawBefore.pedalControl, extraPedal: rawData.records[block].rawBefore.extraPedalControl };
   if(targetRaw){
-   const keys=targetRaw.process(targetRawData.records[block].rawBefore,targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.records[block].rawBefore,block*64)}:{}),other={rawKeys:keys.values,flags:keys.flags,pedal:targetRawData.records[block].rawBefore.pedalControl,extraPedal:targetRawData.records[block].rawBefore.extraPedalControl};
+   const keys=targetRaw.process(targetLifecycle?targetLifecycle.before(targetRawData.records[block].rawBefore,block*64):targetRawData.records[block].rawBefore,targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.records[block].rawBefore,block*64)}:{}),other={rawKeys:keys.values,flags:keys.flags,pedal:targetRawData.records[block].rawBefore.pedalControl,extraPedal:targetRawData.records[block].rawBefore.extraPedalControl};
+   if(targetLifecycle)targetLifecycle.after(targetRaw);
    if(numericalHash(control.globalCoefficientInput)!==numericalHash(other))throw Error('Order-only premise rejected: computed coefficient inputs differ at '+block);
   }
 });
@@ -175,7 +181,7 @@ if (flags.includes('--poison-pcm-target')) target[0] ^= 1;
 if (pcm.length !== target.length) throw Error('Complete native PCM extent required');
 let pcmSampleDifferences = 0;
 for (let i = 0; i < pcm.length; i += 3) if (pcm.readUIntLE(i, 3) !== target.readUIntLE(i, 3)) pcmSampleDifferences++;
-const report = { schema: 1,nativeDynamicRawNodeVelocitiesUsedForPrediction:!midiRawVelocitySource,midiRawVelocitySource:midiRawVelocitySource?.metadata??null,midiRawVelocityLevels:fixture.midiRawVelocitySummary,midiRawVelocityCoefficients:rawVelocityDriver?.summary()??null, orderOnlyCounterfactual:targetFixture!==fixture, changedOrderBlocks, orderOnlyPremiseVerified:targetFixture!==fixture&&!compactTarget, compactOrderSufficiencyExperiment:compactTarget, targetGlobalControlsAndStatesObserved:!compactTarget, referenceControlsReusedForCompactTarget:compactTarget, targetWriterSpansObserved:!compactTarget, coefficientTargetsFromReference:compactTarget, coefficientTargetRuntimeSha256:compactTarget?fixture.runtimeSha256:targetFixture.runtimeSha256, computedCoefficientInputStreamsEqual:targetRaw?true:null,
+const report = { schema: 1,nativeDynamicRawNodeVelocitiesUsedForPrediction:!midiRawVelocitySource,midiRawVelocitySource:midiRawVelocitySource?.metadata??null,midiRawVelocityLevels:fixture.midiRawVelocitySummary,midiRawVelocityCoefficients:(rawLifecycle??rawVelocityDriver)?.summary()??null,nativeDynamicRawNodeListsAndIdentitiesUsedForPrediction:!rawLifecycle, orderOnlyCounterfactual:targetFixture!==fixture, changedOrderBlocks, orderOnlyPremiseVerified:targetFixture!==fixture&&!compactTarget, compactOrderSufficiencyExperiment:compactTarget, targetGlobalControlsAndStatesObserved:!compactTarget, referenceControlsReusedForCompactTarget:compactTarget, targetWriterSpansObserved:!compactTarget, coefficientTargetsFromReference:compactTarget, coefficientTargetRuntimeSha256:compactTarget?fixture.runtimeSha256:targetFixture.runtimeSha256, computedCoefficientInputStreamsEqual:targetRaw?true:null,
   computedVoiceEndpointReportSha256: computedVoiceSource?.reportSha256 ?? null,
   computedVoiceEndpointAudioSha256: computedVoiceSource?.audioSha256 ?? null,
   computedVoiceEndpointSourceRuntimeSha256: computedVoiceSource?.captureRuntimeSha256 ?? null,

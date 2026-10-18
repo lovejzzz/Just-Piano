@@ -1,3 +1,4 @@
+import {MidiRawNodeLifecycle} from '../dsp/midi-raw-node-lifecycle.mjs';
 import fs from 'node:fs';import crypto from 'node:crypto';
 import {midiBlockClock} from '../dsp/midi-block-clock.mjs';
 import {MidiRawNodeVelocities} from '../dsp/midi-raw-node-velocities.mjs';
@@ -11,5 +12,5 @@ export function bindMidiRawVelocitySource(filename){
  const eventClock=midiBlockClock(fs.readFileSync(source.midiPath),source.renderConfiguration);
  const config={baseFields:source.baseFields,presetFields:source.presetFields,eventClock};
  const metadata={archiveSourceSha256:sha(bytes),midiSha256:source.midiSha256,presetSha256:source.presetSha256,resourceSha256:source.resourceSha256};
- return {metadata,create(initial,keyIndex){return new MidiRawNodeVelocities(initial,{...config,keyIndex})}};
+ return {metadata,create(initial,keyIndex){return new MidiRawNodeVelocities(initial,{...config,keyIndex})},createLifecycle(initial,keyIndex){return new MidiRawNodeLifecycle(initial,{...config,keyIndex})}};
 }
