@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {constructSoundboardLidGains} from '../dsp/soundboard-lid-gain.mjs';
+const preset=new Uint8Array(0x1840),p=new DataView(preset.buffer);p.setUint32(0x1024,1,true);p.setFloat32(0x1020,0.25,true);
+const curve={x:Float32Array.of(0,0.5,1),y:Float32Array.of(1,2,3,2,4,6,4,8,12),dimensions:3,mode:0,logX:0};
+const own=constructSoundboardLidGains({curve,preset,modelFamily:0});
+assert.deepEqual(own.output,Float32Array.of(1.5,3,4.5));
+p.setFloat32(0x1020,-1,true);assert.deepEqual(constructSoundboardLidGains({curve,preset,modelFamily:0}).output,Float32Array.of(1,2,3));
+p.setFloat32(0x1020,2,true);assert.deepEqual(constructSoundboardLidGains({curve,preset,modelFamily:0}).output,Float32Array.of(4,8,12));
+p.setUint32(0x1024,0,true);assert.deepEqual(constructSoundboardLidGains({curve,preset,modelFamily:0,rootLidEnabled:false}).output,Float32Array.of(4,0,12));
+assert.throws(()=>constructSoundboardLidGains({curve,preset,modelFamily:0}),/root lid/);
+assert.throws(()=>constructSoundboardLidGains({curve,preset,modelFamily:1}),/direct-model/);
+assert.throws(()=>constructSoundboardLidGains({curve:{...curve,logX:1},preset,modelFamily:0}),/direct-model/);
+console.log('PASS vector lid interpolation, endpoint clamp, disabled lid policy and scope guards');
