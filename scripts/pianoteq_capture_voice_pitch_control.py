@@ -42,9 +42,10 @@ def returned(frame,breakpoint,_):
         if pending['voice']!=reg(frame,'x19') or pending['thread']!=frame.GetThread().GetThreadID():
             raise RuntimeError('Unowned pitch return')
         i=pending['index'];v=pending['voice']
+        records[i]['refreshRequired']=bool(reg(frame,'w20')&1)
         records[i]['after']=base.dump(f'pitch-{i}-after.bin',base.memory(frame,v+0x780,0x1c4))
         pending=None
-        if len(records)>=128:
+        if len(records)>=512:
             for hook in base.hooks:hook.SetEnabled(False)
         save();return False
     except Exception:

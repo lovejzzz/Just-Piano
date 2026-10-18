@@ -14,7 +14,7 @@ function read(descriptor,length){
  if(b.length!==length||descriptor.bytes!==length||crypto.createHash('sha256').update(b).digest('hex')!==descriptor.sha256)throw new Error('Pitch descriptor mismatch');
  return b;
 }
-const failures=[],predictions=[];let checks=0,voice,initialControls;
+const failures=[],predictions=[];let checks=0,voice,initialControls,refreshAudits=0,inactiveNativeRefreshes=0,inactiveNativeSkips=0;
 for(const [index,row] of d.pitchRecords.entries()){
  const b=read(row.control,0x1c4),a=read(row.after,0x1c4),energy=read(row.energy,8);
  const value=offset=>b.readFloatLE(offset-0x780),byte=offset=>b.readUInt8(offset-0x780);
@@ -35,9 +35,16 @@ for(const [index,row] of d.pitchRecords.entries()){
  if(own.counter!==row.counter)throw new Error('Noncontiguous pitch update window');
  if(!Object.is(own.pitch,a.readFloatLE(0)))failures.push({index,stage:'pitch',predicted:own.pitch,actual:a.readFloatLE(0)});
  if(Number(own.disabled)!==a.readUInt8(0x930-0x780))failures.push({index,stage:'latch'});
+ if(row.refreshRequired!==undefined){
+  if(typeof row.refreshRequired!=='boolean')throw new Error('Boolean native refresh flag required');
+  checks++;refreshAudits++;
+  if(own.applied&&!row.refreshRequired)failures.push({index,stage:'required-pitch-refresh'});
+  if(!own.applied){if(row.refreshRequired)inactiveNativeRefreshes++;else inactiveNativeSkips++;}
+ }
  predictions.push(own);
 }
 console.log(JSON.stringify({schema:'pianoteq-fixed-pitch-trajectory-pass241',passed:!failures.length,mismatches:failures.length,checks,records:d.pitchRecords.length,failures,predictions,initialControls,
  captureSha256:crypto.createHash('sha256').update(bytes).digest('hex'),nativePitchUsedForPrediction:false,
- ageCounterComputed:true,latchStateCarried:true,producerControlsAndMeanDecayObserved:true,completeVoiceVerified:false,finalStereoAudioVerified:false},null,2));
+ ageCounterComputed:true,latchStateCarried:true,refreshAudits,inactiveNativeRefreshes,inactiveNativeSkips,
+ producerControlsAndMeanDecayObserved:true,completeVoiceVerified:false,finalStereoAudioVerified:false},null,2));
 if(failures.length)process.exitCode=1;
