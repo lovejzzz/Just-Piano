@@ -17,13 +17,17 @@ import {archiveExcitationExtraTables} from './archive-excitation-extra-tables.mj
 import {archiveExcitationBaseTables} from './archive-excitation-base-tables.mjs';
 import {archiveExcitationControl30} from './archive-excitation-control30.mjs';
 
-export function createArchiveExcitationProducer({baseFields, presetFields, runtime, events}) {
+export function createArchiveExcitationProducer({baseFields, presetFields, runtime, events, eventClock = null}) {
   if (runtime?.note !== 69 || runtime.instrumentMode !== 1 || runtime.hostMode !== 0 ||
       runtime.noteBranch !== 'ordinary' || runtime.configurationSeed !== 0 ||
       runtime.eventBranch !== 'velocity-randomization-enabled' || runtime.useGlobal !== false ||
       runtime.midiNormalization !== 'velocity/128' || runtime.kind !== 0 ||
       !Array.isArray(events) || events.length !== 5 || events.some(e => e.note !== 69 || e.velocity !== 96))
     throw new Error('Explicit supported five-strike A4 archive excitation conditions required');
+  if (eventClock && (eventClock.blockSize !== 64 || !Number.isInteger(eventClock.sampleRate) || eventClock.sampleRate <= 0 ||
+      eventClock.noteOnFrames?.length !== events.length || eventClock.noteOnFrames.some((v, i, a) =>
+        !Number.isSafeInteger(v) || v < 0 || v % 64 || (i && v < a[i - 1]))))
+    throw new Error('Complete explicit MIDI block clock required');
   const base = {fields: structuredClone(baseFields)}, preset = {decoded_tail: {fields: structuredClone(presetFields)}};
   const context = constructArchiveSourceContext({baseFields: base.fields, presetFields: preset.decoded_tail.fields, ...runtime.tuning});
   if (runtime.sourceOptions[0].sampleRate !== runtime.sourceOptions[1].sampleRate) throw new Error('One physical sample rate required');
@@ -71,6 +75,8 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     spectrumBaseControlsFromArchive: true, spectrumExpressionAndNonzeroSlopeCoverageStillIncomplete: true,
     floorAndBlendSpectrumTablesFromArchive: true, otherSpectrumTablesStillObserved: true,
     control30SpectrumTableFromArchive: true, computedExtraSpectrumTables: ['floor', 'blend', 'control30'],
+    oldVoiceCounterComputedFromMidi: Boolean(eventClock), repeatHostRateFromExplicitRender: Boolean(eventClock),
+    eventClockSampleRate: eventClock?.sampleRate, oldVoiceSelectionStillObserved: true,
     baseSpectrumTablesFromArchiveAndOwnInitialSource: true, spectrumCoordinatesFromArchive: true,
     sameRunModelGenerationVerified: false, wholeEngineEquivalent: false});
   return {
@@ -88,6 +94,11 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     velocityForEpoch(epoch) {
       if (!velocities.has(epoch)) throw new Error('Started MIDI voice required');
       return velocities.get(epoch).velocity;
+    },
+    oldVoiceSampleCount(epoch, oldEpoch) {
+      if (!eventClock || !Number.isInteger(epoch) || !Number.isInteger(oldEpoch) || oldEpoch < 0 || oldEpoch >= epoch ||
+          !velocities.has(epoch) || !velocities.has(oldEpoch)) throw new Error('Started chronological voices and source MIDI clock required');
+      return eventClock.noteOnFrames[epoch] - eventClock.noteOnFrames[oldEpoch];
     },
     consume(record, {repeat, velocityRuntime} = {}) {
       const {mode, note, header, size, controls} = record.input, key = `${record.epoch}:${mode}`;
