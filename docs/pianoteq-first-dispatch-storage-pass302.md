@@ -5,6 +5,13 @@ call before its update. This is raw storage localization, not an initialized
 coefficient equivalence result, a causal explanation, or independent synthesis.
 No prediction dependency is removed and no browser sound changes.
 
+Pass303 clarifies this boundary: the first matching main-thread dispatch is not
+bound to a MIDI voice epoch in pass302. Worker/cache production can lead the
+consumer, as already observed in pass266. A modal counter of zero therefore does
+not prove this is the producer snapshot for the first audible MIDI block. The
+raw-word comparisons below remain observations; they must not be paired with
+terminal audio from other runs as if they formed one causal timeline.
+
 The A116c0.5 FXP, resource, MIDI, 48 kHz/24-bit/no-dither render arguments and
 four frozen helpers remain identical between captures. The single fixed hardware
 site is 472f50. It records note69 at counter0 with initialFlag1, then disables
