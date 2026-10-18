@@ -18,29 +18,29 @@ def sha(data):
 def stage(data, directory, name):
     prefix = name + 'Audio'
     expected_file = name + '-audio.bin'
-    expected_site = {'worker': '0x100472fd0', 'consumer': '0x100460908', 'tail': '0x100460f1c'}[name]
+    expected_site = {'worker': '0x100472fd0', 'consumer': '0x100460908', 'tail': '0x100460f1c', 'key': '0x10051fad4'}[name]
     consumer_mode = 'consumerAudioRecords' in data
     errors = data['consumerTailErrors'] if consumer_mode else data[prefix + 'Errors']
     if data[prefix + 'File'] != expected_file or (not consumer_mode and data[prefix + 'Site'] != expected_site) or errors:
         raise ValueError('Bound error-free audio stage required')
     raw = (directory / expected_file).read_bytes()
     rows = data[prefix + 'Records']
-    size = 1536 if name == 'tail' else 768
+    size = 3072 if name == 'key' else 1536 if name == 'tail' else 768
     if not 1 <= len(rows) <= 20000 or len(raw) != len(rows) * size or \
             len(raw) != data[prefix + 'Bytes'] or sha(raw) != data[prefix + 'Sha256']:
         raise ValueError('Complete stage extent and digest required')
     last, blocks = {}, {}
     for i, row in enumerate(rows):
-        counter = row['workerEndCounter'] if name == 'worker' else row['consumerCounter']
+        counter = row['workerEndCounter'] if name == 'worker' else row['voiceBlockCounter'] if name == 'key' else row['consumerCounter']
         epoch = row['epoch']
         if row['ordinal'] != i or epoch not in range(5) or counter != last.get(epoch, 0 if name == 'worker' else -64) + 64 or \
                 row['offset'] != i * size or row['bytes'] != size:
             raise ValueError('Complete contiguous stage chronology and byte coverage required')
         layouts = row['layouts']
-        if len(layouts) != (4 if name == 'tail' else 3):
+        if len(layouts) != (4 if name in ('tail', 'key') else 3):
             raise ValueError('Complete matrix layout inventory required')
         for j, (height, capacity, width, pitch) in enumerate(layouts):
-            expected_rows = 3 if name == 'tail' and j == 3 else 1
+            expected_rows = 3 if name == 'key' or name == 'tail' and j == 3 else 1
             if height != expected_rows or not height <= capacity <= 8 or width != 64 or not width <= pitch <= 8192:
                 raise ValueError('Supported row-major matrix required')
         block = raw[i * size:(i + 1) * size]
@@ -48,6 +48,14 @@ def stage(data, directory, name):
             raise ValueError('Finite exact stage block and digest required')
         blocks[(epoch, counter)] = block
         last[epoch] = counter
+        if name == 'key':
+            if row['nativeAge'] != counter + 64 or len(row['groupGains']) != 3 or len(row['selectionMask']) != 3 or \
+                    len(row['cacheHeads']) != 4 or len({c['root'] for c in row['cacheHeads']}) != 4:
+                raise ValueError('Complete key routing metadata required')
+            for cache in row['cacheHeads']:
+                if len(cache['rows']) != 3 or any(not 0 <= r['head'] < r['total'] or r['smallChunk'] != 64
+                        for r in cache['rows']):
+                    raise ValueError('Complete bounded route heads required')
     if set(last) != set(range(5)):
         raise ValueError('Five complete observed voices required')
     return blocks, {'records': len(rows), 'samples': len(raw) // 4, 'sha256': sha(raw), 'lastCounters': last}
@@ -113,6 +121,23 @@ def compare_controls(left, right):
             'unmatchedRecords': sorted(a.keys() ^ b.keys()), 'causalExplanationProven': False}
 
 
+def compare_key_routes(left, right):
+    def normalized(rows):
+        return {(r['epoch'], r['voiceBlockCounter']):
+                {'cacheHeads': [c['rows'] for c in r['cacheHeads']],
+                 'groupGains': r['groupGains'], 'selectionMask': r['selectionMask']} for r in rows}
+    a, b = normalized(left), normalized(right)
+    changed = {k: 0 for k in ('cacheHeads', 'groupGains', 'selectionMask')}
+    first = None
+    for key in sorted(a.keys() & b.keys()):
+        fields = {k: {'left': a[key][k], 'right': b[key][k]} for k in changed if a[key][k] != b[key][k]}
+        for k in fields: changed[k] += 1
+        if fields and first is None: first = {'epoch': key[0], 'counter': key[1], 'fields': fields}
+    return {'changedCommonRecordsByField': changed, 'firstChangedRoute': first,
+            'unmatchedRecords': sorted(a.keys() ^ b.keys()), 'mixClockStillObserved': True,
+            'causalExplanationProven': False}
+
+
 def audit(directory):
     paths = sorted(directory.glob('run-*'), key=lambda p: int(p.name[4:]))
     if not 2 <= len(paths) <= 10 or [p.name for p in paths] != [f'run-{i}' for i in range(len(paths))]:
@@ -121,7 +146,7 @@ def audit(directory):
     if len(set(paths)) != len(paths):
         raise ValueError('Distinct authentic runs required; duplicate directory aliases are forbidden')
     runs, stages, audio, controls = [], [], [], []
-    fixture = dual = births = consumer_mode = solo_tail = None
+    fixture = dual = births = consumer_mode = solo_tail = key_mode = None
     for ordinal, path in enumerate(paths):
         closure = path.parent
         launch_bytes = (path / 'launch.json').read_bytes()
@@ -129,27 +154,31 @@ def audit(directory):
         current_dual = 'sites' in launch
         current_consumer = '0x100460908' in launch.get('sites', [])
         current_solo_tail = launch.get('sites') == ['0x100460f1c'] and launch.get('tailOnly') is True
+        current_key = launch.get('sites') == ['0x10051fad4']
         if fixture is None:
             fixture, dual, consumer_mode = launch['fixture'], current_dual, current_consumer
             solo_tail = current_solo_tail
+            key_mode = current_key
             module = (Path(__file__).resolve().parent.parent / 'dsp/midi-block-clock.mjs').as_uri()
             code = 'import fs from "node:fs";import {midiBlockClock} from ' + json.dumps(module) + ';' + \
                 'console.log(JSON.stringify(midiBlockClock(fs.readFileSync(process.argv[1]),{sampleRate:48000}).noteOns.map(e=>e.frame)));'
             births = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', code, fixture['midiPath']], text=True))
             if len(births) != 5:
                 raise ValueError('Five source MIDI births required')
-        if launch['fixture'] != fixture or current_dual != dual or current_consumer != consumer_mode or current_solo_tail != solo_tail or fixture['selection']['kind'] != 'fxp':
+        if launch['fixture'] != fixture or current_dual != dual or current_consumer != consumer_mode or current_solo_tail != solo_tail or current_key != key_mode or fixture['selection']['kind'] != 'fxp':
             raise ValueError('Identical fixture and observation mode required')
         expected_sites = ['0x10035ef10', '0x100472fd0', '0x100460f1c'] if dual else ['0x100472fd0']
         if consumer_mode: expected_sites = ['0x10035ef10', '0x100460908', '0x100460f1c']
         if solo_tail: expected_sites = ['0x100460f1c']
+        if key_mode: expected_sites = ['0x10051fad4']
         sites = launch['sites'] if dual else [launch['site']]
         collector = 'pianoteq_capture_worker_tail_baseline.py' if dual else 'pianoteq_capture_worker_audio_baseline.py'
         if consumer_mode or solo_tail: collector = 'pianoteq_capture_consumer_tail_baseline.py'
+        if key_mode: collector = 'pianoteq_capture_key_audio_baseline.py'
         if sites != expected_sites or sha((closure / collector).read_bytes()) != launch['collectorSha256'] or \
-                (dual and sha((closure / 'pianoteq_capture_worker_audio_baseline.py').read_bytes()) != launch['workerCollectorSha256']):
+                (dual and not key_mode and sha((closure / 'pianoteq_capture_worker_audio_baseline.py').read_bytes()) != launch['workerCollectorSha256']):
             raise ValueError('Frozen fixed-site collectors required')
-        if (consumer_mode or solo_tail) and (set(launch['helperSha256']) != {p.name for p in closure.glob('*.py')} or
+        if (consumer_mode or solo_tail or key_mode) and (set(launch['helperSha256']) != {p.name for p in closure.glob('*.py')} or
                 any(sha((closure / name).read_bytes()) != digest for name, digest in launch['helperSha256'].items())):
             raise ValueError('Complete frozen consumer helper closure required')
         for file, digest in [(fixture['midiPath'], fixture['midiSha256']), (fixture['resourcePath'], fixture['resourceSha256']),
@@ -165,7 +194,7 @@ def audit(directory):
         if data['runStatus']['terminal'] is not True or data['runStatus']['exitStatus'] != 0 or data['errors'] or \
                 data['targetMutation'] is not False or data['hardwareBreakpoints'] != len(sites):
             raise ValueError('Successful terminal read-only native run required')
-        if dual and not solo_tail and (len(data['birthRecords']) != 5 or [row['epoch'] for row in data['birthRecords']] != list(range(5)) or
+        if dual and not solo_tail and not key_mode and (len(data['birthRecords']) != 5 or [row['epoch'] for row in data['birthRecords']] != list(range(5)) or
                      len({row['voice'] for row in data['birthRecords']}) != 5 or any(row['note'] != 69 for row in data['birthRecords'])):
             raise ValueError('Five canonical source-strike identities required')
         if solo_tail and (data.get('tailOnly') is not True or data['consumerTailErrors'] or
@@ -177,13 +206,14 @@ def audit(directory):
             raise ValueError('Explicit error-free consumer stage identity required')
         names = ['consumer', 'tail'] if consumer_mode else ['worker', 'tail'] if dual else ['worker']
         if solo_tail: names = ['tail']
+        if key_mode: names = ['key']
         by_stage, inventory = {}, {}
         for name in names:
             by_stage[name], inventory[name] = stage(data, path, name)
         if consumer_mode and list(by_stage['consumer']) != list(by_stage['tail']):
             raise ValueError('Complete same-call consumer and terminal pairs required')
         stages.append(by_stage)
-        controls.append(data.get('tailAudioRecords') if solo_tail else data.get('consumerAudioRecords'))
+        controls.append(data.get('keyAudioRecords') if key_mode else data.get('tailAudioRecords') if solo_tail else data.get('consumerAudioRecords'))
         wav_bytes = (path / 'observed.wav').read_bytes()
         with wave.open(str(path / 'observed.wav'), 'rb') as reader:
             if (reader.getnchannels(), reader.getsampwidth(), reader.getframerate()) != (2, 3, 48000):
@@ -209,9 +239,11 @@ def audit(directory):
             pairs[-1]['consumerControls'] = compare_controls(controls[i], controls[j])
         if solo_tail:
             pairs[-1]['terminalControls'] = compare_controls(controls[i], controls[j])
+        if key_mode:
+            pairs[-1]['keyRoutes'] = compare_key_routes(controls[i], controls[j])
     return {'schema': 'pianoteq-worker-audio-baseline-audit-v1', 'runs': runs, 'pairs': pairs,
-            'workerAndTailSameRun': dual and not consumer_mode and not solo_tail,
-            'consumerAndTailSameRun': consumer_mode, 'terminalOnly': solo_tail,
+            'workerAndTailSameRun': dual and not consumer_mode and not solo_tail and not key_mode,
+            'consumerAndTailSameRun': consumer_mode, 'terminalOnly': solo_tail, 'keyOnly': key_mode,
             'identicalCollectorVersions': len({r['collectorSha256'] for r in runs}) == 1,
             'strictNativeRepeatabilityVerified': all(pair['strictFullPcmEqual'] for pair in pairs),
             'alignmentApplied': False, 'normalizationApplied': False, 'unmatchedBlocksIgnored': False,

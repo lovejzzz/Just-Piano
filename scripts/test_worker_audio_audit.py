@@ -76,6 +76,34 @@ class StageIntegrity(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Distinct authentic runs'):
                 audit.audit(root)
 
+    def test_complete_key_rows_and_cache_coordinates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            block = struct.pack('<768f', *range(768))
+            raw = block * 10
+            records = []
+            for epoch in range(5):
+                for counter in (0, 64):
+                    records.append({'ordinal': len(records), 'epoch': epoch,
+                        'voiceBlockCounter': counter, 'nativeAge': counter + 64,
+                        'offset': len(records) * 3072, 'bytes': 3072,
+                        'sha256': hashlib.sha256(block).hexdigest(), 'layouts': [[3, 3, 64, 64]] * 4,
+                        'groupGains': [1, 1, 1], 'selectionMask': [1, 1, 1],
+                        'cacheHeads': [{'root': hex(i), 'rows': [{'smallChunk': 64, 'bigChunk': 256,
+                            'total': 24064, 'head': 4800 + counter} for _ in range(3)]} for i in range(4)]})
+            data = {'keyAudioFile': 'key-audio.bin', 'keyAudioSite': '0x10051fad4', 'keyAudioErrors': [],
+                    'keyAudioBytes': len(raw), 'keyAudioSha256': hashlib.sha256(raw).hexdigest(), 'keyAudioRecords': records}
+            (root / 'key-audio.bin').write_bytes(raw)
+            self.assertEqual(audit.stage(data, root, 'key')[1]['samples'], 7680)
+            for mode in ('missing-row', 'invalid-head', 'wrong-age'):
+                with self.subTest(mode=mode):
+                    altered = copy.deepcopy(data)
+                    r = altered['keyAudioRecords'][0]
+                    if mode == 'missing-row': r['layouts'][0][0] = 2
+                    if mode == 'invalid-head': r['cacheHeads'][0]['rows'][0]['head'] = 24064
+                    if mode == 'wrong-age': r['nativeAge'] = 0
+                    with self.assertRaises(ValueError): audit.stage(altered, root, 'key')
+
 
 if __name__ == '__main__':
     unittest.main()
