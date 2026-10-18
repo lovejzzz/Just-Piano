@@ -277,7 +277,11 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeFeedbackAudioStillObserved: postFeedback && !ownFeedback,
   computedFeedbackReportSha256: ownFeedback?.reportSha256 ?? null, computedFeedbackAudioSha256: ownFeedback?.audioSha256 ?? null,
   nativeMonoFeedbackSourceStillObserved: ownFeedback ? !ownFeedback.usesComputedMono : false,
-  nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono,
+  nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
+  nativeDriveScratchUsedForPrediction: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
+  nativeModalInputsAndExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
+  nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive,
+  nativeDriveStaticProfileAndWindowStillObserved: !!ownFeedback?.usesComputedDrive,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};
 fs.writeFileSync(output, JSON.stringify(report, null, 2), {flag: 'wx', mode: 0o600});
