@@ -52,3 +52,19 @@ export function updateModalEnergyAndPrune(states, layout, { threshold, energyLay
   }
   return { layout: next, removed };
 }
+
+// 8dbbf4..8dbc64: sum cached energy in four independent SIMD lanes, including
+// the padded tail of each nonempty logical group, then native pair reduction.
+export function sumModalEnergy(states,layout) {
+  const sums=[0,0,0,0];
+  for(const [start,,,count] of layout) {
+    if(!count)continue;
+    for(let block=Math.floor(start/4);block<Math.ceil((start+count)/4);block++)
+      for(let i=0;i<4;i++) {
+        const value=states.get(block*4+i)?.energy;
+        if(!Number.isFinite(value)||value<0)throw new RangeError('Complete nonnegative cached modal energy required');
+        sums[i]=f32(sums[i]+value);
+      }
+  }
+  return f32(f32(sums[0]+sums[2])+f32(sums[1]+sums[3]));
+}
