@@ -1,13 +1,14 @@
 // Selected SoundboardIRCompute configuration fields produced by 0x1001ba68c.
 // Native pointers, vectors and unimplemented policy fields are never synthesized.
 const f=Math.fround;
+import {constructSoundboardRatePolicy} from './soundboard-rate-policy.mjs';
 const f32Copies=[[0x24,0x154],[0x28,0x158],[0x30,0x54],[0x3c,0x60],[0x60,0x108],
  [0x84,0x12c],[0x8c,0x130],[0x90,0x134],[0x94,0x138],[0x98,0x13c],[0x9c,0x140],
  [0xa0,0x144],[0xa4,0x148],[0xa8,0x14c],[0xac,0x1d0],[0xe0,0x1d8],[0xe8,0x178],
  [0x140,0x1dc],[0x144,0x1e0],[0x148,0x1e4],[0x14c,0x150]];
 
 export function constructSoundboardModelConfig({model,preset,bridge,propagationModes,component,
- linearPosition=false,twoPosition=false,rootLidEnabled=null,mode=0}){
+ linearPosition=false,twoPosition=false,rootLidEnabled=null,mode=0,runtimeRates=null}){
  if(!(model instanceof Uint8Array)||model.byteLength<0x1e8||!(preset instanceof Uint8Array)||preset.byteLength<0x1840||
   !(bridge instanceof Float32Array)||bridge.length!==4||bridge.some(v=>!Number.isFinite(v))||
   !(propagationModes instanceof Float32Array)||propagationModes.length!==3||propagationModes.some(v=>!Number.isFinite(v))||
@@ -20,6 +21,8 @@ export function constructSoundboardModelConfig({model,preset,bridge,propagationM
  const setFloat=(offset,value)=>{value=f(value);if(!Number.isFinite(value))throw new RangeError('Non-finite configuration scalar');
   v.setFloat32(offset,value,true);computedOffsets.push(offset);};
  setWord(0,component);
+ const ratePolicy=runtimeRates?constructSoundboardRatePolicy(runtimeRates):null;
+ if(ratePolicy)setFloat(0x2c,ratePolicy.outputRate);
  for(const [offset,source]of f32Copies)setFloat(offset,m.getFloat32(source,true));
  const height=m.getFloat32(0x50,true),stringLength=p.getFloat32(0xf98,true);
  setFloat(0x38,height<0?Math.abs(f(height*stringLength)):height);
@@ -44,5 +47,5 @@ export function constructSoundboardModelConfig({model,preset,bridge,propagationM
  output[0x1d0]=Number(m.getUint32(0x9c,true)!==0);
  return {config:output,initializationConfig:output.slice(0,0x130),bridge:bridge.slice(),
   computedOffsets:computedOffsets.sort((a,b)=>a-b),computedBytes:[0x13c,0x13d,0x1cc,0x1cf,0x1d0],
-  outputRateComputed:false,fullConfigurationComputed:false,sourceModelAndPresetStillObserved:true};
+  outputRateComputed:Boolean(ratePolicy),ratePolicy,fullConfigurationComputed:false,sourceModelAndPresetStillObserved:true};
 }

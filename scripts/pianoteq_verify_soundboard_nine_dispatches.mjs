@@ -9,6 +9,7 @@ let archiveInputsPath = null;
 if (arguments_.length === 6 && arguments_[4] === '--archive-inputs') archiveInputsPath = arguments_.splice(4, 2)[1];
 const [nodeDirectory, ...groups] = arguments_;
 const requireMicrophones=archiveInputsPath&&Boolean(JSON.parse(fs.readFileSync(archiveInputsPath)).microphones);
+const requireRuntimeRates=archiveInputsPath&&Boolean(JSON.parse(fs.readFileSync(archiveInputsPath)).runtimeRates);
 if (!nodeDirectory || groups.length !== 3) throw new Error('Usage: private-node-capture source-capture-0 source-capture-1 source-capture-2');
 const script = (name) => fileURLToPath(new URL(name, import.meta.url));
 const run = (name, args) => JSON.parse(execFileSync(process.execPath, [script(name), ...args],
@@ -51,7 +52,7 @@ for (let group = 0; group < 3; group++) {
   if (runtime.modelConfigurationInputs && (!replay.modelConfigurationComputed || !replay.modelLidGainsComputed ||
       replay.dispatcherInitializationConfigurationUsedForPrediction !== false || replay.capturedGainVectorUsedForPrediction !== false ||
       !replay.shapingScalarsComputedFromModel || !replay.normalizationControlsComputedFromModel ||
-      replay.modelConfigurationComparison?.wordCount !== 30 || replay.modelConfigurationComparison?.byteCount !== 5)) {
+      replay.modelConfigurationComparison?.wordCount !== (requireRuntimeRates?31:30) || replay.modelConfigurationComparison?.byteCount !== 5)) {
     throw new Error('Upstream model/preset configuration not used');
   }
   if (archiveInputsPath && (!replay.archiveSourcesUsed || replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction !== false ||
@@ -65,6 +66,8 @@ for (let group = 0; group < 3; group++) {
     replay.nativePrimaryReceiverPositionsUsedForPrediction!==false||!replay.primarySourceComparison||
     !replay.relativeReceiverConfigurationConstructedFromPreset||replay.nativeRelativeReceiverConfigurationUsedForPrediction!==false||
     !replay.relativeReceiverSourceComparison))throw new Error('Independent microphone sources not used');
+  if(requireRuntimeRates&&(!replay.runtimeRatePolicyComputed||replay.nativeResamplingRatesUsedForPrediction!==false))
+    throw new Error('Independent runtime rate policy not used');
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -91,6 +94,8 @@ for (let group = 0; group < 3; group++) {
     primaryReceiverPositionsConstructedFromPreset:replay.primaryReceiverPositionsConstructedFromPreset,
     nativePrimaryReceiverPositionsUsedForPrediction:replay.nativePrimaryReceiverPositionsUsedForPrediction,
     relativeReceiverSourceComparison:replay.relativeReceiverSourceComparison,
+    runtimeRatePolicyComputed:replay.runtimeRatePolicyComputed,runtimeRatePolicy:replay.runtimeRatePolicy,
+    nativeResamplingRatesUsedForPrediction:replay.nativeResamplingRatesUsedForPrediction,
     relativeReceiverConfigurationConstructedFromPreset:replay.relativeReceiverConfigurationConstructedFromPreset,
     nativeRelativeReceiverConfigurationUsedForPrediction:replay.nativeRelativeReceiverConfigurationUsedForPrediction,
     nativeModelAndPresetSourceSnapshotsUsedForPrediction: replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction,
@@ -129,6 +134,8 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   nativeGlobalShapingCurveUsedForPrediction: groupReports.some((g) => g.nativeGlobalShapingCurveUsedForPrediction),
   microphoneSpectralSourcesConstructed:groupReports.every(g=>g.microphoneSpectralSourcesConstructed),
   nativeMicrophoneSpectralSourcesUsedForPrediction:groupReports.some(g=>g.nativeMicrophoneSpectralSourcesUsedForPrediction),
+  runtimeRatePolicyComputed:groupReports.every(g=>g.runtimeRatePolicyComputed),
+  nativeResamplingRatesUsedForPrediction:groupReports.some(g=>g.nativeResamplingRatesUsedForPrediction),
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: groupReports.some((g) => g.nativeModelAndPresetSourceSnapshotsUsedForPrediction),
   fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,

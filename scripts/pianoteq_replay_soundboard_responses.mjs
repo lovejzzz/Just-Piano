@@ -103,6 +103,7 @@ let microphoneSources = null;
 let modelConfigurationComparison = null;
 const modelControlMismatches = [];
 let processingControls = runtime.processing, shapingScalars = runtime.shaping?.scalars, normalizationControls = runtime.normalization;
+let resamplingControls=runtime.resampling;
 const modelFloat = (offset) => new DataView(modelConfiguration.config.buffer).getFloat32(offset, true);
 if (runtime.modelConfigurationInputs) {
   const input = runtime.modelConfigurationInputs;
@@ -135,7 +136,8 @@ if (runtime.modelConfigurationInputs) {
     for (const key of ['dimensions', 'mode', 'logX']) curveMetadataMismatches += Number(lidCurve[key] !== input.lidCurve[key]);
     archiveSourceComparison = {words, bytes, wordMismatches, byteMismatches, curveMetadataMismatches};
   }
-  modelConfiguration = constructSoundboardModelConfig({model, preset, bridge, propagationModes, component: input.component});
+  modelConfiguration = constructSoundboardModelConfig({model, preset, bridge, propagationModes, component: input.component,
+    runtimeRates:archiveData?.runtimeRates??null});
   modelLidGains = constructSoundboardLidGains({curve: lidCurve,
     preset, modelFamily: new DataView(model.buffer, model.byteOffset, model.byteLength).getUint32(0x98, true)});
   const target = readDescriptor(runtime.modelConfigurationTarget), actual = Buffer.from(modelConfiguration.config);
@@ -150,6 +152,11 @@ if (runtime.modelConfigurationInputs) {
   modelConfigurationComparison = {wordCount: modelConfiguration.computedOffsets.length, byteCount: modelConfiguration.computedBytes.length,
     wordMismatches, byteMismatches, bridgeMismatches, gainMismatches};
   const audit = (name, actual, expected) => {if (!Object.is(actual, expected)) modelControlMismatches.push({name, actual, expected});};
+  if(modelConfiguration.outputRateComputed){
+    if(runtime.resampling?.length!==2)throw new Error('Complete resampling controls required for runtime rate audit');
+    resamplingControls=[modelFloat(0x2c),modelFloat(0x24)];
+    resamplingControls.forEach((value,i)=>audit(`resampling.${i}`,value,runtime.resampling[i]));
+  }
   shapingScalars = [modelFloat(0xe0), modelFloat(0x144), modelFloat(0x140)];
   shapingScalars.forEach((v, i) => audit(`shaping.${i}`, v, runtime.shaping.scalars[i]));
   normalizationControls = [modelFloat(0x148), modelFloat(0x24), 0];
@@ -529,7 +536,7 @@ if (runtime.resampled?.length || runtime.dispatchOutputs?.length) {
   if (!normalization || runtime.resamplingPending || runtime.resampling?.length !== 2 ||
       (runtime.resampled?.length && (runtime.resampled.length !== normalization.outputs.length ||
       runtime.resampledHeaders?.length !== normalization.outputs.length))) throw new Error('Complete resampled chain required');
-  const [outputRate, inputRate] = runtime.resampling;
+  const [outputRate, inputRate] = resamplingControls;
   if (![outputRate, inputRate].every((v) => Number.isFinite(v) && v > 0)) throw new Error('Invalid resampling rates');
   resamplingPlan = createSoundboardResamplingPlan(Math.fround(outputRate / inputRate), 10);
   for (let channel = 0; channel < normalization.outputs.length; channel++) {
@@ -544,7 +551,7 @@ let dispatch = null;
 if (runtime.dispatchOutputs?.length) {
   if (runtime.dispatchOutputs.length !== computedResampled.length ||
       runtime.dispatchHeaders?.length !== computedResampled.length) throw new Error('Complete dispatcher targets required');
-  dispatch = finalizeSoundboardDispatch(computedResampled, runtime.resampling[0]);
+  dispatch = finalizeSoundboardDispatch(computedResampled, resamplingControls[0]);
   const normalizations = new Uint32Array(Float32Array.from(normalization.normalizations).buffer);
   for (let channel = 0; channel < dispatch.outputs.length; channel++) {
     if (runtime.dispatchHeaders[channel].length !== dispatch.outputs[channel].length) throw new Error('Dispatcher length differs');
@@ -573,6 +580,8 @@ const controlMismatchCount = spectralControlMismatches.length + reconstructionCo
   initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount + microphoneMismatchCount + primaryMismatchCount + relativeReceiverMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
   modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
+  runtimeRatePolicyComputed:Boolean(modelConfiguration?.outputRateComputed),runtimeRatePolicy:modelConfiguration?.ratePolicy??null,
+  nativeResamplingRatesUsedForPrediction:Boolean(resamplingPlan)&&!modelConfiguration?.outputRateComputed,
   archiveSourceComparison, archiveSourcesUsed: Boolean(archiveSources),
   archiveGlobalCurveComparison, globalShapingCurveConstructedFromArchive: Boolean(archiveGlobalCurveComparison),
   microphoneSourceComparison, microphoneSpectralSourcesConstructed:Boolean(microphoneSources),

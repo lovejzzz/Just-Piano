@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import math
 from pathlib import Path
 import struct
 
@@ -17,6 +18,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('binary', 'preset', 'archive', 'output'):
         parser.add_argument(name, type=Path)
+    parser.add_argument('--render-rate', type=float)
+    parser.add_argument('--base-rate', type=int, default=44100)
     args = parser.parse_args()
     if args.output.resolve().is_relative_to(Path(__file__).resolve().parent.parent):
         parser.error('Commercial inputs must remain outside the repository')
@@ -63,6 +66,11 @@ def main():
     archive['microphones'] = {'schema': 1, 'output': output[0], 'registry': registry,
         'soloMicrophone': 0, 'soloMicrophoneSource': 'no-prefs-default',
         'binarySha256': EXPECTED, 'nativeRuntimeTablesUsedForExport': False}
+    if args.render_rate is not None:
+        if not math.isfinite(args.render_rate) or args.render_rate <= 0 or not 0 < args.base_rate <= 0xffffffff:
+            raise ValueError('Finite positive explicit render context required')
+        archive['runtimeRates'] = {'baseRate': args.base_rate, 'renderRate': args.render_rate,
+                                  'source': 'explicit-render-configuration'}
     with open(args.output, 'x', opener=lambda p, f: os.open(p, f, 0o600)) as stream:
         json.dump(archive, stream, indent=2, allow_nan=False)
         stream.write('\n')
