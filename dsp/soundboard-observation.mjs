@@ -1,8 +1,10 @@
 // Observation records prepared by FUN_10037e040 inside SoundboardIRCompute.
-// The native parameter types are obscured by decompilation, so the caller
-// supplies the two scalar scales and the two input vectors explicitly.
+// Historical API names: `frequencies` contains geometric distances, and
+// `stateIndex` is the delayed output index. Native same-run proof: pass226.
+import {fma32} from './modal-kernel.mjs';
+import {nativeScalarCos} from './native-scalar-sin.mjs';
 const f = Math.fround;
-const TWO_PI = 12.566371;
+const FOUR_PI = 4 * Math.PI;
 
 function finiteArray(values, name, count) {
   if (!Array.isArray(values) && !(values instanceof Float32Array)) {
@@ -22,7 +24,7 @@ export function prepareSoundboardObservations({
   flags = 0,
   phaseMode = false,
   count = frequencies.length,
-  cosf = Math.cos,
+  cosf = nativeScalarCos,
 }) {
   if (!Number.isFinite(inverseScale) || !Number.isFinite(amplitudeScale)) {
     throw new RangeError('Finite observation scales required');
@@ -35,28 +37,29 @@ export function prepareSoundboardObservations({
   if (typeof cosf !== 'function') throw new RangeError('cosf callback required');
 
   const records = [];
+  if (amplitudeScale === 0) return records;
   for (let frequencyIndex = 0; frequencyIndex < count; frequencyIndex++) {
     const frequency = frequencies[frequencyIndex];
     const scaledFrequency = f(inverseScale * frequency);
     let phaseWeight = 1;
+    const stateIndex = Math.max(0, phaseMode ? Math.floor(scaledFrequency) : Math.floor(scaledFrequency + 0.5));
     if (phaseMode) {
-      const fraction = f(scaledFrequency - Math.trunc(scaledFrequency));
-      const cosine = f(cosf(f(fraction * 1.5707964)));
+      const fraction = f(scaledFrequency - Math.floor(scaledFrequency));
+      const cosine = f(cosf(f(fraction * f(1.5707964))));
       phaseWeight = f(cosine * cosine);
     }
-    const stateIndex = Math.trunc(scaledFrequency);
-    const angularFrequency = f(frequency * TWO_PI);
+    const angularFrequency = f(frequency * FOUR_PI);
     let first;
     let second;
     if (flags & 1) {
       const coefficient = coefficients[frequencyIndex];
       const reciprocal = f(1 / f(frequency * angularFrequency));
       const inverseOmega = f(1 / angularFrequency);
-      first = f(f(amplitudeScale * f(reciprocal + f(inverseOmega * inverseScale))) * coefficient);
-      second = f(f(f(amplitudeScale * inverseScale) * f(-inverseOmega)) * coefficient);
+      first = f(amplitudeScale * f(fma32(inverseScale, inverseOmega, reciprocal) * coefficient));
+      second = f(amplitudeScale * f(f(inverseScale * f(-1 / angularFrequency)) * coefficient));
     } else {
       first = f(amplitudeScale * f(1 / angularFrequency));
-      second = 0;
+      second = f(amplitudeScale * 0);
     }
     records.push({
       stateIndex,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {prepareSoundboardObservations} from '../dsp/soundboard-observation.mjs';
 import {applySoundboardOutputKernel} from '../dsp/soundboard-output-kernel.mjs';
+import {constructSoundboardObservationDistances} from '../dsp/soundboard-observation-distance.mjs';
 
 const observations = prepareSoundboardObservations({
   inverseScale: 2,
@@ -10,7 +11,7 @@ const observations = prepareSoundboardObservations({
   cosf: (value) => Math.cos(value),
 });
 assert.equal(observations.length, 3);
-assert.equal(observations[0].stateIndex, 0);
+assert.equal(observations[0].stateIndex, 1);
 assert.equal(observations[2].stateIndex, 5);
 assert.equal(observations[1].phaseWeight, 1);
 assert.ok(Number.isFinite(observations[2].first));
@@ -23,6 +24,15 @@ const phased = prepareSoundboardObservations({
   cosf: () => 1,
 });
 assert.equal(phased[0].phaseWeight, 1);
+assert.equal(phased[0].stateIndex, 0);
+assert.deepEqual(prepareSoundboardObservations({inverseScale: 2, amplitudeScale: 0, frequencies: [1]}), []);
+const distances = constructSoundboardObservationDistances({nx: 1, ny: 1, size: 4, h: 1},
+  [Float32Array.of(0, 0, 0), Float32Array.of(0, 0, -1)], 0);
+assert.equal(distances.distances[0], Math.fround(0.01));
+assert.equal(distances.distances[1], 1);
+assert.equal(distances.distances[4], 1);
+assert.equal(distances.directions[4], -1);
+assert.throws(() => constructSoundboardObservationDistances({nx: 1, ny: 1, size: 4, h: 1}, [[0, NaN, 0]], 0), /coordinates/);
 
 const blocks = [
   new Float32Array(65).fill(1),
