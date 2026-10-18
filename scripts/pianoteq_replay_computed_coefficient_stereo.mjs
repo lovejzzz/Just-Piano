@@ -5,14 +5,26 @@ import crypto from 'node:crypto';
 import { GlobalRawKeys } from '../dsp/global-raw-keys.mjs';
 import { ObservedVoiceStereo64 } from '../dsp/observed-voice-stereo.mjs';
 import { encodeObservedPcm24 } from '../dsp/pcm24.mjs';
+import { readComputedVoiceEndpoints } from './pianoteq_computed_voice_artifact.mjs';
 import { loadOrderFixture, sha, numericalHash } from './pianoteq_order_fixture.mjs';
 
 const [directory, reportPath, packPath, drivePath, sourceDirectory, ...flags] = process.argv.slice(2);
-if (!drivePath || !sourceDirectory || flags.some(x => x !== '--poison-pcm-target' && x !== '--poison-coefficient-target' && x !== '--alter-pedal-input') || new Set(flags).size !== flags.length || fs.existsSync(reportPath) ||
+const voiceReportFlags = flags.filter(x => x.startsWith('--voice-report=')), voiceAudioFlags = flags.filter(x => x.startsWith('--voice-audio='));
+if (!drivePath || !sourceDirectory || voiceReportFlags.length > 1 || voiceAudioFlags.length > 1 || voiceReportFlags.length !== voiceAudioFlags.length || flags.some(x => x !== '--poison-pcm-target' && x !== '--poison-coefficient-target' && x !== '--alter-pedal-input' && !x.startsWith('--voice-report=') && !x.startsWith('--voice-audio=')) || new Set(flags).size !== flags.length || fs.existsSync(reportPath) ||
     path.resolve(reportPath).startsWith(path.resolve('.') + path.sep))
   throw Error('Usage: complete-private-run fresh-private-report independent-ir-pack static-drive-profile complete-private-coefficient-source [--poison-pcm-target|--poison-coefficient-target|--alter-pedal-input]');
 const fixture = loadOrderFixture(directory), packBytes = fs.readFileSync(packPath), driveBytes = fs.readFileSync(drivePath);
 const pack = JSON.parse(packBytes), driveProfile = JSON.parse(driveBytes);
+const computedVoiceSource = voiceReportFlags.length ? readComputedVoiceEndpoints(voiceReportFlags[0].slice('--voice-report='.length),voiceAudioFlags[0].slice('--voice-audio='.length),fixture.fixture) : null;
+if (computedVoiceSource) {
+  if (computedVoiceSource.voices.size !== fixture.voices.size) throw Error('Identical complete voice inventory required');
+  for (const [id,voice] of fixture.voices) {
+    const computed = computedVoiceSource.voices.get(id);
+    if (!computed) throw Error('Missing generated endpoint ' + id);
+    fixture.voices.set(id,{...voice,spatial:computed.spatial,monoContribution:computed.mono});
+  }
+}
+
 if (pack.source?.kind !== 'independent-archive-generation' || pack.source.nativeCapturesUsedForPrediction !== false ||
     pack.source.presetSha256 !== fixture.fixture.selection.sha256 || pack.source.resourceSha256 !== fixture.fixture.resourceSha256)
   throw Error('Independently generated IR pack bound to same preset/resources required');
@@ -132,7 +144,13 @@ if (flags.includes('--poison-pcm-target')) target[0] ^= 1;
 if (pcm.length !== target.length) throw Error('Complete native PCM extent required');
 let pcmSampleDifferences = 0;
 for (let i = 0; i < pcm.length; i += 3) if (pcm.readUIntLE(i, 3) !== target.readUIntLE(i, 3)) pcmSampleDifferences++;
-const report = { schema: 1, coefficientSourceRuntimeSha256: sha(sourceBytes), coefficientSourceSameRun: false, poisonedCoefficientTarget: flags.includes('--poison-coefficient-target'),
+const report = { schema: 1,
+  computedVoiceEndpointReportSha256: computedVoiceSource?.reportSha256 ?? null,
+  computedVoiceEndpointAudioSha256: computedVoiceSource?.audioSha256 ?? null,
+  computedVoiceEndpointSourceRuntimeSha256: computedVoiceSource?.captureRuntimeSha256 ?? null,
+  nativeSpatialAndCouplingEndpointAudioUsedForPrediction: !computedVoiceSource,
+  nativeTerminalVoiceAudioStillObserved: !!computedVoiceSource, voiceEndpointSourceSameRun: computedVoiceSource ? computedVoiceSource.captureRuntimeSha256 === fixture.runtimeSha256 : null,
+  nativeVoiceAudioBoundary: computedVoiceSource ? 'terminal groups and auxiliary before spatial processing' : 'spatial, auxiliary and mono endpoints', coefficientSourceRuntimeSha256: sha(sourceBytes), coefficientSourceSameRun: false, poisonedCoefficientTarget: flags.includes('--poison-coefficient-target'),
   coefficientSourceRoot: sourceRoot, nativeDynamicGlobalCoefficientTablesUsedForPrediction: false,
   nativeInitialGlobalCoefficientProfileStillObserved: true, rawGlobalControlFromSeparateObservedRun: false, rawPedalInputsStillObserved: true, nativeInitialScalarCounterStateUsedForPrediction: false,
   alteredPedalInput: flags.includes('--alter-pedal-input'), computedRawGlobalControlSha256: controlStream.digest('hex'),
