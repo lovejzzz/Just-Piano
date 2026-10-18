@@ -12,6 +12,7 @@ import {filterSoundboardResponses} from '../dsp/soundboard-response-filter.mjs';
 import {blendSoundboardResponses} from '../dsp/soundboard-response-blend.mjs';
 import {processSoundboardLeadingSilence} from '../dsp/soundboard-leading-silence.mjs';
 import {prepareSoundboardSpectralPrefix} from '../dsp/soundboard-spectral-prefix.mjs';
+import {soundboardCurveGain} from '../dsp/soundboard-curve-gain.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -156,9 +157,11 @@ if (needLeading) {
   leadingComparisons = leading.outputs.map((output, channel) => compare(output, leadingTargets[channel], channel));
 }
 const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMismatches = [];
-if (runtime.whiteningRecords?.length) {
-  if (!leading || runtime.whiteningErrors?.length || runtime.whiteningPending ||
-      runtime.whiteningRecords.length !== leading.outputs.length) throw new Error('Complete whitening chain required');
+const spectralPrefixes = [], curveGainComparisons = [];
+if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length) {
+  if (!leading) throw new Error('Generated leading responses required');
+  if (runtime.whiteningRecords?.length && (runtime.whiteningErrors?.length || runtime.whiteningPending ||
+      runtime.whiteningRecords.length !== leading.outputs.length)) throw new Error('Complete whitening chain required');
   const amounts = readDescriptor(runtime.shaping.floatVector);
   const flags = readDescriptor(runtime.shaping.intVector);
   if (amounts.length !== leading.outputs.length * 4 || flags.length !== amounts.length) {
@@ -169,6 +172,8 @@ if (runtime.whiteningRecords?.length) {
     const width = runtime.shaping.scalars[1];
     const prefix = prepareSoundboardSpectralPrefix(leading.outputs[channel],
       {tau: source.controls.tau, amount, width, flags: flag});
+    spectralPrefixes.push(prefix);
+    if (!runtime.whiteningRecords?.length) continue;
     const target = runtime.whiteningRecords[channel];
     const predictedParameters = [amount, width, prefix.binSpacing];
     if (target.number !== channel || target.length !== prefix.magnitude.length || target.flags !== flag ||
@@ -180,13 +185,44 @@ if (runtime.whiteningRecords?.length) {
     whiteningComparisons.push(compare(prefix.whitening.output, target.output, channel));
   }
 }
+if (runtime.curveGainRecords?.length) {
+  if (runtime.curveGainErrors?.length || runtime.curveGainPending ||
+      runtime.curveGainRecords.length !== spectralPrefixes.length * 2) throw new Error('Complete curve gain chain required');
+  const blend = readDescriptor(runtime.shaping.blendVector);
+  if (blend.length !== spectralPrefixes.length * 4) throw new Error('Curve mix vector differs');
+  for (let channel = 0; channel < spectralPrefixes.length; channel++) {
+    for (let kind = 0; kind < 2; kind++) {
+      const curve = kind ? runtime.shaping.channelCurveObjects[channel] : runtime.shaping.globalCurve;
+      const header = readDescriptor(curve.header);
+      if (header.length !== 80) throw new Error('Curve header shape differs');
+      const floats = (offset) => {
+        const range = curve.candidateRanges.find((r) => r.offset === offset);
+        if (!range) throw new Error('Required curve vector missing');
+        return new Float32Array(Uint8Array.from(readDescriptor(range.data)).buffer);
+      };
+      const width = kind ? 40 : runtime.shaping.scalars[2];
+      const mix = kind ? 0 : blend.readFloatLE(channel * 4);
+      const parameters = [width, mix, spectralPrefixes[channel].binSpacing];
+      const predicted = soundboardCurveGain({x: floats(24), y: floats(48), dimensions: header.readUInt32LE(72),
+        mode: header[77], logX: header[76]}, {length: spectralPrefixes[channel].magnitude.length,
+        smoothingWidth: width, mix, binSpacing: parameters[2]});
+      const record = runtime.curveGainRecords[channel * 2 + kind];
+      if (record.number !== channel * 2 + kind || record.parameters?.length !== 3 ||
+          parameters.some((v, i) => !Object.is(v, record.parameters[i]))) {
+        spectralControlMismatches.push({channel, curveKind: kind, predictedParameters: parameters,
+          observedParameters: record.parameters});
+      }
+      curveGainComparisons.push({...compare(predicted.output, record.output, channel), curveKind: kind});
+    }
+  }
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons];
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons];
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !spectralControlMismatches.length,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
@@ -205,8 +241,9 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   leadingComparisons, leadingShifts: leading?.shifts ?? null,
   leadingMode: leading?.mode ?? null,
   leadingNativeTargetVerified: leadingComparisons.length > 0 && leadingComparisons.every((c) => !c.mismatches),
-  magnitudeComparisons, whiteningComparisons, spectralControlMismatches,
-  spectralPrefixComputed: magnitudeComparisons.length > 0,
+  magnitudeComparisons, whiteningComparisons, curveGainComparisons, spectralControlMismatches,
+  spectralPrefixComputed: spectralPrefixes.length > 0,
+  curveGainControlsFromShapingCapture: curveGainComparisons.length > 0,
   spectralNativeTargetsUsedForPrediction: false,
   shapingComputed: false,
   firstBlockHashMatchesCapture: runtime.records.every((r) => r.cache?.sha256) ?
