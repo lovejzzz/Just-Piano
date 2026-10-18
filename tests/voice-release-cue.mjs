@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import {VoiceReleaseCue64} from '../dsp/voice-release-cue.mjs';
+const event=(offset,start,duration)=>({offset,start,duration,gain:1,coefficients:[0,0,0,0,1],history:[0,0,0,0]});
+const profile={primary:'a',secondary:null,gains:[1,0],events:[event(0,2,4),event(4,4,3)]};
+const tables=new Map([['a',Float32Array.of(1,2,3,4,5,6,7)]]);
+const cue=new VoiceReleaseCue64(profile,tables),output=cue.process64();
+assert.deepEqual(Array.from(output.slice(0,8)),[0,0,1,2,8,10,7,0]);
+assert.ok(output.slice(8).every(x=>Object.is(x,0)));
+assert.equal(cue.counter,64);assert.equal(cue.quiet,false);
+assert.ok(cue.process64().every(x=>Object.is(x,0)));
+assert.equal(cue.counter,128);assert.equal(cue.quiet,true);
+cue.process64();assert.equal(cue.counter,128);
+
+const cancelled=new VoiceReleaseCue64(profile,tables);cancelled.cancelPending();
+assert.ok(cancelled.process64().every(x=>Object.is(x,0)));
+const started=new VoiceReleaseCue64({...profile,events:[event(0,0,4),event(4,80,3)]},tables);
+started.cancelPending();assert.equal(started.events[0].gain,1);assert.equal(started.events[1].gain,0);
+assert.deepEqual(Array.from(started.process64().slice(0,4)),[1,2,3,4]);
+assert.equal(profile.events[0].gain,1);
+assert.throws(()=>new VoiceReleaseCue64({...profile,events:[{...event(0,0,4),history:[1,0,0,0]}]},tables));
+console.log('Unaligned cue windows, ordered overlap, quiet freeze, pending cancellation and cold-state guard passed (synthetic).');

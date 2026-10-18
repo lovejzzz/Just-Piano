@@ -32,5 +32,5 @@ export function readComputedVoiceEndpoints(reportPath,audioPath,fixture){
   voices.set(id,{spatial:rows.slice(0,12),mono:rows[12]});ages.set(item.epoch,age+64);
  });
  if(ages.size!==5)throw Error('All five source voices required');
- return {voices,nativeTerminalAudioStillObserved:!terminalSource,nativeAuxiliaryEntryStillObserved:!!terminalSource,terminalManifestSha256:terminalSource?.manifestSha256??null,reportSha256:sha(reportBytes),audioSha256:sha(bytes),captureRuntimeSha256:report.captureRuntimeSha256};
+ return {voices,nativeTerminalAudioStillObserved:!terminalSource,nativeAuxiliaryEntryStillObserved:terminalSource?.nativeAuxiliaryEntryStillObserved??null,terminalManifestSha256:terminalSource?.manifestSha256??null,reportSha256:sha(reportBytes),audioSha256:sha(bytes),captureRuntimeSha256:report.captureRuntimeSha256};
 }

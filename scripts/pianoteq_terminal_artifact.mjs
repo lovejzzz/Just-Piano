@@ -37,6 +37,10 @@ export function writeTerminalArtifact(directory, report, reportFile, args) {
   for (const k of ['resourcePath', 'presetPath', 'contextPath', 'midiPath']) inputs.push(boundFile(archive[k]));
   const repeat = JSON.parse(fs.readFileSync(values['archive-repeat-model']));
   inputs.push(boundFile(repeat.presetPath));
+  if(report.auxiliarySourceProducer){
+    if(report.auxiliarySourceProducer.mismatches!==0||report.auxiliarySourceProducer.nativeAuxiliaryAudioUsedForPrediction!==false||report.tailEnvelopes.auxiliaryEntryObserved!==false)throw Error('Passed calculated auxiliary source required');
+    for(const item of report.auxiliarySourceProducer.inputFiles){const bound=boundFile(item.path);if(bound.sha256!==item.sha256)throw Error('Auxiliary input changed');inputs.push(bound);}
+  }
   if (inputs[0].sha256 !== report.captureSha256) throw Error('Bound source capture required');
   const bytes = Buffer.alloc(3314 * 1536), index = [], ages = new Map();
   for (const [ordinal, item] of report.tailEnvelopes.outputs.entries()) {
@@ -57,7 +61,7 @@ export function writeTerminalArtifact(directory, report, reportFile, args) {
   const manifest = {schema: 'pianoteq-calculated-terminal-v1', report: boundFile(reportFile), inputs,
     arguments: args, sourceClosure: closure(), audioSha256: sha(bytes), audioBytes: bytes.length, index,
     fixture: {midiSha256: archive.midiSha256, presetSha256: archive.presetSha256, resourceSha256: archive.resourceSha256},
-    nativeTerminalGroupsUsedForPrediction: false, nativeAuxiliaryEntryStillObserved: true,
+    nativeTerminalGroupsUsedForPrediction: false, nativeAuxiliaryEntryStillObserved: !report.auxiliarySourceProducer,
     nativeRuntimeControlsAndSchedulingStillObserved: true, independentMidiToStereo: false};
   fs.mkdirSync(directory, {mode: 0o700});
   fs.writeFileSync(path.join(directory, 'terminal.bin'), bytes, {flag: 'wx', mode: 0o600});
@@ -67,7 +71,7 @@ export function writeTerminalArtifact(directory, report, reportFile, args) {
 export function readTerminalArtifact(directory, fixture) {
   const raw = fs.readFileSync(path.join(directory, 'manifest.json')), m = JSON.parse(raw);
   if (m.schema !== 'pianoteq-calculated-terminal-v1' || m.index?.length !== 3314 ||
-      m.nativeTerminalGroupsUsedForPrediction !== false || m.nativeAuxiliaryEntryStillObserved !== true ||
+      m.nativeTerminalGroupsUsedForPrediction !== false || typeof m.nativeAuxiliaryEntryStillObserved !== 'boolean' ||
       m.nativeRuntimeControlsAndSchedulingStillObserved !== true || m.independentMidiToStereo !== false)
     throw Error('Complete calculated terminal provenance required');
   if (m.fixture.midiSha256 !== fixture.midiSha256 || m.fixture.presetSha256 !== fixture.selection.sha256 ||
@@ -80,6 +84,7 @@ export function readTerminalArtifact(directory, fixture) {
   if (!report.passed || report.mismatches !== 0 || !report.tailEnvelopes?.passed ||
       report.captureSha256 !== m.inputs[0].sha256 || report.preparedSourceBridge?.historicalPredictionReportRequired !== false)
     throw Error('Passed archive-source producer required');
+  if(m.nativeAuxiliaryEntryStillObserved!==!report.auxiliarySourceProducer||report.tailEnvelopes.auxiliaryEntryObserved!==m.nativeAuxiliaryEntryStillObserved)throw Error('Explicit auxiliary prediction boundary required');
   const bytes = fs.readFileSync(path.join(directory, 'terminal.bin'));
   if (bytes.length !== 3314 * 1536 || bytes.length !== m.audioBytes || sha(bytes) !== m.audioSha256)
     throw Error('Bound complete calculated terminal audio required');
@@ -96,5 +101,5 @@ export function readTerminalArtifact(directory, fixture) {
     voices.set(key, rows); ages.set(item.epoch, item.counter + 64);
   });
   if (ages.size !== 5) throw Error('Five calculated terminal voices required');
-  return {voices, manifestSha256: sha(raw), audioSha256: m.audioSha256, directory: path.resolve(directory)};
+  return {voices, nativeAuxiliaryEntryStillObserved:m.nativeAuxiliaryEntryStillObserved,manifestSha256: sha(raw), audioSha256: m.audioSha256, directory: path.resolve(directory)};
 }

@@ -41,7 +41,7 @@ export function verifyVoiceTailEnvelopes(data,rattle,check,checkDouble,setContex
    own.state.secondaryEnabled=r.tail.secondaryEnabled;
    compareState(own.state,r.tail);
    if(own.state.special)throw new Error('Special terminal processor not implemented');
-   let result={groups:source.channels.map(g=>Float32Array.from(g)),auxiliary:r.auxiliary.values.map(g=>Float32Array.from(g))};
+   let result={groups:source.channels.map(g=>Float32Array.from(g)),auxiliary:(rattle.auxiliaryFromComputedCross?source.auxiliary:r.auxiliary.values).map(g=>Float32Array.from(g))};
    if(own.state.secondaryEnabled===1){result=renderTerminalVoiceEnvelope(result.groups,result.auxiliary,own.state.secondary);secondaryActiveBlocks++;}
    if(r.counter>own.state.activationAge&&!(own.state.primary.enabled&1))own.state.primary.enabled=1;
    if(own.state.primary.enabled||own.state.primary.gain!==1)primaryActiveBlocks++;
@@ -63,5 +63,5 @@ export function verifyVoiceTailEnvelopes(data,rattle,check,checkDouble,setContex
   }
  }
  if(pending.size||states.size!==5||blocks!==rattle.blocks||['audioAfterGains','audioTail'].some(stage=>data.records.filter(r=>r.stage===stage).length!==blocks))throw new Error('Incomplete terminal observation coverage');
- return {outputs,blocks,outputSamples:blocks*192,auxiliarySamples:blocks*192,primaryActiveBlocks,secondaryActiveBlocks,timeActiveBlocks,observedEnableChanges,enableControlsObserved:true,sameRunComputedGroups:true,auxiliaryEntryObserved:true,modelControlsObserved:true,terminalSlopesComputed:slopeModels!==undefined,terminalScaleObserved:true,nonunitPrimarySlopeModels:slopeModels?[...slopeModels.values()].filter(m=>m.slopes.primary!==1).length:undefined,initialEnvelopeStateObserved:false,initialTimeStateObserved:true,initialTerminalGainComputed:true,subsequentStateCarried:true,finalStereoAudioVerified:false};
+ return {outputs,blocks,outputSamples:blocks*192,auxiliarySamples:blocks*192,primaryActiveBlocks,secondaryActiveBlocks,timeActiveBlocks,observedEnableChanges,enableControlsObserved:true,sameRunComputedGroups:true,auxiliaryEntryObserved:!rattle.auxiliaryFromComputedCross,modelControlsObserved:true,terminalSlopesComputed:slopeModels!==undefined,terminalScaleObserved:true,nonunitPrimarySlopeModels:slopeModels?[...slopeModels.values()].filter(m=>m.slopes.primary!==1).length:undefined,initialEnvelopeStateObserved:false,initialTimeStateObserved:true,initialTerminalGainComputed:true,subsequentStateCarried:true,finalStereoAudioVerified:false};
 }

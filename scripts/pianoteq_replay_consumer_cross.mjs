@@ -1,6 +1,6 @@
 import {processVoiceConsumerCross} from '../dsp/voice-consumer-cross.mjs';
 
-export function verifyConsumerCross(data,injection,check,setContext=()=>{}){
+export function verifyConsumerCross(data,injection,check,setContext=()=>{},auxiliarySource,auxiliaryMidSource){
  if(data.consumerCross!==true||!data.consumerPost||!injection?.postMode)throw new Error('Same-run post-release and cross observations required');
  const key=r=>`${r.epoch}:${r.counter}`,post=new Map(),cross=new Map();
  for(const r of data.records){
@@ -16,7 +16,9 @@ export function verifyConsumerCross(data,injection,check,setContext=()=>{}){
   setContext({stage:'consumerCross',epoch:source.epoch,age:source.counter});
   const aux=before.auxiliary;
   if(!aux||aux.samples!==64||aux.rows!==aux.values.length||!target.auxiliary||target.auxiliary.rows!==aux.rows||target.auxiliary.samples!==64)throw new Error('Complete same-run auxiliary matrix required');
-  const result=processVoiceConsumerCross(source.channels,aux.values,before.crossControls);
+  const calculatedAuxiliary=auxiliarySource?auxiliarySource.get(key(source)):aux.values;
+  if(!calculatedAuxiliary)throw Error('Missing calculated auxiliary interval');
+  const result=processVoiceConsumerCross(source.channels,calculatedAuxiliary,before.crossControls);
   if(target.channels.length!==3||target.auxiliary.values.length!==result.auxiliary.length)throw new Error('Cross matrix dimensions differ');
   result.channels.forEach((row,i)=>array('consumer-cross:output',Array.from(row),target.channels[i]));
   result.auxiliary.forEach((row,i)=>array('consumer-cross:auxiliary',Array.from(row),target.auxiliary.values[i]));
@@ -26,5 +28,5 @@ export function verifyConsumerCross(data,injection,check,setContext=()=>{}){
   outputs.push({epoch:source.epoch,counter:source.counter,channels:result.channels.map(x=>Array.from(x)),auxiliary:result.auxiliary.map(x=>Array.from(x))});
  }
  if(outputs.length!==post.size)throw new Error('Missing calculated post-release cross source');
- return {outputs,blocks:outputs.length,outputSamples:samples,clearedGroupBlocks,clearedAuxiliaryBlocks,sameRunComputedGroupInputs:true,controlsObserved:true,auxiliarySourceObserved:true,activeProcessorsImplemented:false,fullConsumerTailImplemented:false};
+ return {auxiliaryMidSource,outputs,blocks:outputs.length,outputSamples:samples,clearedGroupBlocks,clearedAuxiliaryBlocks,sameRunComputedGroupInputs:true,controlsObserved:true,auxiliarySourceObserved:!auxiliarySource,activeProcessorsImplemented:false,fullConsumerTailImplemented:false};
 }

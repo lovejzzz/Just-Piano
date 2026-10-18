@@ -33,7 +33,11 @@ export function verifyVoiceRattleAudio(data,cross,controls,check,setContext=()=>
   setContext({stage:r.stage,epoch:r.epoch,age:r.counter});
   if(r.stage==='consumerCross'){
    const source=sources.get(key(r));if(!source||pending.has(r.thread))throw new Error('Unique computed cross source required');
-   pending.set(r.thread,{epoch:r.epoch,counter:r.counter,voice:r.voice,phase:'cross',mid:processVoiceMidGroups(source.channels,r.midControls),config:r.midControls});continue;
+   let auxiliary;
+   if(cross.auxiliarySourceObserved===false){
+    auxiliary=cross.auxiliaryMidSource?.get(key(r));if(!auxiliary)throw Error('Complete freshly computed auxiliary mid source required');
+   }
+   pending.set(r.thread,{epoch:r.epoch,counter:r.counter,voice:r.voice,phase:'cross',mid:processVoiceMidGroups(source.channels,r.midControls),config:r.midControls,auxiliary});continue;
   }
   const p=pending.get(r.thread);
   if(!p||p.epoch!==r.epoch||p.counter!==r.counter||p.voice!==r.voice)throw new Error('Misbound Rattle audio phase');
@@ -67,8 +71,8 @@ export function verifyVoiceRattleAudio(data,cross,controls,check,setContext=()=>
   if(p.phase!=='entry')throw new Error('Rattle return follows entry');
   array('rattle:output',p.output,r.output);state(p.own.state,r.state);
   const result=[p.output,p.mid[1],p.mid[2]];groups('rattle:groups',result,r.channels);
-  outputs.push({epoch:r.epoch,counter:r.counter,channels:result.map(g=>Array.from(g))});p.own.age+=64;pending.delete(r.thread);blocks++;
+  outputs.push({epoch:r.epoch,counter:r.counter,channels:result.map(g=>Array.from(g)),auxiliary:p.auxiliary?.map(g=>Array.from(g))});p.own.age+=64;pending.delete(r.thread);blocks++;
  }
  if(pending.size||states.size!==5||!tables.size||blocks!==cross.blocks||blocks!==controls.size||['audioGain','audioEntry','audioReturn'].some(stage=>data.records.filter(r=>r.stage===stage).length!==blocks))throw new Error('Incomplete same-run Rattle chain');
- return {outputs,blocks,outputSamples:blocks*192,changedOutputSamples,zeroControlTailBlocks,births,computedCrossInput:true,primaryEntryObserved:false,argumentComparisonOnly:true,initialDynamicStateComputed:true,statesCarried:true,coefficientsComputed:true,modelControlsObserved:true,sharedSourceTableObserved:true,finalStereoAudioVerified:false};
+ return {outputs,blocks,outputSamples:blocks*192,changedOutputSamples,zeroControlTailBlocks,births,auxiliaryFromComputedCross:cross.auxiliarySourceObserved===false,computedCrossInput:true,primaryEntryObserved:false,argumentComparisonOnly:true,initialDynamicStateComputed:true,statesCarried:true,coefficientsComputed:true,modelControlsObserved:true,sharedSourceTableObserved:true,finalStereoAudioVerified:false};
 }
