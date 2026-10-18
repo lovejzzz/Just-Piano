@@ -89,6 +89,12 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     sameRunModelGenerationVerified: false, wholeEngineEquivalent: false});
   return {
     metadata,
+    previousMidiEpoch(epoch) {
+      if (!Number.isInteger(epoch) || !events[epoch]) throw new Error('Source MIDI strike epoch required');
+      for (let i = epoch - 1; i >= 0; i--)
+        if (events[i].note === events[epoch].note && events[i].channel === events[epoch].channel) return i;
+      return null;
+    },
     keyStateAtConsumerAge(epoch, age) {
       if (!keyTimeline || !Number.isInteger(epoch) || !Number.isSafeInteger(eventClock.noteOnFrames[epoch]) ||
           !Number.isSafeInteger(age) || age < 0 || age % 64) throw new Error('Supported source MIDI key clock required');
