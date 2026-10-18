@@ -196,7 +196,7 @@ for(const [recordIndex,r] of d.records.entries()){
   else throw new Error('Unknown modal commit caller');
   check('source:setter-input',x,r.argument);check('source:modal-store',x,r.modalX);runtimes.get(r.epoch).updateRattle(x);
  }else if(r.stage==='weights'){
-  const v=voice(r);let input=r.input;const p=predictions.get(r.epoch),seen=modes.get(r.epoch)??new Set();
+  const v=voice(r);let input=r.input,supportHistory,ownHardnessControls,ownBlend;const p=predictions.get(r.epoch),seen=modes.get(r.epoch)??new Set();
   if(preparedSources){
    const source=preparedSources.consume(r,{repeat:p,velocityRuntime:pitchSource?.velocityRuntime});
    for(const name of ['frequency','decay','amplitude','phase'])source[name].forEach((x,i)=>check('prepared-source:'+name,x,r.input.source[name][i]));
@@ -204,9 +204,23 @@ for(const [recordIndex,r] of d.records.entries()){
   }
   if(preparedSources?.metadata.blendControlsFromArchiveAndOwnVelocity){
    const blend=preparedSources.blendControls(r);
+   ownBlend=blend;
    for(const key of ['blendFloor','inputBlend'])check('archive-blend:'+key,blend[key],r.input.controls[key]);
    blend.sharedBlendCoefficients.forEach((value,i)=>check('archive-blend:shared-'+i,value,r.input.controls.sharedBlendCoefficients[i]));
    input={...input,controls:{...input.controls,...blend}};
+  }
+  if(preparedSources?.metadata.hardnessControlsFromArchive){
+   ownHardnessControls=preparedSources.hardnessControls(r);
+   for(const [key,value] of Object.entries(ownHardnessControls))check('archive-hardness-control:'+key,value,r.input.controls[key]);
+   input={...input,controls:{...input.controls,...ownHardnessControls}};
+   supportHistory=preparedSources.supportHistoryControls(r);
+   check('archive-history:randomScale',supportHistory.randomScale,r.randomScale);
+   for(const [key,value] of Object.entries(supportHistory.historyControls))check('archive-history:'+key,value,r.historyControls[key]);
+   for(const key of ['x','y']){
+    if(supportHistory.historyCurve[key].length!==r.historyCurve[key].length)throw new Error('Complete own archive history curve required');
+    supportHistory.historyCurve[key].forEach((value,i)=>check('archive-history:curve-'+key,value,r.historyCurve[key][i]));
+   }
+   for(const key of ['dimension','log_x','special_mode'])check('archive-history:curve-'+key,supportHistory.historyCurve[key],r.historyCurve[key]);
   }
   if(preparedSources?.metadata.eventVelocityComputedFromMidiAndArchive){
    const velocity=preparedSources.velocityForEpoch(r.epoch);
@@ -225,7 +239,13 @@ for(const [recordIndex,r] of d.records.entries()){
   if(p.repeatFlag!==input.controls.repeatFlag)throw new Error('Hardness repeat flag mismatch');
   for(const k of ['age','attenuation'])check('hardness-input:'+k,p[k],input.controls[k]);
   if(r.controls.repeatFlag!==p.repeatFlag)throw new Error('Spectrum repeat flag mismatch');
-  const built=buildReleaseControlledSpectrum({...r,input,repeat:p});const c=built.controls;
+  const extraControls={...r.extraControls},spectrumControls={...r.controls};
+  if(ownBlend){
+   for(const [key,value] of Object.entries({floor:ownBlend.blendFloor,blend:ownBlend.inputBlend})){check('archive-extra:'+key,value,r.extraControls[key]);extraControls[key]=value;}
+   const referenceBlend=Math.max(ownBlend.blendFloor,ownBlend.inputBlend);check('archive-spectrum:referenceBlend',referenceBlend,r.controls.referenceBlend);spectrumControls.referenceBlend=referenceBlend;
+  }
+  if(ownHardnessControls){check('archive-extra:direction',ownHardnessControls.direction,r.extraControls.direction);extraControls.direction=ownHardnessControls.direction;}
+  const built=buildReleaseControlledSpectrum({...r,input,controls:spectrumControls,extraControls,repeat:p});const c=built.controls;
   for(const k of ['slope','baseScale'])check('spectrum-control:'+k,c[k],r.actual[k]);
   if(!Number.isInteger(r.count)||r.count<1||r.count>4096||r.actual.extraTable.length!==r.count||r.expWeights.length!==r.count)throw new Error('Incomplete spectrum targets');
   const extra=built.extraTable,log=built.logSpectrum;
@@ -248,9 +268,9 @@ for(const [recordIndex,r] of d.records.entries()){
    const first=invocation.modes.get(0);if(!first||!seed||first.supported.randomState.some((v,i)=>v!==seed[i]))throw new Error('Uncomputed primary-to-secondary random bridge');
    seed=[...first.supported.randomState];modeSeedBridges++;
   }
-  const supported=buildReleaseControlledSupport({...r,input,randomState:seed,repeat:p,spectrum:built,history,secondFamilyEnabled:r.append.secondIndices.length>0},math);
+  const supported=buildReleaseControlledSupport({...r,input,extraControls,randomState:seed,repeat:p,spectrum:built,history,secondFamilyEnabled:r.append.secondIndices.length>0,...(supportHistory?{randomScale:supportHistory.randomScale,historyCurve:supportHistory.historyCurve,historyControls:supportHistory.historyControls}:{})},math);
   for(const k of ['indices','logAmplitudes','secondIndices','secondLogAmplitudes']){
-   if(supported[k].length!==r.append[k].length)throw new Error('Support vector shape differs');
+   if(supported[k].length!==r.append[k].length)throw new Error('Support vector shape differs: '+JSON.stringify({epoch:r.epoch,mode:input.mode,vector:k,predictedLength:supported[k].length,actualLength:r.append[k].length,checks,mismatches,comparedOutputBlocks,outputSamples,mismatchesByName}));
    supported[k].forEach((v,i)=>{if(k.includes('Indices')||k==='indices'){if(v!==r.append[k][i])throw new Error('Support index differs');}else check('support:'+k,v,r.append[k][i]);});
   }
   historyUpdates+=supported.historyUpdates;randomDraws+=supported.randomDraws;
@@ -525,7 +545,7 @@ for(const [recordIndex,r] of d.records.entries()){
     continuousOutputs.push({epoch:r.epoch,counter:st.renderAge,channels:completed.map(x=>Array.from(x))});comparedOutputBlocks++;outputSamples+=completed.length*64;
     const pruned=updateModalEnergyAndPrune(st.states,st.layout,{threshold:t.threshold,energyLayout:t.energyLayout,keepSlots:(t.keepSlots&1)!==0,freezeLayout:false});
     st.layout=pruned.layout;removals.push(...pruned.removed.map(row=>({epoch:r.epoch,age:r.counter,...row})));
-    if(JSON.stringify(st.layout)!==JSON.stringify(t.groups))throw new Error('Worker post-block pruning layout differs');
+    if(JSON.stringify(st.layout)!==JSON.stringify(t.groups))throw new Error('Worker post-block pruning layout differs: '+JSON.stringify({epoch:r.epoch,age:r.counter,checks,mismatches,comparedOutputBlocks,outputSamples,mismatchesByName}));
     let n=0;
     for(const [g,[start,,,count]] of st.layout.entries())for(let i=0;i<Math.ceil(count/4)*4;i++){
      const lane=start+i,row=st.states.get(lane),a=t.lanes[n++];if(!a||a.lane!==lane||a.group!==g)throw new Error('Incomplete post-block lane targets');comparisonContext={...comparisonContext,lane};
