@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {buildReal16384Coefficients} from '../dsp/real-fft-16384-coefficients.mjs';
+const a = buildReal16384Coefficients();
+assert.equal(a.e.length, 12288);
+assert.equal(a.twiddle.length, 4096);
+assert.equal(a.usedTwiddle.reduce((sum, value) => sum + value, 0), 4062);
+assert.equal(a.e[0], 1);
+assert.equal(Object.is(a.e[4], -0), true);
+assert.ok(a.e.every(Number.isFinite));
+assert.ok(a.twiddle.every(Number.isFinite));
+const b = buildReal16384Coefficients();
+a.e[0] = 123;
+assert.equal(b.e[0], 1);
+console.log('PASS fixed FFT16384 coefficient shape, used mask, signed zero and independent buffers');
