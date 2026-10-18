@@ -15,6 +15,7 @@ import {prepareSoundboardSpectralPrefix} from '../dsp/soundboard-spectral-prefix
 import {soundboardCurveGain} from '../dsp/soundboard-curve-gain.mjs';
 import {computeSoundboardInverseSpectrum} from '../dsp/soundboard-inverse-spectrum.mjs';
 import {reconstructSoundboardTime} from '../dsp/soundboard-time-reconstruction.mjs';
+import {normalizeSoundboardResponses} from '../dsp/soundboard-response-normalization.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -162,7 +163,9 @@ const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMisma
 const spectralPrefixes = [], curveGainComparisons = [];
 const inverseInputComparisons = [], inverseOutputComparisons = [], computedCurveGains = [];
 const inverseResults = [], reconstructionComparisons = [], reconstructionControlMismatches = [];
-const needInverse = Boolean(runtime.fftRecords?.length || runtime.reconstructionRecords?.length);
+const reconstructed = [], shapedComparisons = [], normalizedComparisons = [], normalizationControlMismatches = [];
+const needReconstruction = Boolean(runtime.reconstructionRecords?.length || runtime.shaped?.length);
+const needInverse = Boolean(runtime.fftRecords?.length || needReconstruction);
 if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length || needInverse) {
   if (!leading) throw new Error('Generated leading responses required');
   if (runtime.whiteningRecords?.length && (runtime.whiteningErrors?.length || runtime.whiteningPending ||
@@ -241,12 +244,15 @@ if (needInverse) {
     inverseOutputComparisons.push(compare(predicted.inverseOutput, record.output, channel));
   }
 }
-if (runtime.reconstructionRecords?.length) {
-  if (runtime.reconstructionErrors?.length || runtime.reconstructionPending ||
-      runtime.reconstructionRecords.length !== inverseResults.length) throw new Error('Complete reconstruction capture required');
+if (needReconstruction) {
+  if (runtime.reconstructionRecords?.length && (runtime.reconstructionErrors?.length || runtime.reconstructionPending ||
+      runtime.reconstructionRecords.length !== inverseResults.length)) throw new Error('Complete reconstruction capture required');
   for (let channel = 0; channel < inverseResults.length; channel++) {
-    const prefix = spectralPrefixes[channel], record = runtime.reconstructionRecords[channel];
+    const prefix = spectralPrefixes[channel];
     const predicted = reconstructSoundboardTime(leading.outputs[channel], prefix, inverseResults[channel]);
+    reconstructed.push(predicted.output);
+    if (!runtime.reconstructionRecords?.length) continue;
+    const record = runtime.reconstructionRecords[channel];
     if (record.number !== channel || record.start !== prefix.start || record.end !== prefix.end ||
         record.span !== prefix.end - prefix.start || record.headTailSums?.length !== 4 ||
         predicted.headTailSums.some((v, i) => !Object.is(v, record.headTailSums[i]))) {
@@ -259,14 +265,36 @@ if (runtime.reconstructionRecords?.length) {
     }
   }
 }
+let normalization = null;
+if (runtime.shaped?.length) {
+  if (runtime.shaped.length !== reconstructed.length) throw new Error('Shaped channel count differs');
+  for (let channel = 0; channel < reconstructed.length; channel++) {
+    shapedComparisons.push(compare(reconstructed[channel], runtime.shaped[channel], channel));
+  }
+}
+if (runtime.normalized?.length) {
+  if (runtime.normalized.length !== reconstructed.length || runtime.normalization?.length !== 3 ||
+      runtime.normalizedHeaders?.length !== reconstructed.length) throw new Error('Complete normalization capture required');
+  const [gain, sampleRate, impulseMix] = runtime.normalization;
+  normalization = normalizeSoundboardResponses(reconstructed, {gain, sampleRate, impulseMix});
+  const words = new Uint32Array(Float32Array.from(normalization.normalizations).buffer);
+  for (let channel = 0; channel < normalization.outputs.length; channel++) {
+    normalizedComparisons.push(compare(normalization.outputs[channel], runtime.normalized[channel], channel));
+    if (words[channel] !== runtime.normalizedHeaders[channel].normalizationValueBits) {
+      normalizationControlMismatches.push({channel, actualBits: words[channel],
+        expectedBits: runtime.normalizedHeaders[channel].normalizationValueBits});
+    }
+  }
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons];
-console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !spectralControlMismatches.length && !reconstructionControlMismatches.length,
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons];
+const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length;
+console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
   conversionMode: conversion?.mode ?? null,
@@ -288,14 +316,16 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   inverseInputComparisons, inverseOutputComparisons,
   inverseSpectrumComputed: inverseResults.length > 0,
   reconstructionComparisons, reconstructionControlMismatches,
-  timeReconstructionComputed: reconstructionComparisons.length > 0,
+  timeReconstructionComputed: reconstructed.length > 0,
+  shapedComparisons, normalizedComparisons, normalizationControlMismatches,
+  normalizationComputed: Boolean(normalization), normalizationControlsStillCaptured: Boolean(normalization),
   spectralPrefixComputed: spectralPrefixes.length > 0,
   curveGainControlsFromShapingCapture: curveGainComparisons.length > 0,
   spectralNativeTargetsUsedForPrediction: false,
-  shapingComputed: false,
+  shapingComputed: reconstructed.length > 0,
   firstBlockHashMatchesCapture: runtime.records.every((r) => r.cache?.sha256) ?
     runtime.records.every((r) => r.cache.sha256 === cacheHash) : null,
   nativeBlockCacheUsedForPrediction: false, sourceMatricesAndObservationGroupsStillCaptured: true,
   sameRunCapturedSourceBound: sameRunSource,
   sourceMatricesConstructedFromModel: false, fullIrNodesGenerated: false}, null, 2));
-if (allComparisons.some((c) => c.mismatches) || spectralControlMismatches.length || reconstructionControlMismatches.length) process.exitCode = 1;
+if (allComparisons.some((c) => c.mismatches) || controlMismatchCount) process.exitCode = 1;
