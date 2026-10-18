@@ -3,13 +3,15 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { GlobalDriveCore64, DRIVE_STATIC_OFFSETS, DRIVE_DYNAMIC_OFFSETS } from '../dsp/global-drive-core.mjs';
 
-import { readComputedLevels } from './pianoteq_feedback_artifact.mjs';
+import { readComputedLevels, readComputedKeyInputs } from './pianoteq_feedback_artifact.mjs';
 
 const [input, profileFile, destination, ...flags] = process.argv.slice(2);
 const out = flags.filter(x => x.startsWith('--output-drive='));
+const keyReports = flags.filter(x => x.startsWith('--key-inputs-report=')), keyAudio = flags.filter(x => x.startsWith('--key-inputs-audio='));
+if (keyReports.length > 1 || keyAudio.length > 1 || keyReports.length !== keyAudio.length) throw Error('Paired computed key inputs required');
 const levelReports = flags.filter(x => x.startsWith('--levels-report=')), levelAudio = flags.filter(x => x.startsWith('--levels-audio='));
 if (levelReports.length > 1 || levelAudio.length > 1 || levelReports.length !== levelAudio.length) throw Error('Paired computed levels required');
-if (!input || !profileFile || !destination || out.length > 1 || flags.some(x => !['--output-drive=', '--levels-report=', '--levels-audio='].some(p => x.startsWith(p)) && !['--poison-scratch-target', '--poison-level-target'].includes(x))) throw Error('Usage: full-mono-sidecar static-profile fresh-report [--output-drive=NEW_FILE] [--levels-report=REPORT --levels-audio=AUDIO] [--poison-scratch-target|--poison-level-target]');
+if (!input || !profileFile || !destination || out.length > 1 || flags.some(x => !['--output-drive=', '--levels-report=', '--levels-audio=', '--key-inputs-report=', '--key-inputs-audio='].some(p => x.startsWith(p)) && !['--poison-scratch-target', '--poison-level-target'].includes(x))) throw Error('Usage: full-mono-sidecar static-profile fresh-report [--output-drive=NEW_FILE] [--levels-report=REPORT --levels-audio=AUDIO] [--poison-scratch-target|--poison-level-target]');
 const outputPath = out[0]?.slice('--output-drive='.length);
 for (const file of [destination, outputPath].filter(Boolean)) if (fs.existsSync(file)) throw Error('Fresh drive artifacts required');
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
@@ -20,8 +22,9 @@ if (!data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.errors.
     profile.source.presetSha256 !== launch.fixture.selection.sha256 || profile.source.resourceSha256 !== launch.fixture.resourceSha256 ||
     JSON.stringify(profile.words.map(x => x[0])) !== JSON.stringify(DRIVE_STATIC_OFFSETS)) throw Error('Bound complete primary drive inputs required');
 const root = path.dirname(path.resolve(input));
-const capture = levelReports.length ? JSON.parse(fs.readFileSync(path.join(root, 'runtime.json'))) : null;
-const ownLevels = capture ? readComputedLevels(root, capture, levelReports[0].slice('--levels-report='.length), levelAudio[0].slice('--levels-audio='.length)) : null;
+const capture = levelReports.length || keyReports.length ? JSON.parse(fs.readFileSync(path.join(root, 'runtime.json'))) : null;
+const ownLevels = levelReports.length ? readComputedLevels(root, capture, levelReports[0].slice('--levels-report='.length), levelAudio[0].slice('--levels-audio='.length)) : null;
+const ownKeyInputs = keyReports.length ? readComputedKeyInputs(root, capture, keyReports[0].slice('--key-inputs-report='.length), keyAudio[0].slice('--key-inputs-audio='.length)) : null;
 if (capture && (capture.monoBodyFile !== path.basename(input) || capture.monoBodySha256 !== sha(raw) || data.runStatus.pid !== capture.runStatus.pid)) throw Error('Levels and drive must share exact mono capture');
 if (flags.includes('--poison-level-target') && !ownLevels) throw Error('Level target control requires computed levels');
 const staticWords = new Uint32Array(68); profile.words.forEach(([offset, value]) => { staticWords[offset / 4] = value; });
@@ -50,7 +53,8 @@ for (const [block, item] of data.observations.entries()) {
   }
   const result = model.process64(level, item.driveGain);
   if (item.driveGain !== 0) throw Error('Observed inactive optional filter requires zero gain');
-  const target = row(item.driveScratch), before = row(item.driveInputBefore), after = row(item.bodyInputs[0]);
+  const target = row(item.driveScratch), beforeTarget = row(item.driveInputBefore), before = ownKeyInputs ? ownKeyInputs.rows(block)[0] : beforeTarget, after = row(item.bodyInputs[0]);
+  if (ownKeyInputs) before.forEach((x, i) => check(bits(x), bits(beforeTarget[i]), `${block}.preDriveInput.${i}`));
   const modified = Float32Array.from(before, (x, i) => Math.fround(x + result.output[i]));
   result.output.forEach((x, i) => {
     let actual = bits(target[i]);
@@ -68,6 +72,8 @@ const report = { schema: 1, passed, inputSha256: sha(raw), staticProfileSha256: 
   inputAfterComputed: true, optionalFilterBranchFromBoundProfile: true, nativeLevelAndGainStillObserved: !ownLevels, nativeDriveLevelUsedForPrediction: !ownLevels, nativeDriveGainStillObserved: true,
   computedLevelsReportSha256: ownLevels?.reportSha256 ?? null, computedLevelsAudioSha256: ownLevels?.audioSha256 ?? null,
   computedLevelsSourceSha256: ownLevels?.sourceSha256 ?? null, sameRunComputedLevels: !!ownLevels, levelPoisoned,
+  computedKeyInputsSource: !!ownKeyInputs, nativePreDriveInputUsedForPrediction: !ownKeyInputs,
+  computedKeyInputsReportSha256: ownKeyInputs?.reportSha256 ?? null, computedKeyInputsAudioSha256: ownKeyInputs?.audioSha256 ?? null,
   staticProfileAndWindowStillObserved: true, independentEngineStereoVerified: false };
 fs.writeFileSync(destination, JSON.stringify(report, null, 2), { flag: 'wx' });
 if (outputPath) { if (!passed) throw Error('Only passing drive may export'); fs.writeFileSync(outputPath, drive, { flag: 'wx' }); }

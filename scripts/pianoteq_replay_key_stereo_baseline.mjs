@@ -247,6 +247,8 @@ const report = {schema: 'pianoteq-key-stereo-baseline-v1', passed, checks, misma
   nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
   nativeDriveLevelUsedForPrediction: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
   nativeDriveGainStillObserved: !!ownFeedback?.usesComputedDrive, computedLevelsSource: !!ownFeedback?.usesComputedLevels,
+  computedKeyInputsSource: !!ownFeedback?.usesComputedKeyInputs,
+  nativeModalInputAudioUsedForPrediction: !ownFeedback?.usesComputedKeyInputs, nativeExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
   nativeDriveStaticProfileAndWindowStillObserved: !!ownFeedback?.usesComputedDrive, computedFeedbackReportSha256: ownFeedback?.reportSha256 ?? null,
   computedFeedbackAudioSha256: ownFeedback?.audioSha256 ?? null,
   nativeIrTimeInputsStillObserved: !independentIrPack, nativeIrCopyUsedForPrediction: !packPath,

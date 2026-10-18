@@ -24,6 +24,8 @@ WITH_MONO = os.environ.get('PIANOTEQ_CAPTURE_MONO') == '1'
 if WITH_MONO:
     import pianoteq_capture_mono_body_continuous as mono
     if not WITH_LATTICE: raise ValueError('Body mode requires lattice mode')
+WITH_KEY_MONO = os.environ.get('PIANOTEQ_CAPTURE_KEY_MONO') == '1'
+if WITH_KEY_MONO and not WITH_MONO: raise ValueError('Key mono sources require mono targets')
 WITH_LEVEL = os.environ.get('PIANOTEQ_CAPTURE_LEVEL') == '1'
 if WITH_LEVEL:
     if not WITH_MONO: raise ValueError('Level phases require mono mode')
@@ -57,6 +59,7 @@ def save():
                 downstreamFile='downstream-audio.bin', downstreamBytes=stream.tell() if stream else 0,
                 downstreamSha256=hashlib.sha256((base.ROOT / 'downstream-audio.bin').read_bytes()).hexdigest() if terminal else None,
                 downstreamConfigurations=configurations, irCopyCount=len(ir_inputs), downstreamPending=pending)
+    data.update(keyMonoSourcesObserved=WITH_KEY_MONO)
     data.update(writerInputObserved=WITH_WRITER, writerTransitions=writer_transitions,
                 activeHardwareBreakpoints=sum(h.IsEnabled() for h in base.hooks))
     if WITH_LATTICE:
@@ -123,6 +126,16 @@ def observed(frame, location, internal):
             if pc == 0x10051fad4 and WITH_WRITER:
                 row = key.rows[-1]
                 slot = frame.FindRegister('x1').GetValueAsUnsigned()
+                if WITH_KEY_MONO:
+                    voice = frame.FindRegister('x3').GetValueAsUnsigned()
+                    workspace = frame.FindRegister('x2').GetValueAsUnsigned()
+                    source = mono.rows(frame, workspace + 0xe8)
+                    slot_before = mono.rows(frame, slot + 0x100)
+                    if len(source) != 1 or len(slot_before) != 1: raise ValueError('Complete mono contribution and slot required')
+                    row.update(keyIndex=scalar(frame, voice + 0x64, 'I'),
+                        mixLevels=list(unpack(frame, voice + 0xf0, 'ffff')),
+                        monoContribution=source[0], slotMonoBefore=slot_before[0],
+                        slotMonoReset=scalar(frame, slot + 0x138, 'B'))
                 begin, end = unpack(frame, slot + 0xe8, 'QQ')
                 if end - begin != 96: raise ValueError('Three per-group routing tables required')
                 row.update(globalOrdinal=len(key.global_rows),

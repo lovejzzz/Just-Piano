@@ -285,6 +285,8 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
   nativeDriveLevelUsedForPrediction: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
   nativeDriveGainStillObserved: !!ownFeedback?.usesComputedDrive, computedLevelsSource: !!ownFeedback?.usesComputedLevels,
+  computedKeyInputsSource: !!ownFeedback?.usesComputedKeyInputs,
+  nativeModalInputAudioUsedForPrediction: !ownFeedback?.usesComputedKeyInputs, nativeExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
   nativeDriveStaticProfileAndWindowStillObserved: !!ownFeedback?.usesComputedDrive,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};

@@ -104,6 +104,7 @@ const report = { schema: 1, inputSha256: sha(raw), blocks: capture.observations.
   checks, mismatches, examples, nonzero, computedOutputSha256: sha(Buffer.concat(outputs)),
   poisoned, nativeMonoSourceUsedForPrediction: !ownMono, observedInitialGeometryUsed: true,
   computedMonoReportSha256: ownMono?.reportSha256 ?? null, computedMonoAudioSha256: ownMono?.audioSha256 ?? null,
+  computedKeyInputsSource: !!ownMono?.usesComputedKeyInputs,
   computedLevelsSource: !!ownMono?.usesComputedLevels,
   computedDriveSource: !!ownMono?.usesComputedDrive,
   feedbackRouteVerified: withRoute && mismatches === 0, computedFeedbackSha256: withRoute ? sha(Buffer.concat(feedback)) : null,

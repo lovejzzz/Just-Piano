@@ -2,6 +2,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+export function readComputedKeyInputs(root, capture, reportPath, audioPath) {
+  if (!reportPath || !audioPath || capture.keyMonoSourcesObserved !== true || !capture.monoBodySameRun)
+    throw Error('Paired same-run key mono input proof required');
+  const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+  const source = fs.readFileSync(path.join(root, 'runtime.json'));
+  const raw = fs.readFileSync(reportPath), report = JSON.parse(raw), audio = fs.readFileSync(audioPath);
+  const blocks = capture.globalAudioRecords.length;
+  if (report.captureRuntimeSha256 !== sha(source) || report.monoBodySha256 !== capture.monoBodySha256 ||
+      report.passed !== true || report.mismatches !== 0 || !(report.checks > 0) || report.blocks !== blocks || blocks !== 2320 ||
+      report.nativeModalInputAudioUsedForPrediction !== false || report.nativeSlotHistoryUsedForPrediction !== false ||
+      !capture.runStatus?.terminal || capture.runStatus.exitStatus !== 0 || capture.errors.length ||
+      capture.keyAudioErrors.length || capture.downstreamErrors.length || capture.downstreamPending !== null ||
+      audio.length !== blocks * 768 || sha(audio) !== report.computedKeyInputsSha256)
+    throw Error('Complete bound computed key mono inputs required');
+  return { reportSha256: sha(raw), audioSha256: sha(audio), rows(block) {
+    if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound key input block required');
+    return Array.from({ length: 3 }, (_, row) => Float32Array.from({ length: 64 }, (_, i) => {
+      const value = audio.readFloatLE(block * 768 + (row * 64 + i) * 4);
+      if (!Number.isFinite(value)) throw Error('Finite computed key input required');
+      return value;
+    }));
+  } };
+}
+
 export function readComputedLevels(root, capture, reportPath, audioPath) {
   if (!reportPath || !audioPath || capture.driveLevelSameRun !== true || capture.monoBodySameRun !== true)
     throw Error('Paired same-run key/level proof required');
@@ -58,7 +82,7 @@ export function readComputedFeedback(root, capture, reportPath, audioPath) {
       !/^[a-f0-9]{64}$/.test(report.computedMonoReportSha256) || !/^[a-f0-9]{64}$/.test(report.computedMonoAudioSha256)))
     throw Error('Computed mono provenance required');
   return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedMono: report.nativeMonoSourceUsedForPrediction === false,
-    usesComputedDrive: report.computedDriveSource === true, usesComputedLevels: report.computedLevelsSource === true, rows(block) {
+    usesComputedDrive: report.computedDriveSource === true, usesComputedLevels: report.computedLevelsSource === true, usesComputedKeyInputs: report.computedKeyInputsSource === true, rows(block) {
     if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound feedback block required');
     return Array.from({ length: 3 }, (_, row) => Float32Array.from({ length: 64 }, (_, i) => {
       const value = audio.readFloatLE(block * 768 + (row * 64 + i) * 4);
@@ -82,7 +106,7 @@ export function readComputedMono(root, capture, reportPath, audioPath) {
   data.observations.forEach((item, i) => { if (item.ordinal !== i) throw Error('Exact mono chronology required'); });
   if (report.nativeDriveScratchUsedForPrediction === false && (!/^[a-f0-9]{64}$/.test(report.computedDriveReportSha256) || !/^[a-f0-9]{64}$/.test(report.computedDriveAudioSha256)))
     throw Error('Computed drive provenance required');
-  return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedDrive: report.nativeDriveScratchUsedForPrediction === false, usesComputedLevels: report.computedLevelsSource === true, row(block) {
+  return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedDrive: report.nativeDriveScratchUsedForPrediction === false, usesComputedLevels: report.computedLevelsSource === true, usesComputedKeyInputs: report.computedKeyInputsSource === true, row(block) {
     if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound mono block required');
     return Float32Array.from({ length: 64 }, (_, i) => {
       const value = audio.readFloatLE(block * 256 + i * 4);
@@ -107,7 +131,10 @@ export function readComputedDrive(root, capture, reportPath, audioPath) {
   if (report.sameRunComputedLevels === true && (capture.driveLevelSameRun !== true || report.nativeDriveLevelUsedForPrediction !== false ||
       report.computedLevelsSourceSha256 !== capture.driveLevelSha256 || !/^[a-f0-9]{64}$/.test(report.computedLevelsReportSha256) ||
       !/^[a-f0-9]{64}$/.test(report.computedLevelsAudioSha256))) throw Error('Same-run computed level provenance required');
-  return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedLevels: report.sameRunComputedLevels === true, row(block) {
+  if (report.computedKeyInputsSource === true && (capture.keyMonoSourcesObserved !== true || report.nativePreDriveInputUsedForPrediction !== false ||
+      !/^[a-f0-9]{64}$/.test(report.computedKeyInputsReportSha256) || !/^[a-f0-9]{64}$/.test(report.computedKeyInputsAudioSha256))) throw Error('Computed key input provenance required');
+  return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedLevels: report.sameRunComputedLevels === true,
+    keyInputsReportSha256: report.computedKeyInputsReportSha256, keyInputsAudioSha256: report.computedKeyInputsAudioSha256, row(block) {
     if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound drive block required');
     return Float32Array.from({ length: 64 }, (_, i) => {
       const value = audio.readFloatLE(block * 256 + i * 4);
