@@ -1,4 +1,5 @@
 // Ordinary output kind 3; special binaural/line-output identities are rejected.
+import {nativeScalarSinCos} from './native-scalar-sincos.mjs';
 export function constructSoundboardMicrophoneSources(inputs, model) {
   const output=inputs?.output;
   if(inputs?.schema!==1||output?.version!==3||output.kind!==3||output.matrix_version!==2||
@@ -11,6 +12,8 @@ export function constructSoundboardMicrophoneSources(inputs, model) {
   if(registry.size!==inputs.registry.length)throw new RangeError('Duplicate microphone registry identity');
   const active=output.records.map((r,index)=>({...r,index})).filter(r=>r.type===1);
   if(!active.length)throw new RangeError('Active microphone required');
+  if(new DataView(model.buffer,model.byteOffset,model.byteLength).getUint32(0x98,true)!==0)
+    throw new RangeError('Ordinary family-zero microphone coordinates required');
   const primary=active.map(record=>{
     if(!Array.isArray(record.position)||record.position.length!==3||
       record.position.some(v=>!Number.isFinite(v)||!Number.isFinite(Math.fround(v))))throw new RangeError('Finite microphone position required');
@@ -37,6 +40,15 @@ export function constructSoundboardMicrophoneSources(inputs, model) {
     mixes[index]=entry.mix;
     return {x,y,dimensions:1,mode:0,logX:0};
   });
-  return {amounts,flags,mixes,curves,primary,indices:active.map(r=>r.index),identities:active.map(r=>r.control),
+  const offsets=active.map(record=>{
+    if(!Array.isArray(record.angles)||record.angles.length!==2||
+      record.angles.some(v=>!Number.isFinite(v)||!Number.isFinite(Math.fround(v))))throw new RangeError('Finite microphone angles required');
+    const azimuth=Math.fround((Math.fround(record.angles[0])*Math.PI)/180+Math.PI/2);
+    const elevation=Math.fround((Math.fround(record.angles[1])*Math.PI)/180);
+    const vertical=nativeScalarSinCos(elevation),horizontal=nativeScalarSinCos(azimuth);
+    return Float32Array.of(Math.fround(vertical.cos*horizontal.cos),Math.fround(vertical.cos*horizontal.sin),vertical.sin);
+  });
+  const parents=Uint32Array.from(active,(_,i)=>i);
+  return {amounts,flags,mixes,curves,primary,offsets,parents,indices:active.map(r=>r.index),identities:active.map(r=>r.control),
     nativeRuntimeCurvesUsedForConstruction:false};
 }

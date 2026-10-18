@@ -191,6 +191,7 @@ const constructedMatrices = initialization && constructSoundboardMatrices(initia
 const floats = (d) => new Float32Array(Uint8Array.from(readDescriptor(d)).buffer);
 let constructedReceivers = null;
 let primarySourceComparison = null;
+let relativeReceiverSourceComparison = null;
 const receiverComparisons = [];
 if (runtime.receiverConstructionInputs) {
   const input = runtime.receiverConstructionInputs, target = runtime.observationConstructionInputs;
@@ -204,9 +205,18 @@ if (runtime.receiverConstructionInputs) {
       point.forEach((v,j)=>{words++;wordMismatches+=Number(!Object.is(v,primaryTarget[i][j]));});});
     primarySourceComparison={words,wordMismatches};
   }
+  const offsetTargets=input.offsets.map(floats),parentTarget=new Uint32Array(Uint8Array.from(readDescriptor(input.parents)).buffer);
+  const offsets=microphoneSources?.offsets??offsetTargets,parents=microphoneSources?.parents??parentTarget;
+  if(microphoneSources){
+    if(offsets.length!==offsetTargets.length||parents.length!==parentTarget.length)throw new Error('Independent relative receiver count differs');
+    let words=0,wordMismatches=0;
+    offsets.forEach((point,i)=>{if(offsetTargets[i].length!==3)throw new Error('Relative target point extent differs');
+      point.forEach((v,j)=>{words++;wordMismatches+=Number(!Object.is(v,offsetTargets[i][j]));});});
+    parents.forEach((v,i)=>{words++;wordMismatches+=Number(v!==parentTarget[i]);});
+    relativeReceiverSourceComparison={words,wordMismatches};
+  }
   constructedReceivers = constructSoundboardReceiverGeometry({grid: initialization.grid, shape: constructedMatrices.shape,
-    ...initialization.receiverControls, primary, offsets: input.offsets.map(floats),
-    parents: new Uint32Array(Uint8Array.from(readDescriptor(input.parents)).buffer),
+    ...initialization.receiverControls, primary, offsets,parents,
     offsetScale: modelConfiguration ? modelFloat(0x1c8) : input.offsetScale,
     mirror: modelConfiguration ? modelConfiguration.config[0x1d0] : input.mirror});
   if (constructedReceivers.geometry.length !== target.geometry.length) throw new Error('Final receiver count differs');
@@ -558,8 +568,9 @@ const archiveMismatchCount = archiveSourceComparison ? archiveSourceComparison.w
 const archiveCurveMismatchCount = archiveGlobalCurveComparison ? archiveGlobalCurveComparison.wordMismatches + archiveGlobalCurveComparison.metadataMismatches : 0;
 const microphoneMismatchCount = microphoneSourceComparison ? microphoneSourceComparison.wordMismatches + microphoneSourceComparison.metadataMismatches : 0;
 const primaryMismatchCount=primarySourceComparison?.wordMismatches??0;
+const relativeReceiverMismatchCount=relativeReceiverSourceComparison?.wordMismatches??0;
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length +
-  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount + microphoneMismatchCount + primaryMismatchCount;
+  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount + microphoneMismatchCount + primaryMismatchCount + relativeReceiverMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
   modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
   archiveSourceComparison, archiveSourcesUsed: Boolean(archiveSources),
@@ -567,6 +578,8 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   microphoneSourceComparison, microphoneSpectralSourcesConstructed:Boolean(microphoneSources),
   primarySourceComparison,primaryReceiverPositionsConstructedFromPreset:Boolean(primarySourceComparison),
   nativePrimaryReceiverPositionsUsedForPrediction:Boolean(runtime.receiverConstructionInputs)&&!microphoneSources,
+  relativeReceiverSourceComparison,relativeReceiverConfigurationConstructedFromPreset:Boolean(relativeReceiverSourceComparison),
+  nativeRelativeReceiverConfigurationUsedForPrediction:Boolean(runtime.receiverConstructionInputs)&&!microphoneSources,
   nativeMicrophoneSpectralSourcesUsedForPrediction:spectralPrefixes.length>0&&!microphoneSources,
   nativeGlobalShapingCurveUsedForPrediction: spectralPrefixes.length > 0 && !archiveGlobalCurve,
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: Boolean(modelConfiguration) && !archiveSources,

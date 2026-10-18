@@ -62,7 +62,9 @@ for (let group = 0; group < 3; group++) {
   }
   if(requireMicrophones&&(!replay.microphoneSpectralSourcesConstructed||replay.nativeMicrophoneSpectralSourcesUsedForPrediction!==false||
     !replay.microphoneSourceComparison||replay.microphoneSourceComparison.words<3||!replay.primaryReceiverPositionsConstructedFromPreset||
-    replay.nativePrimaryReceiverPositionsUsedForPrediction!==false||!replay.primarySourceComparison))throw new Error('Independent microphone sources not used');
+    replay.nativePrimaryReceiverPositionsUsedForPrediction!==false||!replay.primarySourceComparison||
+    !replay.relativeReceiverConfigurationConstructedFromPreset||replay.nativeRelativeReceiverConfigurationUsedForPrediction!==false||
+    !replay.relativeReceiverSourceComparison))throw new Error('Independent microphone sources not used');
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -88,6 +90,9 @@ for (let group = 0; group < 3; group++) {
     primarySourceComparison:replay.primarySourceComparison,
     primaryReceiverPositionsConstructedFromPreset:replay.primaryReceiverPositionsConstructedFromPreset,
     nativePrimaryReceiverPositionsUsedForPrediction:replay.nativePrimaryReceiverPositionsUsedForPrediction,
+    relativeReceiverSourceComparison:replay.relativeReceiverSourceComparison,
+    relativeReceiverConfigurationConstructedFromPreset:replay.relativeReceiverConfigurationConstructedFromPreset,
+    nativeRelativeReceiverConfigurationUsedForPrediction:replay.nativeRelativeReceiverConfigurationUsedForPrediction,
     nativeModelAndPresetSourceSnapshotsUsedForPrediction: replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
@@ -113,7 +118,7 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   receiverGeometryComputed: groupReports.every((g) => g.receiverGeometryComputed),
   finalReceiverCoordinatesUsedForPrediction: groupReports.some((g) => g.finalReceiverCoordinatesUsedForPrediction),
   primaryReceiverConfigurationStillCaptured: groupReports.some(g=>g.nativePrimaryReceiverPositionsUsedForPrediction),
-  relativeReceiverConfigurationStillCaptured:true,
+  relativeReceiverConfigurationStillCaptured:groupReports.some(g=>g.nativeRelativeReceiverConfigurationUsedForPrediction),
   modelConfigurationComputed: groupReports.every((g) => g.modelConfigurationComputed),
   modelLidGainsComputed: groupReports.every((g) => g.modelLidGainsComputed),
   dispatcherInitializationConfigurationUsedForPrediction: groupReports.some((g) => g.dispatcherInitializationConfigurationUsedForPrediction),
