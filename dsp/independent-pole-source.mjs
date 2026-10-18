@@ -37,10 +37,11 @@ export function constructIndependentPoles({prepared,coordinateScale,coordinates,
       const {s0,s1,s2,s3}=args.inputs;
       const own=modalImpedance({...impedance,fundamental:s0,reference:s1,frequency:s2,extraDb:s3},nativeImpedanceMath);
       const factor=factors[row],p=own.p*factor,q=own.q*factor;
-      const result=singleComponentPole({p,q,mode,center:poleInputs.center});
+      const singleComponentReference=endpoint.base*f(coordinateScale);
+      const result=singleComponentPole({p,q,mode:singleComponentReference,center:poleInputs.center});
       frequency.push(result.frequency[0]);rawDecay.push(result.decay[0]);
       traces.push({component:endpoint.component,row,mode,center:poleInputs.center,inputs:args.inputs,
-        impedanceP:own.p,impedanceQ:own.q,factor,p,q,frequency:result.frequency[0],rawDecay:result.decay[0]});
+        impedanceP:own.p,impedanceQ:own.q,factor,p,q,singleComponentReference,frequency:result.frequency[0],rawDecay:result.decay[0]});
     }
     return {rows:frequency.length,columns:1,frequency:Float32Array.from(frequency),rawDecay:Float32Array.from(rawDecay)};
   });

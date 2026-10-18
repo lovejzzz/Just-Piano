@@ -1,5 +1,7 @@
 // 6d2f50..6d2fb8; the native N=1 branch does not solve a polynomial or apply
 // the N>=2 frequency absolute-value / decay-floor / sorting operations.
+// The legacy argument name `mode` denotes d2. At 194d5c that register holds
+// the fixed base * coordinateScale reference, not the row coordinate in d4.
 import {nativeComplexReciprocal} from './native-complex-reciprocal.mjs';
 import {fma64} from './native-double-fma.mjs';
 export function singleComponentPole({p,q,mode,center}){

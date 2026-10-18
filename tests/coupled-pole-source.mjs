@@ -25,6 +25,15 @@ assert.deepEqual(constructCoupledPoles({...poleControls,prepared}),poles);
 for(const n of [1,2]){
  const own=constructCoupledPoles({...poleControls,prepared:prepareModalInputs({...prep,offsets:prep.offsets.slice(0,n)})});
  assert.equal(own.columns,n);assert.equal(own.frequency.length,own.rows*n);assert.ok([...own.frequency,...own.rawDecay].every(Number.isFinite));
+ if(n===1){
+  const endpoint=prepareModalInputs({...prep,offsets:prep.offsets.slice(0,n)}).endpoints[0];
+  const reference=endpoint.base*Math.fround(poleControls.coordinateScale);
+  assert.ok(own.traces.length>1&&reference!==own.traces[0].mode);
+  assert.ok(own.traces.every(t=>t.singleComponentReference===reference));
+  assert.equal(own.polynomialControlsRequired,false);
+  assert.deepEqual(constructCoupledPoles({...poleControls,polynomialControls:undefined,
+   prepared:prepareModalInputs({...prep,offsets:prep.offsets.slice(0,n)})}),own);
+ }
  if(n===2)assert.ok(own.traces.every(t=>t.rootAlgorithm==='recovered-native-quadratic-block'));
 }
 assert.equal(constructCoupledPoles({...poleControls,prepared,coordinates:[1,100,2]}).rows,1);

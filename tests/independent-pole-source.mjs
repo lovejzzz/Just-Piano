@@ -9,9 +9,12 @@ const poleControls={coordinateScale:1,coordinates:[1,2,3,4,5],note:69,jitterAmou
  impedance:{strength:1,minimumReference:1,tilt:0,mixture:0,polarRadius:1,phaseCurve:{x:[],y:[0],flags:0,special:0,dimension:1},bandFrequencies:[],bandDb:[]}};
 const poles=constructIndependentPoles({...poleControls,prepared});
 assert.equal(poles.threshold,1980);
-for(const table of poles.componentPoles){assert.deepEqual(Array.from(table.frequency),[440,880,1320,1760]);assert.deepEqual(Array.from(table.rawDecay),[2,4,6,8]);}
+// Flat real impedance: the fixed 440Hz d2 reference gives decay 2*440,
+// independently of the four harmonic coordinates passed separately in d4.
+for(const table of poles.componentPoles){assert.deepEqual(Array.from(table.frequency),[440,880,1320,1760]);assert.deepEqual(Array.from(table.rawDecay),[880,880,880,880]);}
+assert.ok(poles.traces.every(t=>t.singleComponentReference===440));
 const power=constructIndependentPoles({...poleControls,prepared,componentPowerScale:[1,10]});
-assert.equal(power.componentPoles[0].rawDecay[0],2);assert.equal(power.componentPoles[1].rawDecay[0],Math.fround(.2));
+assert.equal(power.componentPoles[0].rawDecay[0],880);assert.equal(power.componentPoles[1].rawDecay[0],88);
 const jitter=constructIndependentPoles({...poleControls,prepared,jitterAmount:.05});
 for(let row=0;row<4;row++)assert.equal(jitter.traces[row].factor,jitter.traces[row+4].factor);
 assert.notEqual(jitter.traces[0].factor,jitter.traces[1].factor);
@@ -28,7 +31,7 @@ const full=prepareEndpointSourceTables({prepared,independentSource});
 assert.equal(full.independentPolesComputed,true);assert.equal(full.independentComponentsConstructed,true);assert.equal(full.independentComponentsAssembled,true);
 assert.equal(full.rows,4);assert.equal(full.columns,2);assert.equal(full.referenceIndex,0);
 assert.deepEqual(Array.from(full.frequency),[440,440,880,880,1320,1320,1760,1760]);
-assert.equal(full.normalizationMaximum,4);assert.equal(full.normalizedAmplitude[0],.5);assert.equal(full.normalizedAmplitude[1],.25);
+assert.equal(full.normalizationMaximum,Math.fround(Math.sqrt(1760)));assert.equal(full.normalizedAmplitude[0],1);assert.equal(full.normalizedAmplitude[1],.5);
 assert.equal(full.completeCacheVerified,false);
 assert.throws(()=>constructIndependentPoles({...poleControls,prepared:prepareModalInputs({...prep,blend:1})}));
 assert.throws(()=>constructIndependentPoles({...poleControls,prepared,coordinates:[0]}));

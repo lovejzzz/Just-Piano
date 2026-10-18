@@ -5,6 +5,7 @@ import {modalImpedance,couplingJitterFactors} from './modal-impedance.mjs';
 import {nativeImpedanceMath} from './native-impedance-math.mjs';
 import {coupledModes} from './modal-poles.mjs';
 import {archiveImpedanceSource} from './archive-impedance-source.mjs';
+import {singleComponentPole} from './single-component-pole.mjs';
 const f=Math.fround;
 export function constructCoupledPoles({prepared,coordinateScale,coordinates,note,
   frequencyGrid,runtimeCurveModes,impedance,jitterAmount,sampleRate,frequencyCutoff,archiveContext,polynomialControls}){
@@ -15,7 +16,7 @@ export function constructCoupledPoles({prepared,coordinateScale,coordinates,note
     !(prepared.fundamental>0)||!(f(coordinateScale)>0)||!(f(sampleRate)>0)||!(f(frequencyCutoff)>0)||
     [...coordinates].some(x=>!Number.isFinite(f(x))||!(f(x)>0)))
     throw new RangeError('Complete coupled N1/N2/N3 endpoint, positive coordinates and explicit finite source controls required');
-  if(!polynomialControls||!['kappa','gamma','decayFloorRatio'].every(k=>Number.isFinite(polynomialControls[k]))||!(polynomialControls.decayFloorRatio>0))
+  if(columns>=2&&(!polynomialControls||!['kappa','gamma','decayFloorRatio'].every(k=>Number.isFinite(polynomialControls[k]))||!(polynomialControls.decayFloorRatio>0)))
     throw new RangeError('Explicit finite polynomial kappa/gamma and positive decay floor ratio required');
   if(archiveContext!==undefined){
     if([frequencyGrid,runtimeCurveModes,impedance].some(x=>x!==undefined))throw new RangeError('Archive impedance source cannot mix with supplied intermediate controls or curves');
@@ -32,16 +33,21 @@ export function constructCoupledPoles({prepared,coordinateScale,coordinates,note
     const {s0,s1,s2,s3}=args.inputs;
     const own=modalImpedance({...impedance,fundamental:s0,reference:s1,frequency:s2,extraDb:s3},nativeImpedanceMath);
     const factor=factors[row],p=own.p*factor,q=own.q*factor;
-    const result=coupledModes(inputs.lambda,{p,q,mode,center:inputs.center,kappa:polynomialControls.kappa,
-      gamma:polynomialControls.gamma,decay_floor_ratio:polynomialControls.decayFloorRatio,rootAlgorithm:'native-qr'});
+    // 194b04..0c saves d2 for 194d5c: base * float32(coordinateScale).
+    // N1 consumes that reference; N>=2 uses the row coordinate in d4 instead.
+    const singleComponentReference=endpoint.base*f(coordinateScale);
+    const result=columns===1
+      ? singleComponentPole({p,q,mode:singleComponentReference,center:inputs.center})
+      : coupledModes(inputs.lambda,{p,q,mode,center:inputs.center,kappa:polynomialControls.kappa,
+        gamma:polynomialControls.gamma,decay_floor_ratio:polynomialControls.decayFloorRatio,rootAlgorithm:'native-qr'});
     frequency.push(...result.frequency);rawDecay.push(...result.decay);
     traces.push({row,mode,center:inputs.center,lambda:inputs.lambda,inputs:args.inputs,impedanceP:own.p,impedanceQ:own.q,
       factor,p,q,coefficients:result.coefficients,roots:result.solver?.roots,rootAlgorithm:result.solver?.algorithm??result.algorithm,
-      frequency:result.frequency,rawDecay:result.decay});
+      frequency:result.frequency,rawDecay:result.decay,...(columns===1?{singleComponentReference}:{})});
   }
   return {rows:traces.length,columns,frequency:Float32Array.from(frequency),rawDecay:Float32Array.from(rawDecay),
     rowLimit:coordinates.length,threshold,traces,impedanceAndPolesComputed:true,impedanceFromArchive:archiveContext!==undefined,
-    nativeCoupledTrajectoryVerified:false};
+    polynomialControlsRequired:columns>=2,nativeCoupledTrajectoryVerified:false};
 }
 export function constructCoupledSource({prepared,poleControls,weights,amplitudeControls,phaseAmount,phaseConstant,componentPoles,components,frequency,rawDecay}){
   if([componentPoles,components,frequency,rawDecay].some(x=>x!==undefined))throw new RangeError('Computed coupled source cannot use supplied pole or component tables');
