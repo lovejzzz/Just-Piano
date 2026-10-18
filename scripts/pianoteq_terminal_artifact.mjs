@@ -61,6 +61,7 @@ export function writeTerminalArtifact(directory, report, reportFile, args) {
   const manifest = {schema: 'pianoteq-calculated-terminal-v1', report: boundFile(reportFile), inputs,
     arguments: args, sourceClosure: closure(), audioSha256: sha(bytes), audioBytes: bytes.length, index,
     fixture: {midiSha256: archive.midiSha256, presetSha256: archive.presetSha256, resourceSha256: archive.resourceSha256},
+    nativeModalClockUsedForPrediction: !report.computedModalClock,
     nativeModalRefreshDecisionUsedForPrediction: !report.computedDispatch,
     nativeTerminalGroupsUsedForPrediction: false, nativeAuxiliaryEntryStillObserved: !report.auxiliarySourceProducer,
     nativeRuntimeControlsAndSchedulingStillObserved: true, independentMidiToStereo: false};
@@ -85,6 +86,7 @@ export function readTerminalArtifact(directory, fixture) {
   if (!report.passed || report.mismatches !== 0 || !report.tailEnvelopes?.passed ||
       report.captureSha256 !== m.inputs[0].sha256 || report.preparedSourceBridge?.historicalPredictionReportRequired !== false)
     throw Error('Passed archive-source producer required');
+  if(m.nativeModalClockUsedForPrediction!==!report.computedModalClock)throw Error('Explicit modal clock prediction boundary required');
   if(m.nativeModalRefreshDecisionUsedForPrediction!==!report.computedDispatch)throw Error('Explicit modal refresh prediction boundary required');
   if(m.nativeAuxiliaryEntryStillObserved!==!report.auxiliarySourceProducer||report.tailEnvelopes.auxiliaryEntryObserved!==m.nativeAuxiliaryEntryStillObserved)throw Error('Explicit auxiliary prediction boundary required');
   const bytes = fs.readFileSync(path.join(directory, 'terminal.bin'));

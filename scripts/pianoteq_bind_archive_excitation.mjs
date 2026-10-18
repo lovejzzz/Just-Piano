@@ -33,7 +33,7 @@ export function bindArchiveExcitation(bytes, captureSha256) {
   }
   const own = createArchiveExcitationProducer({baseFields: source.baseFields, presetFields: source.presetFields,
     runtime: context.runtime, events, eventClock});
-  return {...own, archiveIdentity: {presetSha256: source.presetSha256, resourceSha256: source.resourceSha256,
+  return {...own, renderConfiguration:eventClock?{sampleRate:eventClock.sampleRate,blockSize:eventClock.blockSize}:null, archiveIdentity: {presetSha256: source.presetSha256, resourceSha256: source.resourceSha256,
     bank: source.bank, bankMd5: source.bankMd5, modelIdentity: source.modelIdentity},
     metadata: {...own.metadata, archiveSourceSha256: sha(bytes), contextSha256: sha(contextBytes), captureSha256,
       originalObservationFilesRequiredByProducer: false,
