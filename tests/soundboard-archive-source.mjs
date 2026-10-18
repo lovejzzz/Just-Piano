@@ -24,6 +24,11 @@ assert.deepEqual(component.modelBytes,[0x1cc,0x1cd]);
 assert.equal(m.getBigUint64(0x110,true),0n); // native vector pointer is absent
 assert.equal(own.nativeModelOrPresetSnapshotsUsedForConstruction,false);
 assert.equal(own.fullNativeRecordsRecreated,false);
+assert.deepEqual(Array.from(component.globalCurve.x),[0,1]);
+assert.deepEqual(Array.from(component.globalCurve.y),[0.25,1.25]);
+assert.equal(component.globalCurve.dimensions,1);
+assert.equal(component.globalCurve.mode,0);
+assert.equal(component.globalCurve.logX,0);
 const rejects=change=>{const a=fixture();change(a);assert.throws(()=>constructSoundboardArchiveSources(a),RangeError);};
 rejects(a=>a.baseVersion=90);
 rejects(a=>a.presetFields.push({...a.presetFields[0]}));

@@ -96,6 +96,7 @@ const capturedObservations = runtime.records.map((record) => {
 const archiveSources = archiveInputsPath ? constructSoundboardArchiveSources(JSON.parse(read(archiveInputsPath))) : null;
 if (archiveSources && !runtime.modelConfigurationInputs) throw new Error('Upstream model capture required for archive validation');
 let initialization = null, modelConfiguration = null, modelLidGains = null, archiveSourceComparison = null;
+let archiveGlobalCurve = null;
 let modelConfigurationComparison = null;
 const modelControlMismatches = [];
 let processingControls = runtime.processing, shapingScalars = runtime.shaping?.scalars, normalizationControls = runtime.normalization;
@@ -110,6 +111,7 @@ if (runtime.modelConfigurationInputs) {
   const modelTarget = readDescriptor(input.model), presetTarget = readDescriptor(input.preset);
   const archiveComponent = archiveSources?.components[input.component];
   if (archiveSources && !archiveComponent) throw new Error('Archive component missing');
+  archiveGlobalCurve = archiveComponent?.globalCurve ?? null;
   const model = archiveComponent?.model ?? modelTarget, preset = archiveComponent?.preset ?? presetTarget;
   const bridge = archiveComponent?.bridge ?? floats(input.bridge), propagationModes = archiveComponent?.propagationModes ?? floats(input.propagationModes);
   const lidCurve = archiveComponent?.lidCurve ?? {...input.lidCurve, x: floats(input.lidCurve.x), y: floats(input.lidCurve.y)};
@@ -342,6 +344,7 @@ if (needLeading) {
 }
 const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMismatches = [];
 const spectralPrefixes = [], curveGainComparisons = [];
+let archiveGlobalCurveComparison = null;
 const inverseInputComparisons = [], inverseOutputComparisons = [], computedCurveGains = [];
 const inverseResults = [], reconstructionComparisons = [], reconstructionControlMismatches = [];
 const reconstructed = [], shapedComparisons = [], normalizedComparisons = [], normalizationControlMismatches = [];
@@ -393,8 +396,20 @@ if (runtime.curveGainRecords?.length || needInverse) {
       const width = kind ? 40 : shapingScalars[2];
       const mix = kind ? 0 : blend.readFloatLE(channel * 4);
       const parameters = [width, mix, spectralPrefixes[channel].binSpacing];
-      const predicted = soundboardCurveGain({x: floats(24), y: floats(48), dimensions: header.readUInt32LE(72),
-        mode: header[77], logX: header[76]}, {length: spectralPrefixes[channel].magnitude.length,
+      const targetCurve = {x: floats(24), y: floats(48), dimensions: header.readUInt32LE(72),
+        mode: header[77], logX: header[76]};
+      if (!kind && archiveGlobalCurve && !archiveGlobalCurveComparison) {
+        let words = 0, wordMismatches = 0, metadataMismatches = 0;
+        for (const key of ['x', 'y']) {
+          if (archiveGlobalCurve[key].length !== targetCurve[key].length) throw new Error('Archive global curve extent differs');
+          for (let i = 0; i < targetCurve[key].length; i++) {
+            words++; wordMismatches += Number(!Object.is(archiveGlobalCurve[key][i], targetCurve[key][i]));
+          }
+        }
+        for (const key of ['dimensions', 'mode', 'logX']) metadataMismatches += Number(archiveGlobalCurve[key] !== targetCurve[key]);
+        archiveGlobalCurveComparison = {words, wordMismatches, metadataMismatches};
+      }
+      const predicted = soundboardCurveGain(!kind && archiveGlobalCurve ? archiveGlobalCurve : targetCurve, {length: spectralPrefixes[channel].magnitude.length,
         smoothingWidth: width, mix, binSpacing: parameters[2]});
       computedCurveGains[channel].push(predicted.output);
       if (!runtime.curveGainRecords?.length) continue;
@@ -510,11 +525,14 @@ const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedCompa
 const modelMismatchCount = modelConfigurationComparison ? modelConfigurationComparison.wordMismatches + modelConfigurationComparison.byteMismatches +
   modelConfigurationComparison.bridgeMismatches + modelConfigurationComparison.gainMismatches : 0;
 const archiveMismatchCount = archiveSourceComparison ? archiveSourceComparison.wordMismatches + archiveSourceComparison.byteMismatches + archiveSourceComparison.curveMetadataMismatches : 0;
+const archiveCurveMismatchCount = archiveGlobalCurveComparison ? archiveGlobalCurveComparison.wordMismatches + archiveGlobalCurveComparison.metadataMismatches : 0;
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length +
-  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount;
+  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
   modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
   archiveSourceComparison, archiveSourcesUsed: Boolean(archiveSources),
+  archiveGlobalCurveComparison, globalShapingCurveConstructedFromArchive: Boolean(archiveGlobalCurveComparison),
+  nativeGlobalShapingCurveUsedForPrediction: spectralPrefixes.length > 0 && !archiveGlobalCurve,
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: Boolean(modelConfiguration) && !archiveSources,
   modelLidGainsComputed: Boolean(modelLidGains), dispatcherInitializationConfigurationUsedForPrediction: !modelConfiguration,
   capturedGainVectorUsedForPrediction: !modelLidGains, shapingScalarsComputedFromModel: Boolean(modelConfiguration),

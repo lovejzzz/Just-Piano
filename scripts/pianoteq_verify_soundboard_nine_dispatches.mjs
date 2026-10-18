@@ -54,7 +54,9 @@ for (let group = 0; group < 3; group++) {
     throw new Error('Upstream model/preset configuration not used');
   }
   if (archiveInputsPath && (!replay.archiveSourcesUsed || replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction !== false ||
-      !replay.archiveSourceComparison || replay.archiveSourceComparison.words < 42 || replay.archiveSourceComparison.bytes !== 2)) {
+      !replay.archiveSourceComparison || replay.archiveSourceComparison.words < 42 || replay.archiveSourceComparison.bytes !== 2 ||
+      !replay.globalShapingCurveConstructedFromArchive || replay.nativeGlobalShapingCurveUsedForPrediction !== false ||
+      !replay.archiveGlobalCurveComparison || replay.archiveGlobalCurveComparison.words < 2)) {
     throw new Error('Archive-derived model/preset sources not used');
   }
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
@@ -73,6 +75,9 @@ for (let group = 0; group < 3; group++) {
     capturedGainVectorUsedForPrediction: replay.capturedGainVectorUsedForPrediction,
     modelConfigurationComparison: replay.modelConfigurationComparison,
     archiveSourcesUsed: replay.archiveSourcesUsed, archiveSourceComparison: replay.archiveSourceComparison,
+    archiveGlobalCurveComparison: replay.archiveGlobalCurveComparison,
+    globalShapingCurveConstructedFromArchive: replay.globalShapingCurveConstructedFromArchive,
+    nativeGlobalShapingCurveUsedForPrediction: replay.nativeGlobalShapingCurveUsedForPrediction,
     nativeModelAndPresetSourceSnapshotsUsedForPrediction: replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
@@ -104,6 +109,8 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   capturedGainVectorUsedForPrediction: groupReports.some((g) => g.capturedGainVectorUsedForPrediction),
   modelAndPresetSourceRecordsStillCaptured: true,
   archiveSourcesUsed: groupReports.every((g) => g.archiveSourcesUsed),
+  globalShapingCurveConstructedFromArchive: groupReports.every((g) => g.globalShapingCurveConstructedFromArchive),
+  nativeGlobalShapingCurveUsedForPrediction: groupReports.some((g) => g.nativeGlobalShapingCurveUsedForPrediction),
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: groupReports.some((g) => g.nativeModelAndPresetSourceSnapshotsUsedForPrediction),
   fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
