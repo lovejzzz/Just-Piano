@@ -317,7 +317,7 @@ for(const [recordIndex,r] of d.records.entries()){
   if(lower!==r.positionInputs.cutoffIndex)throw new Error('Position cutoff must come from computed source header');
   const damping=dampingModels.get(r.epoch);
   if(damping){check('initial:archive-position',damping.position,r.positionInputs.position);check('initial:archive-rolloff',damping.rolloff,r.positionInputs.rolloff);}
-  const positionInputs=damping?{...r.positionInputs,position:damping.position,rolloff:damping.rolloff}:r.positionInputs;
+  const positionInputs=damping?{...r.positionInputs,position:damping.position,rolloff:damping.rolloff,...(damping.extraCurve?{extraCurve:damping.extraCurve}:{})}:r.positionInputs;
   const positionWeights=owned.gain===0&&c['0x7e0']===0?new Float32Array(mapped.frequency.length):modalPositionWeights({...positionInputs,referenceFrequency,cutoffIndex:lower,frequency:mapped.frequency,indexStorage:selection.indexStorage,layout:selection.layout});
   const groups=selection.layout.map(([start,,,count],group)=>Array.from({length:Math.ceil(count/4)*4},(_,i)=>{
    const lane=start+i,row=targets.get(lane),state=states.get(lane);
@@ -383,7 +383,7 @@ for(const [recordIndex,r] of d.records.entries()){
   const owned=coeffState.get(r.epoch);check('refresh:release-rate',owned.rate,c['0x7e4']);check('refresh:position-gain',owned.gain,c['0x7b0']);
   const damping=dampingModels.get(r.epoch);
   if(damping){check('refresh:archive-position',damping.position,r.positionInputs.position);check('refresh:archive-rolloff',damping.rolloff,r.positionInputs.rolloff);}
-  const positionInputs=damping?{...r.positionInputs,position:damping.position,rolloff:damping.rolloff}:r.positionInputs;
+  const positionInputs=damping?{...r.positionInputs,position:damping.position,rolloff:damping.rolloff,...(damping.extraCurve?{extraCurve:damping.extraCurve}:{})}:r.positionInputs;
   const positionWarmupDue=!st.positionWeightsReady&&age>=64*st.positionWarmupBlocks;
   const weights=owned.gain===0&&c['0x7e0']===0&&!positionWarmupDue?undefined:modalPositionWeights({...positionInputs,referenceFrequency:st.referenceFrequency,cutoffIndex:st.cutoffIndex,frequency,indexStorage,layout:st.layout});
   if(weights)st.positionWeightsReady=true;

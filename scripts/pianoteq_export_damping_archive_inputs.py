@@ -23,9 +23,9 @@ def main():
     b=models[0]['decoded_values'];a=factory.fxp.inspect(args.preset,True)
     if b['version']!=89 or a['model']['identity'][0]!=args.identity:raise ValueError('Supported matching model/preset required')
     mar=next(r['value'] for r in b['fields'] if r['object_offset']==0x2f10)
-    curves=[r for r in mar['fields'] if r['object_offset'] in [0x1e0,0x230,0x280,0x2d0,0x320]]
+    curves=[r for r in mar['fields'] if r['object_offset'] in [0x1e0,0x230,0x280,0x2d0,0x320,0xcc8]]
     preset=[r for r in a['decoded_tail']['fields'] if r['object_offset'] in [0x1110,0x1118]]
-    if len(curves)!=5 or len(preset)!=2:raise ValueError('Complete damping curves and position fields required')
+    if len(curves)!=6 or len(preset)!=2:raise ValueError('Complete damping curves and position fields required')
     result={'schema':'pianoteq-archive-damping-inputs-v1','note':args.note,'modelIdentity':args.identity,
         'baseFields':[{'object_offset':0x2f10,'value':{'fields':curves}}],'presetFields':preset,
         'positionRuntime':'initialized-primary-no-overrides','presetPath':str(args.preset.resolve()),'presetSha256':a['sha256'],

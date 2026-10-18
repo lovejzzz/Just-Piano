@@ -19,6 +19,9 @@ export function archiveModalDampingControls({baseFields,presetFields,note,positi
  if(!Number.isFinite(override)||!Number.isFinite(f(override))||f(override)<=0)throw new RangeError('Nonpositive position has unverified native loading semantics');
  const position=Math.min(.5,Math.max(f(.001),f(f(override)*at(a,0x1118)))),positionBranch='preset-product-clamped';
  const rolloff=at(b,0x3140),release={gainScale:at(b,0x3190),cubicGainScale:at(b,0x31e0),cubicScale:at(b,0x3230)};
+ const extraCurve=b.get(0x3bd8);
+ if(extraCurve)runtimeCurveModeFromArchiveCurve(extraCurve,'position-extra');
+ if(position<.125&&!extraCurve)throw new RangeError('Archive position extra curve required below .125');
  if(!Number.isFinite(position)||rolloff<=0)throw new RangeError('Supported finite damping position and rolloff required');
- return {position,rolloff,release,positionBranch,controlsFromArchive:true,positionRuntimeExplicit:true,completeVoiceVerified:false};
+ return {position,rolloff,release,...(extraCurve?{extraCurve}:{}),positionBranch,controlsFromArchive:true,positionRuntimeExplicit:true,completeVoiceVerified:false};
 }
