@@ -10,6 +10,7 @@ if (arguments_.length === 6 && arguments_[4] === '--archive-inputs') archiveInpu
 const [nodeDirectory, ...groups] = arguments_;
 const requireMicrophones=archiveInputsPath&&Boolean(JSON.parse(fs.readFileSync(archiveInputsPath)).microphones);
 const requireRuntimeRates=archiveInputsPath&&Boolean(JSON.parse(fs.readFileSync(archiveInputsPath)).runtimeRates);
+const requireProcessing=requireMicrophones&&Boolean(JSON.parse(fs.readFileSync(archiveInputsPath)).modelFeatures);
 if (!nodeDirectory || groups.length !== 3) throw new Error('Usage: private-node-capture source-capture-0 source-capture-1 source-capture-2');
 const script = (name) => fileURLToPath(new URL(name, import.meta.url));
 const run = (name, args) => JSON.parse(execFileSync(process.execPath, [script(name), ...args],
@@ -68,6 +69,9 @@ for (let group = 0; group < 3; group++) {
     !replay.relativeReceiverSourceComparison))throw new Error('Independent microphone sources not used');
   if(requireRuntimeRates&&(!replay.runtimeRatePolicyComputed||replay.nativeResamplingRatesUsedForPrediction!==false))
     throw new Error('Independent runtime rate policy not used');
+  if(requireProcessing&&(!replay.processingConfigurationConstructed||replay.nativeProcessingChannelMetadataUsedForPrediction!==false||
+    replay.nativeBlendConfigurationUsedForPrediction!==false||!replay.processingConfigurationComparison))
+    throw new Error('Independent processing configuration not used');
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -96,6 +100,12 @@ for (let group = 0; group < 3; group++) {
     relativeReceiverSourceComparison:replay.relativeReceiverSourceComparison,
     runtimeRatePolicyComputed:replay.runtimeRatePolicyComputed,runtimeRatePolicy:replay.runtimeRatePolicy,
     nativeResamplingRatesUsedForPrediction:replay.nativeResamplingRatesUsedForPrediction,
+    processingConfigurationConstructed:replay.processingConfigurationConstructed,
+    processingConfigurationComparison:replay.processingConfigurationComparison,
+    nativeProcessingChannelMetadataUsedForPrediction:replay.nativeProcessingChannelMetadataUsedForPrediction,
+    nativeBlendConfigurationUsedForPrediction:replay.nativeBlendConfigurationUsedForPrediction,
+    runtimeRateAndBlendControlsStillCaptured:replay.runtimeRateAndBlendControlsStillCaptured,
+    shapingCurveDataStillCaptured:replay.shapingCurveDataStillCaptured,
     relativeReceiverConfigurationConstructedFromPreset:replay.relativeReceiverConfigurationConstructedFromPreset,
     nativeRelativeReceiverConfigurationUsedForPrediction:replay.nativeRelativeReceiverConfigurationUsedForPrediction,
     nativeModelAndPresetSourceSnapshotsUsedForPrediction: replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction,
@@ -137,7 +147,12 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   runtimeRatePolicyComputed:groupReports.every(g=>g.runtimeRatePolicyComputed),
   nativeResamplingRatesUsedForPrediction:groupReports.some(g=>g.nativeResamplingRatesUsedForPrediction),
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: groupReports.some((g) => g.nativeModelAndPresetSourceSnapshotsUsedForPrediction),
-  fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
+  processingConfigurationConstructed:groupReports.every(g=>g.processingConfigurationConstructed),
+  nativeProcessingChannelMetadataUsedForPrediction:groupReports.some(g=>g.nativeProcessingChannelMetadataUsedForPrediction),
+  nativeBlendConfigurationUsedForPrediction:groupReports.some(g=>g.nativeBlendConfigurationUsedForPrediction),
+  fullDispatcherConfigurationComputed: false,
+  runtimeRateAndBlendControlsStillCaptured:groupReports.some(g=>g.runtimeRateAndBlendControlsStillCaptured),
+  shapingCurveDataStillCaptured:groupReports.some(g=>g.shapingCurveDataStillCaptured),
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
   completeVoiceVerified: false, finalStereoAudioVerified: false}, null, 2));
 if (!passed) process.exitCode = 1;

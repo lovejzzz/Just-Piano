@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 
@@ -28,15 +29,17 @@ def main():
     if len(models)!=1 or not models[0].get('fully_decoded'):raise ValueError('Unique completely decoded base archive required')
     model=models[0];base=model['decoded_values'];fields=[f for f in base['fields'] if f['object_offset']==0x3d68]
     if base['version']!=89 or len(fields)!=1 or fields[0]['kind']!='filters':raise ValueError('Supported soundboard archive field required')
+    features=[f for f in base['fields'] if f['object_offset']==0x3f90]
+    if len(features)!=1 or features[0]['kind']!='u':raise ValueError('Complete model processing policy required')
     preset=factory.fxp.inspect(args.preset,True)
     selected=[f for f in preset['decoded_tail']['fields'] if f['object_offset'] in (0xf98,0x1018,0x1020,0x1024)]
     if len(selected)!=4:raise ValueError('Complete preset scalar source fields required')
     result={'schema':1,'identity':args.identity,'baseVersion':base['version'],'soundboards':fields[0]['value'],
+        'modelFeatures':{'leadingSilencePresetOverride':features[0]['value']},
         'presetFields':selected,'sources':{'resourceSha256':inventory['sha256'],'verifiedMemberCount':inventory['verified_member_md5_count'],
             'bank':args.bank,'bankMd5':member['md5'],'modelArchiveOffset':model['offset'],'modelArchiveBytes':model['bytes'],
             'presetSha256':preset['sha256']},'commercialInputsPrivate':True}
-    with args.output.open('x') as out:json.dump(result,out,indent=2);out.write('\n')
-    args.output.chmod(0o600)
+    with open(args.output,'x',opener=lambda p,f:os.open(p,f,0o600)) as out:json.dump(result,out,indent=2);out.write('\n')
     print(json.dumps({'identity':args.identity,'components':len(result['soundboards']['filters']),
         'resourceSha256':inventory['sha256'],'presetSha256':preset['sha256'],'outputSha256':hashlib.sha256(args.output.read_bytes()).hexdigest()}))
 

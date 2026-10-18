@@ -26,6 +26,7 @@ import {constructSoundboardModelConfig} from '../dsp/soundboard-model-config.mjs
 import {constructSoundboardLidGains} from '../dsp/soundboard-lid-gain.mjs';
 import {constructSoundboardArchiveSources} from '../dsp/soundboard-archive-source.mjs';
 import {constructSoundboardMicrophoneSources} from '../dsp/soundboard-microphone-source.mjs';
+import {constructSoundboardProcessingConfig} from '../dsp/soundboard-processing-config.mjs';
 
 const arguments_ = process.argv.slice(2);
 if (arguments_.length !== 2 && !(arguments_.length === 4 && arguments_[2] === '--archive-inputs')) {
@@ -237,6 +238,22 @@ if (runtime.receiverConstructionInputs) {
   });
 }
 const receiverMismatchCount = receiverComparisons.reduce((sum, c) => sum + c.coordinateMismatches + c.metadataMismatches, 0);
+let constructedProcessing=null,processingConfigurationComparison=null;
+if(archiveData?.modelFeatures&&microphoneSources){
+  if(!constructedReceivers)throw new Error('Constructed receiver geometry required for channel metadata');
+  constructedProcessing=constructSoundboardProcessingConfig({archive:archiveData,microphones:microphoneSources,geometry:constructedReceivers.geometry});
+  const target=runtime.processing;
+  if(target.channels.length!==constructedProcessing.channels.length||target.blend.coefficients.length!==constructedProcessing.blend.coefficients.length)
+    throw new Error('Processing channel/mix target extent differs');
+  let values=0,mismatches=0;
+  constructedProcessing.channels.forEach((actual,i)=>{
+    for(const key of ['identity','kind','flag']){values++;mismatches+=Number(key==='identity'?String(target.channels[i][key])!==actual[key]:target.channels[i][key]!==actual[key]);}
+  });
+  constructedProcessing.blend.coefficients.forEach((value,i)=>{values++;mismatches+=Number(!Object.is(value,target.blend.coefficients[i]));});
+  for(const key of ['mainCount','kernelLength','flags','leadingSilenceMode']){values++;mismatches+=Number(constructedProcessing.blend[key]!==target.blend[key]);}
+  processingConfigurationComparison={values,mismatches};
+  processingControls={...processingControls,channels:constructedProcessing.channels,blend:constructedProcessing.blend};
+}
 let constructedObservations = null;
 if (runtime.observationConstructionInputs) {
   const input = runtime.observationConstructionInputs;
@@ -360,16 +377,16 @@ if (needFilter) {
 }
 if (needBlend) {
   if (!filter) throw new Error('Filtered responses required before blending');
-  blend = blendSoundboardResponses(filter.outputs, runtime.processing.blend);
+  blend = blendSoundboardResponses(filter.outputs, processingControls.blend);
   if (runtime.blended?.length) {
-    if (runtime.blended.length !== runtime.processing?.blend?.mainCount) throw new Error('Blended channel count differs');
+    if (runtime.blended.length !== processingControls.blend.mainCount) throw new Error('Blended channel count differs');
     blendedComparisons = blend.outputs.map((output, channel) =>
       compare(output, runtime.blended[channel], channel));
   }
 }
 if (needLeading) {
   if (!blend || leadingTargets.length !== blend.outputs.length) throw new Error('Leading-silence channel count differs');
-  leading = processSoundboardLeadingSilence(blend.outputs, runtime.processing.blend.leadingSilenceMode);
+  leading = processSoundboardLeadingSilence(blend.outputs, processingControls.blend.leadingSilenceMode);
   leadingComparisons = leading.outputs.map((output, channel) => compare(output, leadingTargets[channel], channel));
 }
 const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMismatches = [];
@@ -576,12 +593,16 @@ const archiveCurveMismatchCount = archiveGlobalCurveComparison ? archiveGlobalCu
 const microphoneMismatchCount = microphoneSourceComparison ? microphoneSourceComparison.wordMismatches + microphoneSourceComparison.metadataMismatches : 0;
 const primaryMismatchCount=primarySourceComparison?.wordMismatches??0;
 const relativeReceiverMismatchCount=relativeReceiverSourceComparison?.wordMismatches??0;
+const processingConfigurationMismatchCount=processingConfigurationComparison?.mismatches??0;
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length +
-  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount + microphoneMismatchCount + primaryMismatchCount + relativeReceiverMismatchCount;
+  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount + microphoneMismatchCount + primaryMismatchCount + relativeReceiverMismatchCount + processingConfigurationMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
   modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
   runtimeRatePolicyComputed:Boolean(modelConfiguration?.outputRateComputed),runtimeRatePolicy:modelConfiguration?.ratePolicy??null,
   nativeResamplingRatesUsedForPrediction:Boolean(resamplingPlan)&&!modelConfiguration?.outputRateComputed,
+  processingConfigurationComparison,processingConfigurationConstructed:Boolean(constructedProcessing),
+  nativeProcessingChannelMetadataUsedForPrediction:Boolean(filter)&&!constructedProcessing,
+  nativeBlendConfigurationUsedForPrediction:Boolean(blend)&&!constructedProcessing,
   archiveSourceComparison, archiveSourcesUsed: Boolean(archiveSources),
   archiveGlobalCurveComparison, globalShapingCurveConstructedFromArchive: Boolean(archiveGlobalCurveComparison),
   microphoneSourceComparison, microphoneSpectralSourcesConstructed:Boolean(microphoneSources),
@@ -595,10 +616,12 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   modelLidGainsComputed: Boolean(modelLidGains), dispatcherInitializationConfigurationUsedForPrediction: !modelConfiguration,
   capturedGainVectorUsedForPrediction: !modelLidGains, shapingScalarsComputedFromModel: Boolean(modelConfiguration),
   normalizationControlsComputedFromModel: Boolean(modelConfiguration), modelAndPresetSourcesStillCaptured: Boolean(modelConfiguration),
-  fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
+  fullDispatcherConfigurationComputed: false,
+  runtimeRateAndBlendControlsStillCaptured:Boolean(resamplingPlan&&!modelConfiguration?.outputRateComputed)||Boolean(blend&&!constructedProcessing),
+  shapingCurveDataStillCaptured:inverseResults.length>0&&(!archiveGlobalCurve||!microphoneSources),
   receiverComparisons, receiverGeometryComputed: Boolean(constructedReceivers),
   finalReceiverCoordinatesUsedForPrediction: !constructedReceivers,
-  primaryReceiverConfigurationStillCaptured: Boolean(constructedReceivers),
+  primaryReceiverConfigurationStillCaptured: Boolean(constructedReceivers)&&!microphoneSources,
   observationComparisons, observationGroupsConstructedFromGeometry: Boolean(constructedObservations),
   sourceObservationGroupsUsedForPrediction: !constructedObservations,
   observationGeometryStillCaptured: Boolean(constructedObservations) && !constructedReceivers,
@@ -619,8 +642,8 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
     feedback: filter.feedback, feed: filter.feed, adjustmentScale: filter.adjustmentScale,
     referenceIndices: filter.referenceIndices},
   filterNativeTargetVerified: filteredComparisons.length > 0 && filteredComparisons.every((c) => !c.mismatches),
-  filterControlsAndChannelMetadataFromCapture: Boolean(filter),
-  blendedComparisons, blendCoefficientsFromCapture: Boolean(blend),
+  filterControlsAndChannelMetadataFromCapture: Boolean(filter)&&(!modelConfiguration||!constructedProcessing),
+  blendedComparisons, blendCoefficientsFromCapture: Boolean(blend)&&!constructedProcessing,
   blendNativeTargetVerified: blendedComparisons.length > 0 && blendedComparisons.every((c) => !c.mismatches),
   leadingComparisons, leadingShifts: leading?.shifts ?? null,
   leadingMode: leading?.mode ?? null,
@@ -634,7 +657,7 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   normalizationComputed: Boolean(normalization), normalizationControlsStillCaptured: Boolean(normalization) && !modelConfiguration,
   resampledComparisons, resamplingComputed: Boolean(resamplingPlan),
   dispatchComparisons, dispatchComputed: Boolean(dispatch), dispatchScale: dispatch?.scale ?? null,
-  resamplingControlsStillCaptured: Boolean(resamplingPlan),
+  resamplingControlsStillCaptured: Boolean(resamplingPlan)&&!modelConfiguration?.outputRateComputed,
   resamplingPlan: resamplingPlan && {numerator: resamplingPlan.numerator, denominator: resamplingPlan.denominator,
     filterLength: resamplingPlan.filterLength, taps: resamplingPlan.taps,
     coefficientsComputed: true, capturedCoefficientsUsedForPrediction: false},
