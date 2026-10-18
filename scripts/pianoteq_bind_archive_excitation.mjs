@@ -28,7 +28,8 @@ export function bindArchiveExcitation(bytes, captureSha256) {
     if (clock.noteOns.length !== events.length || clock.noteOns.some((e, i) =>
       ['ticks', 'channel', 'note', 'velocity'].some(key => e[key] !== events[i][key])))
       throw new Error('Consistent source MIDI event parsers required');
-    eventClock = {sampleRate: clock.sampleRate, blockSize: clock.blockSize, noteOnFrames: clock.noteOns.map(e => e.frame)};
+    eventClock = {sampleRate: clock.sampleRate, blockSize: clock.blockSize,
+      noteOnFrames: clock.noteOns.map(e => e.frame), events: clock.events};
   }
   const own = createArchiveExcitationProducer({baseFields: source.baseFields, presetFields: source.presetFields,
     runtime: context.runtime, events, eventClock});
