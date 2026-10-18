@@ -10,6 +10,7 @@ import {injectWorkspaceFeedback} from '../dsp/workspace-feedback.mjs';
 import {encodeObservedPcm24} from '../dsp/pcm24.mjs';
 import {applyIrPack} from '../dsp/ir-pack.mjs';
 import {buildCabinetBanksFromIrPack} from '../dsp/cabinet-bank-source.mjs';
+import {readComputedFeedback} from './pianoteq_feedback_artifact.mjs';
 
 const [directory, sharedReportPath, reportPath, ...flags] = process.argv.slice(2);
 const option = prefix => {
@@ -18,7 +19,8 @@ const option = prefix => {
   return values.length ? values[0].slice(prefix.length) : null;
 };
 const outputWav = option('--output-wav='), packPath = option('--ir-pack=');
-if (!directory || !sharedReportPath || !reportPath || new Set(flags).size !== flags.length || flags.some(f => !f.startsWith('--output-wav=') && !f.startsWith('--ir-pack=') && !['--poison-cabinet-target', '--poison-ir-target', '--poison-plan-target'].includes(f)))
+const feedbackReportPath = option('--feedback-report='), feedbackAudioPath = option('--feedback-audio=');
+if (!directory || !sharedReportPath || !reportPath || !!feedbackReportPath !== !!feedbackAudioPath || new Set(flags).size !== flags.length || flags.some(f => !['--output-wav=', '--ir-pack=', '--feedback-report=', '--feedback-audio='].some(p => f.startsWith(p)) && !['--poison-cabinet-target', '--poison-ir-target', '--poison-plan-target', '--poison-feedback-target'].includes(f)))
   throw new Error('Usage: private-run shared-report fresh-private-report [--output-wav=private.wav] [--ir-pack=private.json] [--poison-cabinet-target]');
 const root = path.resolve(directory), sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 for (const file of [reportPath, outputWav].filter(Boolean))
@@ -28,11 +30,18 @@ const launch = JSON.parse(fs.readFileSync(path.join(root, 'launch.json')));
 const sharedReport = JSON.parse(fs.readFileSync(sharedReportPath));
 if (!data.keyStereoSameRun || !data.writerInputObserved || data.globalAudioBoundary !== 'post-feedback' ||
     !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.downstreamErrors.length || data.keyAudioErrors.length ||
-    data.errors.length || data.downstreamPending !== null || data.hardwareBreakpoints !== 6 || data.activeHardwareBreakpoints !== 5 ||
+    data.errors.length || data.downstreamPending !== null || data.hardwareBreakpoints !== (data.writerOnlyStereoTarget ? 5 : 6) || data.activeHardwareBreakpoints !== (data.feedbackLatticeSameRun && !data.writerOnlyStereoTarget ? 6 : 5) ||
     sharedReport.captureRuntimeSha256 !== sha(runtimeBytes) || !sharedReport.nativeAccumulationMathVerified || sharedReport.mismatches ||
     sharedReport.computedGlobalAudioBoundary !== 'pre-feedback') throw new Error('Bound complete accepted shared computation and writer capture required');
-if (data.writerTransitions.length !== 1 || data.writerTransitions[0].globalOrdinal !== 0 || data.writerTransitions[0].active !== 5)
+if (data.feedbackLatticeSameRun) {
+  if (data.writerTransitions.length || data.convolutionIrTimeInputsCaptured !== false || data.irCopyCount !== 0 || launch.writerInitiallyDisabled !== false || !packPath)
+    throw new Error('Observed lattice mode requires own IR and writer active from launch');
+} else if (data.writerTransitions.length !== 1 || data.writerTransitions[0].globalOrdinal !== 0 || data.writerTransitions[0].active !== 5)
   throw new Error('Single initial IR-to-writer handoff required');
+const ownFeedback = feedbackReportPath ? readComputedFeedback(root, data, feedbackReportPath, feedbackAudioPath) : null;
+if (ownFeedback && (sharedReport.computedFeedbackAudioSha256 !== ownFeedback.audioSha256 || sharedReport.computedFeedbackReportSha256 !== ownFeedback.reportSha256))
+  throw new Error('Shared and final stereo must consume identical computed feedback');
+if (flags.includes('--poison-feedback-target') && !ownFeedback) throw new Error('Feedback target control requires computed feedback');
 const shared = fs.readFileSync(sharedReport.computedGlobalAudioFile), downstream = fs.readFileSync(path.join(root, data.downstreamFile));
 if (sha(shared) !== sharedReport.computedGlobalAudioSha256 || shared.length !== data.globalAudioRecords.length * 3072 ||
     sha(downstream) !== data.downstreamSha256 || downstream.length !== data.downstreamBytes)
@@ -68,11 +77,12 @@ if (packPath) {
   }
 }
 if (flags.includes('--poison-plan-target') && !ownBankSource) throw new Error('Plan-target control requires independent bank source');
+if (data.feedbackLatticeSameRun && !ownBankSource) throw new Error('Lattice mode requires independently generated cold convolution banks');
 const cabinet = new CabinetConvolution64(head, tail), post = new DryStereoPost64(cfg.post);
 const view = new DataView(new ArrayBuffer(4));
 const bits = value => {if (!Number.isFinite(value)) throw new Error('Finite DSP sample required'); view.setFloat32(0, value, true); return view.getUint32(0, true);};
 const fromBits = value => {view.setUint32(0, value, true); return view.getFloat32(0, true);};
-let checks = 0, mismatches = 0, context = null, poisoned = false;
+let checks = 0, mismatches = 0, context = null, poisoned = false, feedbackPoisoned = false;
 const failures = [], pcmParts = [], stereoBlocks = [];
 const check = (name, predicted, actual) => {
   checks++;
@@ -83,6 +93,7 @@ function compareRows(name, predicted, actual) {
   for (let row = 0; row < predicted.length; row++) for (let i = 0; i < predicted[row].length; i++) {
     let target = bits(actual[row][i]);
     if (name === 'cabinet-source' && flags.includes('--poison-cabinet-target') && !poisoned && actual[row][i] !== 0) {target = (target ^ 1) >>> 0; poisoned = true;}
+    if (name === 'feedback-source' && flags.includes('--poison-feedback-target') && !feedbackPoisoned && actual[row][i] !== 0) {target = (target ^ 1) >>> 0; feedbackPoisoned = true;}
     check(name, bits(predicted[row][i]), target);
   }
 }
@@ -170,7 +181,8 @@ for (const [ordinal, record] of data.downstreamRecords.entries()) {
         if (a.flags.length !== own.flags.length) throw new Error('Complete feedback validity flags required');
         a.flags.forEach((value, j) => check('feedback-validity', own.flags[j], value));
       }
-      const audio = decode(downstream, byteOffset, 5), sum = audio.slice(2);
+      const audio = decode(downstream, byteOffset, 5), sum = ownFeedback ? ownFeedback.rows(nextGlobal) : audio.slice(2);
+      if (ownFeedback) compareRows('feedback-source', sum, audio.slice(2));
       const mix = globalMix.process64(audio.slice(0, 2), sum, record.gateEnabled, record.rowFlags);
       current = {before: mix.output, injected: injectWorkspaceFeedback([source.slice(0, 3), source.slice(3, 6), source.slice(6, 9)], sum, g.feedbackGain),
         auxiliary: source.slice(9), phase: 'feedback'};
@@ -185,6 +197,9 @@ for (const [ordinal, record] of data.downstreamRecords.entries()) {
       const result = cabinet.process64(current.injected.flat, current.before, record.mode);
       current.output = post.process64(result.output, current.auxiliary).output;
       current.phase = 'cabinet'; stage = 'pcm';
+      if (data.writerOnlyStereoTarget) {
+        stereoBlocks.push(current.output); current = null; nextGlobal++; stage = 'feedbackRoute';
+      }
     } else {
       if (!current || current.phase !== 'cabinet' || record.state !== cabinetIdentity) throw new Error('Bound PCM output required');
       for (let i = 0; i < 4; i++) check('output-level', cfg.post.level[i], record.level[i]);
@@ -195,7 +210,7 @@ for (const [ordinal, record] of data.downstreamRecords.entries()) {
   byteOffset += expectedBytes;
 }
 if (byteOffset !== downstream.length || current || stage !== 'feedbackRoute' || nextGlobal !== data.globalAudioRecords.length || !writerCount ||
-    flags.includes('--poison-cabinet-target') && !poisoned) throw new Error('Complete downstream/writer coverage required');
+    flags.includes('--poison-cabinet-target') && !poisoned || flags.includes('--poison-feedback-target') && !feedbackPoisoned) throw new Error('Complete downstream/writer coverage required');
 const pcm = Buffer.concat(pcmParts), nativeWav = fs.readFileSync(path.join(root, 'observed.wav'));
 let nativePcm = null, fmt = null, position = 12;
 if (nativeWav.toString('ascii', 0, 4) !== 'RIFF' || nativeWav.toString('ascii', 8, 12) !== 'WAVE' || nativeWav.readUInt32LE(4) + 8 !== nativeWav.length)
@@ -222,7 +237,11 @@ const report = {schema: 'pianoteq-key-stereo-baseline-v1', passed, checks, misma
   internalBlocks: nextGlobal, internalFrames: nextGlobal * 64, writerSpans: writerCount, exportedFrames: pcm.length / 6,
   internalFramesNotSubmittedToWriter: nextGlobal * 64 - pcm.length / 6, computedPcmSha256: sha(pcm), nativePcmSha256: sha(nativePcm),
   captureRuntimeSha256: sha(runtimeBytes), packSlots, outputWav, sameRunStereoMathVerified: passed,
+  perBlockStereoFloatTargetObserved: !data.writerOnlyStereoTarget,
   nativeVoiceAudioStillObserved: true, nativeRoutingMapsStillObserved: true, nativeFeedbackSourcesStillObserved: true,
+  nativeThreeRowFeedbackUsedForPrediction: !ownFeedback, nativeTwoRowGlobalExcitationStillObserved: true,
+  nativeMonoFeedbackSourceStillObserved: !!ownFeedback, computedFeedbackReportSha256: ownFeedback?.reportSha256 ?? null,
+  computedFeedbackAudioSha256: ownFeedback?.audioSha256 ?? null,
   nativeIrTimeInputsStillObserved: !independentIrPack, nativeIrCopyUsedForPrediction: !packPath,
   nativeIrSourceReplacedByPack: !!packPath, independentIrPack, irPackSource,
   nativeConvolutionPlansStillObserved: !ownBankSource, nativeConvolutionRoutesStillObserved: !ownBankSource,

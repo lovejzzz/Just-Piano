@@ -5,12 +5,14 @@ import crypto from 'node:crypto';
 import {createRoutedDelayCache, routeConstantBlock, readRoutedBlock} from '../dsp/routed-delay-cache.mjs';
 import {midiBlockClock} from '../dsp/midi-block-clock.mjs';
 import {injectWorkspaceFeedback} from '../dsp/workspace-feedback.mjs';
+import {readComputedFeedback} from './pianoteq_feedback_artifact.mjs';
 
 const [directory, reportPath, ...flags] = process.argv.slice(2);
 const orderOptions = flags.filter(f => f.startsWith('--order-from='));
 const outputOptions = flags.filter(f => f.startsWith('--global-output='));
-const experimentFlags = flags.filter(f => !f.startsWith('--global-output='));
-if (!directory || !reportPath || orderOptions.length > 1 || outputOptions.length > 1 || orderOptions.length && flags.includes('--reverse-contributors') || flags.some(f => !['--reverse-contributors', '--poison-global-target', '--poison-head-target', '--poison-clock-target'].includes(f) && !f.startsWith('--order-from=') && !f.startsWith('--global-output=')) || new Set(flags).size !== flags.length)
+const feedbackReportOptions = flags.filter(f => f.startsWith('--feedback-report=')), feedbackAudioOptions = flags.filter(f => f.startsWith('--feedback-audio='));
+const experimentFlags = flags.filter(f => !['--global-output=', '--feedback-report=', '--feedback-audio='].some(p => f.startsWith(p)));
+if (!directory || !reportPath || orderOptions.length > 1 || outputOptions.length > 1 || feedbackReportOptions.length > 1 || feedbackAudioOptions.length > 1 || feedbackReportOptions.length !== feedbackAudioOptions.length || orderOptions.length && flags.includes('--reverse-contributors') || flags.some(f => !['--reverse-contributors', '--poison-global-target', '--poison-head-target', '--poison-clock-target'].includes(f) && !['--order-from=', '--global-output=', '--feedback-report=', '--feedback-audio='].some(p => f.startsWith(p))) || new Set(flags).size !== flags.length)
   throw new Error('Usage: private-run-directory fresh-private-report [--reverse-contributors] [--poison-global-target] [--poison-head-target] [--poison-clock-target]');
 const root = path.resolve(directory), output = path.resolve(reportPath);
 if (fs.existsSync(output) || output.startsWith(path.resolve('.') + path.sep)) throw new Error('Fresh private report required');
@@ -21,7 +23,9 @@ function verifyHelpers(sourceRoot, manifest) {
     'pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_key_mix.py', 'pianoteq_capture_key_routes.py', 'pianoteq_capture_key_stereo_baseline.py',
     'pianoteq_capture_modal_source.py', 'pianoteq_capture_recurrence.py', 'pianoteq_capture_room_mix.py', 'pianoteq_capture_soundboard_responses.py',
     'pianoteq_capture_soundboard_state.py', 'pianoteq_capture_source_amplitude.py', 'pianoteq_capture_worker_bank512.py', 'pianoteq_damper_runtime_capture.py'] :
-    ['pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_soundboard_responses.py', 'pianoteq_damper_runtime_capture.py']).sort();
+    ['pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_soundboard_responses.py', 'pianoteq_damper_runtime_capture.py']);
+  if (manifest.feedbackLatticeSameRun) expected.push('pianoteq_capture_feedback_allpass_continuous.py', 'pianoteq_capture_feedback_allpass_probe.py');
+  expected.sort();
   if (JSON.stringify(Object.keys(manifest.helperSha256).sort()) !== JSON.stringify(expected) ||
       manifest.collectorSha256 !== manifest.helperSha256[isStereo ? 'pianoteq_capture_key_stereo_baseline.py' : 'pianoteq_capture_key_audio_baseline.py']) throw new Error('Complete bound collector closure required');
   for (const [name, digest] of Object.entries(manifest.helperSha256))
@@ -49,7 +53,10 @@ const data = JSON.parse(fs.readFileSync(path.join(root, 'runtime.json')));
 const extended = launch.sites.includes('0x1000ef37c'), withWriter = launch.sites.includes('0x10091baa4');
 const postFeedback = data.globalAudioBoundary === 'post-feedback';
 const expectedSites = postFeedback ? ['0x10051fad4'] : ['0x10051fad4', '0x1006c2ac4'];
-if (extended) expectedSites.push('0x1002a4334', '0x1006c2fd4', '0x1000ef37c', '0x1001bc114');
+if (extended) {
+  expectedSites.push(data.feedbackLatticeSameRun ? '0x1006ca950' : '0x1002a4334', '0x1006c2fd4', '0x1000ef37c');
+  if (!data.writerOnlyStereoTarget) expectedSites.push('0x1001bc114');
+}
 if (withWriter) expectedSites.push('0x10091baa4');
 if (JSON.stringify(launch.sites) !== JSON.stringify(expectedSites) || !data.keyGlobalSameRun ||
     !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.errors.length || data.keyAudioErrors.length ||
@@ -91,6 +98,7 @@ function stream(name, sourceData = data, sourceRoot = root) {
   }));}};
 }
 const key = stream('key'), global = stream('global');
+const ownFeedback = feedbackReportOptions.length ? readComputedFeedback(root, data, feedbackReportOptions[0].slice('--feedback-report='.length), feedbackAudioOptions[0].slice('--feedback-audio='.length)) : null;
 const feedbackByGlobal = new Map();
 if (postFeedback) {
   if (!extended || !withWriter || data.globalSnapshotSite !== '0x1006c2fd4') throw new Error('Explicit post-feedback snapshot identity required');
@@ -103,10 +111,15 @@ if (postFeedback) {
       throw new Error('Complete contiguous downstream byte coverage required');
     if (r.stage === 'feedbackRoute') {
       if (feedbackByGlobal.has(r.globalOrdinal)) throw new Error('Unique feedback source per block required');
-      feedbackByGlobal.set(r.globalOrdinal, Array.from({length: 3}, (_, row) => Float32Array.from({length: 64}, (_, j) => {
+      const target = Array.from({length: 3}, (_, row) => Float32Array.from({length: 64}, (_, j) => {
         const value = raw.readFloatLE(offset + ((row + 2) * 64 + j) * 4);
         if (!Number.isFinite(value)) throw new Error('Finite feedback source required'); return value;
-      })));
+      }));
+      if (ownFeedback) {
+        const own = ownFeedback.rows(r.globalOrdinal);
+        own.forEach((row, k) => row.forEach((x, j) => check('computed-feedback-target', bits(x), bits(target[k][j]))));
+        feedbackByGlobal.set(r.globalOrdinal, own);
+      } else feedbackByGlobal.set(r.globalOrdinal, target);
     }
     offset += size;
   }
@@ -260,7 +273,9 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeKeyAgesUsedForPrediction: false, nativeKeyGlobalOrdinalUsedForPrediction: false,
   nativeCacheHeadsUsedForPrediction: false, nativeContributionOrderStillObserved: true,
   nativeCacheGeometryStillObserved: true,
-  nativeFeedbackAudioStillObserved: postFeedback,
+  nativeFeedbackAudioStillObserved: postFeedback && !ownFeedback,
+  computedFeedbackReportSha256: ownFeedback?.reportSha256 ?? null, computedFeedbackAudioSha256: ownFeedback?.audioSha256 ?? null,
+  nativeMonoFeedbackSourceStillObserved: !!ownFeedback,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};
 fs.writeFileSync(output, JSON.stringify(report, null, 2), {flag: 'wx', mode: 0o600});

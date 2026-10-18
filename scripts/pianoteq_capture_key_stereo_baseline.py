@@ -19,10 +19,17 @@ records, errors, configurations, ir_inputs = [], [], {}, {}
 stream = None
 pending = None
 WITH_WRITER = os.environ.get('PIANOTEQ_CAPTURE_WRITER') == '1'
+WITH_LATTICE = os.environ.get('PIANOTEQ_CAPTURE_LATTICE') == '1'
+if WITH_LATTICE:
+    import pianoteq_capture_feedback_allpass_continuous as lattice
+    if not WITH_WRITER: raise ValueError('Lattice mode requires actual writer observation')
+lattice_rows, lattice_errors = [], []
+lattice_pending = None
 writer_transitions = []
-sites = {0x1002a4334: 'irCopy', 0x1006c2fd4: 'feedbackRoute',
+sites = {(0x1006ca950 if WITH_LATTICE else 0x1002a4334): ('lattice' if WITH_LATTICE else 'irCopy'), 0x1006c2fd4: 'feedbackRoute',
          0x1000ef37c: 'cabinet', 0x1001bc114: 'pcm'}
 if WITH_WRITER: sites[0x10091baa4] = 'writer'
+if WITH_LATTICE: del sites[0x1001bc114]
 
 
 def save():
@@ -37,6 +44,14 @@ def save():
                 downstreamConfigurations=configurations, irCopyCount=len(ir_inputs), downstreamPending=pending)
     data.update(writerInputObserved=WITH_WRITER, writerTransitions=writer_transitions,
                 activeHardwareBreakpoints=sum(h.IsEnabled() for h in base.hooks))
+    if WITH_LATTICE:
+        lattice_bytes = json.dumps({'schema': 1, 'runStatus': base.run_status, 'errors': lattice_errors,
+            'targetMutation': False, 'pending': lattice_pending is not None,
+            'sites': ['0x1006ca950', '0x1006c2fd4'], 'observations': lattice_rows}, separators=(',', ':'), allow_nan=False).encode()
+        (base.ROOT / 'feedback-lattice.json').write_bytes(lattice_bytes)
+        data.update(feedbackLatticeSameRun=True, feedbackLatticeFile='feedback-lattice.json',
+            feedbackLatticeSha256=hashlib.sha256(lattice_bytes).hexdigest(),
+            convolutionIrTimeInputsCaptured=False, writerOnlyStereoTarget=True)
     if WITH_WRITER:
         key.global_stream.flush()
         data.update(keyGlobalSameRun=True, globalAudioBoundary='post-feedback', globalSnapshotSite='0x1006c2fd4',
@@ -68,7 +83,7 @@ def append_audio(frame, row, matrices):
 
 
 def observed(frame, location, internal):
-    global pending
+    global pending, lattice_pending
     try:
         pc = frame.GetPCAddress().GetFileAddress()
         if pc != location.GetAddress().GetFileAddress() or frame.GetThread().GetIndexID() != 1:
@@ -96,6 +111,22 @@ def observed(frame, location, internal):
         if pc not in sites or len(records) >= 16000: raise ValueError('Bounded downstream point required')
         reg = lambda name: frame.FindRegister(name).GetValueAsUnsigned()
         name = sites[pc]
+        if name == 'lattice':
+            if lattice_pending is not None: raise ValueError('Unique feedback lattice call required')
+            owners = [f for f in frame.GetThread() if f.GetPCAddress().GetFileAddress() == 0x1006c2c6c]
+            if len(owners) != 1: raise ValueError('Actual external-feedback global caller required')
+            owner_root = owners[0].FindRegister('x20').GetValueAsUnsigned()
+            state = scalar(frame, owner_root + 0x50, 'Q')
+            source, target, table = reg('x0'), reg('x1'), reg('x2')
+            if scalar(frame, source, 'I') != 1 or target != state + 0x150:
+                raise ValueError('Actual mono-to-three feedback descriptor required')
+            states = [lattice.probe.filter_state(frame, table + 72 * i) for i in range(3)]
+            if lattice_rows:
+                for item in states: del item['ring']
+            lattice_pending = {'globalOrdinal': len(key.global_rows), 'source': lattice.probe.rows(frame, source),
+                'before': states, 'postFilterEnabled': scalar(frame, reg('x21') + 0x18, 'B'),
+                'routeBefore': lattice.route_config(frame, state), '_table': table, '_state': state}
+            return False
         if name == 'irCopy':
             if configurations: return False
             obj, span = reg('x0'), reg('x1')
@@ -118,6 +149,17 @@ def observed(frame, location, internal):
             return False
         if name == 'feedbackRoute':
             state = reg('x21')
+            if WITH_LATTICE:
+                if lattice_pending is None or lattice_pending.pop('_state') != state or lattice_pending['globalOrdinal'] != len(key.global_rows):
+                    raise ValueError('Complete same-block lattice predecessor required')
+                table = lattice_pending.pop('_table')
+                lattice_pending['output'] = lattice.probe.rows(frame, state + 0x150)
+                lattice_pending['wrapperOutput'] = lattice_pending['output']
+                lattice_pending['after'] = [lattice.probe.filter_state(frame, table + 72 * i) for i in range(3)]
+                for item in lattice_pending['after']: del item['ring']
+                lattice_pending['feedbackOutput'] = lattice.probe.rows(frame, state + 0x118)
+                lattice_pending['routeAfter'] = lattice.route_config(frame, state)
+                lattice_rows.append(lattice_pending); lattice_pending = None
             if WITH_WRITER:
                 owners = [f for f in frame.GetThread() if f.GetPCAddress().GetFileAddress() == 0x1001bb9ac]
                 if len(owners) != 1: raise ValueError('Unique actual global-route manager caller required')
@@ -151,10 +193,22 @@ def observed(frame, location, internal):
             identity = hex(state)
             if identity not in configurations:
                 if configurations: raise ValueError('One cabinet configuration required')
-                profile.time_inputs = ir_inputs
-                configurations[identity] = profile.configure(frame, state)
+                if WITH_LATTICE:
+                    config = {}
+                    for kind, offset, size, reader in [('head', 0xb8, 64, profile.head_config), ('tail', 0xc0, 512, profile.tail_config)]:
+                        node = scalar(frame, state + offset, 'Q')
+                        if scalar(frame, node + 0x38, 'Q') != 1 or scalar(frame, node + 0x40, 'I') != 0:
+                            raise ValueError('Cold supported convolution node required')
+                        bank = scalar(frame, node + 8, 'Q')
+                        if scalar(frame, bank + 8, 'Q') != size or scalar(frame, bank + 0x10, 'Q') != 9:
+                            raise ValueError('Complete convolution bank required')
+                        config[kind] = {'node': hex(node), 'bank': hex(bank), 'configuration': reader(frame, bank)}
+                    configurations[identity] = config
+                else:
+                    profile.time_inputs = ir_inputs
+                    configurations[identity] = profile.configure(frame, state)
                 configurations[identity]['post'] = profile.post_profile(frame, manager)
-                if WITH_WRITER:
+                if WITH_WRITER and not WITH_LATTICE:
                     copy_hook, writer_hook = base.hooks[1], base.hooks[-1]
                     copy_hook.SetEnabled(False); writer_hook.SetEnabled(True)
                     writer_transitions.append({'globalOrdinal': ordinal, 'disabled': copy_hook.GetID(),
@@ -163,6 +217,7 @@ def observed(frame, location, internal):
             append_audio(frame, {'stage': name, **pending, 'mode': reg('w4'),
                 'gain': list(unpack(frame, state + 0x30, 'ffff'))},
                 [(reg('x2'), 9), (reg('x3'), 3), (workspace + 0x120, 3)])
+            if WITH_LATTICE: pending = None
         else:
             if pending is None or pending['manager'] != hex(reg('x19')):
                 raise ValueError('Same-call cabinet/PCM owner required')
@@ -195,12 +250,12 @@ def __lldb_init_module(debugger, internal):
             'breakpoint set --hardware --thread-index 1 --address ' + hex(address) + ' --shlib "Pianoteq 9"', result)
         if not result.Succeeded(): raise RuntimeError(result.GetError())
         hook = target.GetBreakpointAtIndex(target.GetNumBreakpoints() - 1)
-        if address == 0x10091baa4: hook.SetEnabled(False)
+        if address == 0x10091baa4 and not WITH_LATTICE: hook.SetEnabled(False)
         hook.SetAutoContinue(True); base.hooks.append(hook)
     for hook in base.hooks:
         error = hook.SetScriptCallbackFunction(__name__ + '.observed')
         if error and error.Fail(): raise RuntimeError(str(error))
-    if len(base.hooks) != 6 or sum(h.IsEnabled() for h in base.hooks) != (5 if WITH_WRITER else 6):
+    if len(base.hooks) != (5 if WITH_LATTICE else 6) or sum(h.IsEnabled() for h in base.hooks) != (5 if WITH_WRITER else 6):
         raise ValueError('Six registered hardware points and bounded writer handoff required')
     base.save = save
     save()
