@@ -1,3 +1,4 @@
+import {readTerminalArtifact} from './pianoteq_terminal_artifact.mjs';
 import fs from 'node:fs';import path from 'node:path';
 import {sha,readPcm} from './pianoteq_order_fixture.mjs';
 export function readComputedVoiceEndpoints(reportPath,audioPath,fixture){
@@ -18,6 +19,9 @@ export function readComputedVoiceEndpoints(reportPath,audioPath,fixture){
  }
  const pcm=readPcm(path.join(root,'observed.wav'));
  if(pcm.length/6!==report.nativePcmFrames||sha(pcm)!==report.nativePcmSha256||sha(bytes)!==data.targetSha256)throw Error('Computed endpoints and complete native source evidence differ');
+ let terminalSource=null;
+ if(report.terminalArtifact){terminalSource=readTerminalArtifact(report.terminalArtifact.directory,fixture);if(terminalSource.manifestSha256!==report.terminalArtifact.manifestSha256||terminalSource.audioSha256!==report.terminalArtifact.audioSha256||report.nativeTerminalAudioStillObserved!==false)throw Error('Bound calculated terminal source required');}
+ else if(report.nativeTerminalAudioStillObserved!==true)throw Error('Explicit native terminal source boundary required');
  const voices=new Map(),ages=new Map();
  report.predictions.forEach((item,i)=>{
   const native=data.outputs[i],input=data.inputs[i],age=ages.get(item.epoch)??0,id=item.epoch+':'+item.counter;
@@ -28,5 +32,5 @@ export function readComputedVoiceEndpoints(reportPath,audioPath,fixture){
   voices.set(id,{spatial:rows.slice(0,12),mono:rows[12]});ages.set(item.epoch,age+64);
  });
  if(ages.size!==5)throw Error('All five source voices required');
- return {voices,reportSha256:sha(reportBytes),audioSha256:sha(bytes),captureRuntimeSha256:report.captureRuntimeSha256};
+ return {voices,nativeTerminalAudioStillObserved:!terminalSource,nativeAuxiliaryEntryStillObserved:!!terminalSource,terminalManifestSha256:terminalSource?.manifestSha256??null,reportSha256:sha(reportBytes),audioSha256:sha(bytes),captureRuntimeSha256:report.captureRuntimeSha256};
 }
