@@ -23,15 +23,15 @@ def main():
     b=models[0]['decoded_values'];a=factory.fxp.inspect(args.preset,True)
     if b['version']!=89 or a['model']['identity'][0]!=args.identity:raise ValueError('Supported matching model/preset required')
     mar=next(r['value'] for r in b['fields'] if r['object_offset']==0x2f10)
-    curves=[r for r in mar['fields'] if r['object_offset'] in [0x1e0,0x230,0x280,0x2d0,0x320,0xcc8]]
+    curves=[r for r in mar['fields'] if r['object_offset'] in [0x1e0,0x230,0x280,0x2d0,0x320,0xcc8,0x9d0]]
     preset=[r for r in a['decoded_tail']['fields'] if r['object_offset'] in [0x1110,0x1118]]
-    if len(curves)!=6 or len(preset)!=2:raise ValueError('Complete damping curves and position fields required')
+    if len(curves)!=7 or len(preset)!=2:raise ValueError('Complete damping curves and position fields required')
     result={'schema':'pianoteq-archive-damping-inputs-v1','note':args.note,'modelIdentity':args.identity,
         'baseFields':[{'object_offset':0x2f10,'value':{'fields':curves}}],'presetFields':preset,
         'positionRuntime':'initialized-primary-no-overrides','presetPath':str(args.preset.resolve()),'presetSha256':a['sha256'],
         'sources':{'resourceSha256':inventory['sha256'],'bank':args.bank,'bankMd5':member['md5']},'commercialInputsPrivate':True}
     with open(args.output,'x',opener=lambda q,f:os.open(q,f,0o600)) as out:json.dump(result,out,indent=2);out.write('\n')
-    print(json.dumps({'identity':args.identity,'note':args.note,'presetSha256':a['sha256'],'curves':len(curves),'presetFields':len(preset)}))
+    print(json.dumps({'identity':args.identity,'note':args.note,'presetSha256':a['sha256'],'sourceFields':len(curves),'presetFields':len(preset)}))
 
 
 if __name__=='__main__':main()

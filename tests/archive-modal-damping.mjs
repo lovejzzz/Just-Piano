@@ -3,9 +3,11 @@ import {archiveModalDampingControls} from '../dsp/archive-modal-damping.mjs';
 const curve=y=>({version:32771,x:[],y:[y]});
 const nested=[{object_offset:0x1e0,value:curve(.75)},{object_offset:0x230,value:curve(4000)},
  {object_offset:0x280,value:curve(6)},{object_offset:0x2d0,value:curve(7)},{object_offset:0x320,value:curve(.2)}];
-const source={baseFields:[{object_offset:0x2f10,value:{fields:nested}},{object_offset:0x3bd8,value:curve(.1)}],presetFields:[{object_offset:0x1110,value:.2},{object_offset:0x1118,value:curve(1.5)}],note:69,positionRuntime:'initialized-primary-no-overrides'};
+const source={baseFields:[{object_offset:0x2f10,value:{fields:nested}},{object_offset:0x3bd8,value:curve(.1)},{object_offset:0x38e0,value:[.1,2,3,4]}],presetFields:[{object_offset:0x1110,value:.2},{object_offset:0x1118,value:curve(1.5)}],note:69,positionRuntime:'initialized-primary-no-overrides'};
 const own=archiveModalDampingControls(source);
 assert.equal(own.position,Math.fround(Math.fround(.2)*Math.fround(1.5)));assert.equal(own.rolloff,4000);
+assert.deepEqual(own.polynomialTail,[Math.fround(.1),2,3,4]);
+assert.throws(()=>archiveModalDampingControls({...source,baseFields:[...source.baseFields.slice(0,-1),{object_offset:0x38e0,value:[1,2,3]}]}),/Four finite/);
 assert.deepEqual(own.release,{gainScale:6,cubicGainScale:7,cubicScale:Math.fround(.2)});
 const position=x=>archiveModalDampingControls({...source,presetFields:[{object_offset:0x1110,value:x},source.presetFields[1]]});
 assert.equal(position(.0001).extraCurve.y[0],.1);
