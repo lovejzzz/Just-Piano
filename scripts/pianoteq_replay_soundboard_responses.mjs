@@ -347,7 +347,7 @@ if (needInverse) {
     inverseResults.push(predicted);
     if (!runtime.fftRecords?.length) continue;
     const record = runtime.fftRecords[channel];
-    if (record.number !== channel || record.direction !== 1 || record.length !== 16384 ||
+    if (record.number !== channel || record.direction !== 1 || record.length !== spectralPrefixes[channel].length ||
         record.returnAddress !== 0x10069c834) throw new Error('Inverse FFT profile differs');
     inverseInputComparisons.push(compare(predicted.inverseInput, record.input, channel));
     inverseOutputComparisons.push(compare(predicted.inverseOutput, record.output, channel));

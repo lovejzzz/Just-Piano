@@ -8,6 +8,8 @@ import traceback
 import pianoteq_capture_soundboard_responses as base
 
 ROOT = Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
+FFT_LENGTH = int(os.environ.get('PIANOTEQ_FFT_LENGTH', '16384'))
+if FFT_LENGTH not in (16384, 32768): raise ValueError('Supported inspected FFT length required')
 records = []
 pending = None
 errors = []
@@ -35,7 +37,7 @@ def entry(frame, breakpoint, _):
         setup = frame.FindRegister('x0').GetValueAsUnsigned()
         header = base.memory(frame, setup, 0x88)
         length, lanes = struct.unpack_from('<2I', header)
-        if length != 16384 or lanes != length // 8:
+        if length != FFT_LENGTH or lanes != length // 8:
             raise RuntimeError(f'Unexpected FFT setup {length}/{lanes}')
         input_pointer = frame.FindRegister('x1').GetValueAsUnsigned()
         output_pointer = frame.FindRegister('x2').GetValueAsUnsigned()

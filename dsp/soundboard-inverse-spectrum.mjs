@@ -1,16 +1,17 @@
 import {nativeScalarPowf} from './native-scalar-pow.mjs';
 import {inverseReal16384} from './real-fft-16384.mjs';
+import {inverseReal32768} from './real-fft-32768.mjs';
 const f = Math.fround;
 
 export function computeSoundboardInverseSpectrum(prefix, {power, globalGain, channelGain}) {
   const n = prefix.length, bins = n / 2 + 1;
-  if (n !== 16384 || !(prefix.packed instanceof Float32Array) || prefix.packed.length !== n + 2 ||
+  if (![16384, 32768].includes(n) || !(prefix.packed instanceof Float32Array) || prefix.packed.length !== n + 2 ||
       !(prefix.magnitude instanceof Float32Array) || prefix.magnitude.length !== bins ||
       !(prefix.whitening?.output instanceof Float32Array) || prefix.whitening.output.length !== bins ||
       ![globalGain, channelGain].every((v) => v instanceof Float32Array && v.length === bins) ||
       !Number.isFinite(power) || !Number.isFinite(f(power)) ||
       [prefix.packed, prefix.magnitude, prefix.whitening.output, globalGain, channelGain].some((v) => v.some((x) => !Number.isFinite(x)))) {
-    throw new RangeError('Finite FFT16384 spectral prefix and curve gains required');
+    throw new RangeError('Finite FFT16384 or FFT32768 spectral prefix and curve gains required');
   }
   const packed = prefix.packed.slice();
   const magnitude = new Float32Array(bins);
@@ -38,7 +39,7 @@ export function computeSoundboardInverseSpectrum(prefix, {power, globalGain, cha
   }
   packed[1] = f(packed[n] + packed[n]);
   const inverseInput = Float32Array.from(packed.subarray(0, n), (v) => f(v * 0.5));
-  const inverseOutput = inverseReal16384(inverseInput);
+  const inverseOutput = (n === 16384 ? inverseReal16384 : inverseReal32768)(inverseInput);
   if (inverseOutput.some((v) => !Number.isFinite(v))) throw new RangeError('Non-finite inverse output');
   return {inverseInput, inverseOutput, floor, peak};
 }
