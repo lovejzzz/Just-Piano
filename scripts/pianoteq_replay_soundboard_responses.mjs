@@ -19,6 +19,7 @@ import {normalizeSoundboardResponses} from '../dsp/soundboard-response-normaliza
 import {createSoundboardResamplingPlan, resampleSoundboardResponse} from '../dsp/soundboard-resampling.mjs';
 import {finalizeSoundboardDispatch} from '../dsp/soundboard-dispatch-output.mjs';
 import {initializeSoundboardFromConfig} from '../dsp/soundboard-initialization.mjs';
+import {constructSoundboardMatrices} from '../dsp/soundboard-matrix-construction.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -104,9 +105,33 @@ if (runtime.initializationInputs) {
   }
 }
 const controls = soundboardScalarControls(propagationControls);
-const result = computeSoundboardResponses({propagation: {
+const capturedMatrices = {
   matrixA: normalizeSoundboardRows(JSON.parse(read(source.matrixA)).rows, stateSize),
   matrixC: normalizeSoundboardRows(JSON.parse(read(source.matrixC)).rows, stateSize),
+};
+const constructedMatrices = initialization && constructSoundboardMatrices(initialization.grid, initialization.matrixControls);
+const matrixComparisons = constructedMatrices ? ['matrixA', 'matrixC'].map((name) => {
+  const rows = constructedMatrices[name], target = capturedMatrices[name];
+  let structureMismatches = 0, coefficientMismatches = 0, compared = 0;
+  const words = [rows.length], view = new DataView(new ArrayBuffer(4));
+  rows.forEach((row, i) => {
+    if (row.length !== target[i].length) structureMismatches++;
+    words.push(row.length);
+    row.forEach((entry, j) => {
+      const oracle = target[i][j];
+      view.setFloat32(0, entry.value, true);
+      words.push(entry.index, view.getUint32(0, true)); compared++;
+      if (!oracle || oracle.index !== entry.index) structureMismatches++;
+      if (oracle && !Object.is(entry.value, oracle.value)) coefficientMismatches++;
+    });
+  });
+  return {name, compared, structureMismatches, coefficientMismatches,
+    predictedSha256: crypto.createHash('sha256').update(new Uint8Array(Uint32Array.from(words).buffer)).digest('hex')};
+}) : [];
+const matrixMismatchCount = matrixComparisons.reduce((sum, m) => sum + m.structureMismatches + m.coefficientMismatches, 0);
+const result = computeSoundboardResponses({propagation: {
+  matrixA: (constructedMatrices ?? capturedMatrices).matrixA,
+  matrixC: (constructedMatrices ?? capturedMatrices).matrixC,
   controls, weights: soundboardIrWeights(controls.steps),
   excitation, excitationIndex,
   captureBlockStarts: [0],
@@ -351,7 +376,10 @@ const sameRunSource = Boolean(provenance &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
 const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons, ...dispatchComparisons];
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length + initializationControlMismatches.length;
-console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount,
+console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount,
+  matrixComparisons, sourceMatricesConstructedFromConfiguration: Boolean(constructedMatrices),
+  sourceMatricesUsedForPrediction: !constructedMatrices,
+  matrixSolverIterations: constructedMatrices?.solve.iterations ?? null,
   initializationControlMismatches, initializationComputed: Boolean(initialization),
   initializationConfigurationStillCaptured: Boolean(initialization),
   sourceExcitationUsedForPrediction: !initialization, sourceGridScalarsUsedForPrediction: !initialization,
@@ -391,7 +419,7 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   shapingComputed: reconstructed.length > 0,
   firstBlockHashMatchesCapture: runtime.records.every((r) => r.cache?.sha256) ?
     runtime.records.every((r) => r.cache.sha256 === cacheHash) : null,
-  nativeBlockCacheUsedForPrediction: false, sourceMatricesAndObservationGroupsStillCaptured: true,
+  nativeBlockCacheUsedForPrediction: false, observationGroupsStillCaptured: true,
   sameRunCapturedSourceBound: sameRunSource,
   sourceMatricesConstructedFromModel: false, fullIrNodesGenerated: false}, null, 2));
-if (allComparisons.some((c) => c.mismatches) || controlMismatchCount) process.exitCode = 1;
+if (allComparisons.some((c) => c.mismatches) || controlMismatchCount || matrixMismatchCount) process.exitCode = 1;
