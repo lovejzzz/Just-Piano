@@ -1,21 +1,34 @@
 // node SCRIPT initial.json final.json coefficients.json recurrence.json report.json
 //   [--tail-capture tail.json]
 //   [--pitch-report computed-pitch.json]
+//   [--pitch-controls fixed-producer-controls.json]
 //   [--source-mapping-report computed-source-mapping.json]
 import fs from 'node:fs';
 import { initialModalGroup, initialModalRadii, dampInitialQ, modalAngleGroup, projectModalHistory } from '../dsp/modal-initial.mjs';
 import { recurrenceCoefficients } from '../dsp/modal-coefficients.mjs';
 import { renderSixteen, renderEight } from '../dsp/modal-kernel.mjs';
+import {DynamicPitchTrajectory} from '../dsp/dynamic-pitch.mjs';
 const [initialPath, finalPath, coefficientPath, recurrencePath, reportPath, ...options] = process.argv.slice(2);
 const read = path => JSON.parse(fs.readFileSync(path, 'utf8'));
-let tailCapturePath, pitchReportPath, sourceMappingPath;
+let tailCapturePath, pitchReportPath, sourceMappingPath, pitchControlsPath;
 for (let i = 0; i < options.length; i++) {
   if (options[i] === '--tail-capture') tailCapturePath = options[++i];
   else if (options[i] === '--pitch-report') pitchReportPath = options[++i];
   else if (options[i] === '--source-mapping-report') sourceMappingPath = options[++i];
-  else throw new Error('Expected --tail-capture, --pitch-report or --source-mapping-report');
+  else if (options[i] === '--pitch-controls') {
+    if(pitchControlsPath||!options[i+1]||options[i+1].startsWith('--'))throw new Error('One explicit pitch-controls path required');
+    pitchControlsPath=options[++i];
+  }
+  else throw new Error('Expected --tail-capture, --pitch-report, --pitch-controls or --source-mapping-report');
 }
 const calculatedPitches = new Map();
+if(pitchControlsPath){
+  if(pitchReportPath)throw new Error('Choose pitch controls or historical pitch report');
+  const source=read(pitchControlsPath);
+  if(source.schema!=='pianoteq-fixed-pitch-controls-v1'||!source.controls)throw new Error('Explicit fixed pitch controls required');
+  const trajectory=new DynamicPitchTrajectory(source.controls);
+  for(let i=0;i<32;i++){const row=trajectory.next(64);calculatedPitches.set(row.counter,row.pitch);}
+}
 if (pitchReportPath) {
   const report = read(pitchReportPath);
   if (report.schema !== 'pianoteq-dynamic-pitch-pass21' || report.passed !== true || report.mismatches !== 0 ||
@@ -29,7 +42,7 @@ if (pitchReportPath) {
   if (calculatedPitches.size !== 32 || !calculatedPitches.has(0)) throw new Error('Incomplete held pitch trajectory');
 }
 const calculatedPitchAt = (age, fallback) => {
-  if (!pitchReportPath) return fallback;
+  if (!pitchReportPath&&!pitchControlsPath) return fallback;
   if (!calculatedPitches.has(age)) throw new Error(`Computed pitch missing age ${age}`);
   return calculatedPitches.get(age);
 };
@@ -296,7 +309,9 @@ const report = { schema: 'pianoteq-modal-initial-pass20', passed: checks.every(x
   completeFirstGroupBufferSamples: completeGroupBuffers * 64,
   tailsVerified: Boolean(completeGroupBuffers), continuousBlocks, continuousCompleteBufferSamples: continuousBlocks * layout.length * 64,
   frequencyRefreshCount, continuousControlInputsStillCaptured: true,
-  frequencyTrajectoryComputed: Boolean(pitchReportPath),
+  frequencyTrajectoryComputed: Boolean(pitchReportPath||pitchControlsPath),
+  frequencyTrajectoryComputedFromFixedControls: Boolean(pitchControlsPath),
+  fixedPitchProducerControlsAndMeanDecayExplicit: Boolean(pitchControlsPath),
   continuousStateResetFromCapture: false, predictedGroupBuffers, wholeVoiceAudioVerified: false };
 if (reportPath) fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify({ ...report, checks: undefined, predictedGroupBuffers: undefined }, null, 2));

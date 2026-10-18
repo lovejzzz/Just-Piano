@@ -2,7 +2,7 @@
 // history projection that consumes it. Native exp2f for nonzero cents remains
 // an explicit dependency; scalar expf has a browser implementation.
 import { fma32 } from './modal-kernel.mjs';
-import { nativeScalarExp } from './native-scalar-exp.mjs';
+import { nativeScalarExp, nativeScalarExp2f } from './native-scalar-exp.mjs';
 const f = Math.fround;
 
 export function dynamicPitchStep(input, state = { disabled: false }, math = {}) {
@@ -45,4 +45,25 @@ export function dynamicPitchStep(input, state = { disabled: false }, math = {}) 
   const factor = f(offset + 1);
   if (factor !== 1) { result.pitch = f(basePitch * factor); result.applied = true; }
   return result;
+}
+
+// Own age and latch across blocks. The fixed producer controls are explicit;
+// no target trajectory or per-block capture is consumed by this runtime.
+export class DynamicPitchTrajectory {
+  constructor(controls) {
+    this.controls = Object.freeze({...controls});
+    this.counter = 0;
+    this.disabled = false;
+    dynamicPitchStep({...this.controls, sampleAge: 0}, {disabled: false}, {exp2f: nativeScalarExp2f});
+  }
+  next(samples) {
+    if (!Number.isInteger(samples) || samples <= 0 || this.counter + samples > 0xffffffff)
+      throw new RangeError('Positive nonwrapping pitch block size required');
+    const result = dynamicPitchStep({...this.controls, sampleAge: this.counter},
+      {disabled: this.disabled}, {exp2f: nativeScalarExp2f});
+    const counter = this.counter;
+    this.disabled = result.disabled;
+    this.counter += samples;
+    return {counter, ...result};
+  }
 }
