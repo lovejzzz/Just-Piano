@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import {computeSoundboardInverseSpectrum} from '../dsp/soundboard-inverse-spectrum.mjs';
+const bins = 8193, packed = new Float32Array(16386);
+packed[0] = 4; packed[2] = 6; packed[3] = -8; packed[16384] = 2;
+const magnitude = new Float32Array(bins).fill(1);
+const ones = new Float32Array(bins).fill(1);
+const prefix = {length: 16384, packed, magnitude, whitening: {output: ones}};
+const original = packed.slice();
+const controls = {power: 1, globalGain: ones, channelGain: ones};
+const result = computeSoundboardInverseSpectrum(prefix, controls);
+assert.deepEqual(packed, original);
+assert.equal(result.inverseInput[0], 0);
+assert.equal(result.inverseInput[1], 2); // Native Nyquist restoration cancels the half scale.
+assert.equal(result.inverseInput[2], 3); assert.equal(result.inverseInput[3], -4);
+assert.equal(result.peak, 1); assert.equal(result.floor, Math.fround(1e-6));
+assert.equal(result.inverseOutput.length, 16384);
+assert.ok(result.inverseOutput.every(Number.isFinite));
+const doubled = computeSoundboardInverseSpectrum(prefix, {...controls, globalGain: new Float32Array(bins).fill(2)});
+assert.equal(doubled.inverseInput[2], 6);
+assert.throws(() => computeSoundboardInverseSpectrum({...prefix, length: 1024}, controls), /FFT16384/);
+assert.throws(() => computeSoundboardInverseSpectrum(prefix, {...controls, power: NaN}), /Finite/);
+assert.throws(() => computeSoundboardInverseSpectrum(prefix, {...controls, globalGain: Float32Array.of(1)}), /Finite/);
+console.log('PASS spectral gain order, DC removal, Nyquist restoration, immutability and inverse guards');

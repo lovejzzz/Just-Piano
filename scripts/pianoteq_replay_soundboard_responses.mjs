@@ -13,6 +13,7 @@ import {blendSoundboardResponses} from '../dsp/soundboard-response-blend.mjs';
 import {processSoundboardLeadingSilence} from '../dsp/soundboard-leading-silence.mjs';
 import {prepareSoundboardSpectralPrefix} from '../dsp/soundboard-spectral-prefix.mjs';
 import {soundboardCurveGain} from '../dsp/soundboard-curve-gain.mjs';
+import {computeSoundboardInverseSpectrum} from '../dsp/soundboard-inverse-spectrum.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -158,7 +159,8 @@ if (needLeading) {
 }
 const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMismatches = [];
 const spectralPrefixes = [], curveGainComparisons = [];
-if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length) {
+const inverseInputComparisons = [], inverseOutputComparisons = [], computedCurveGains = [];
+if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length || runtime.fftRecords?.length) {
   if (!leading) throw new Error('Generated leading responses required');
   if (runtime.whiteningRecords?.length && (runtime.whiteningErrors?.length || runtime.whiteningPending ||
       runtime.whiteningRecords.length !== leading.outputs.length)) throw new Error('Complete whitening chain required');
@@ -185,12 +187,13 @@ if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length) {
     whiteningComparisons.push(compare(prefix.whitening.output, target.output, channel));
   }
 }
-if (runtime.curveGainRecords?.length) {
-  if (runtime.curveGainErrors?.length || runtime.curveGainPending ||
-      runtime.curveGainRecords.length !== spectralPrefixes.length * 2) throw new Error('Complete curve gain chain required');
+if (runtime.curveGainRecords?.length || runtime.fftRecords?.length) {
+  if (runtime.curveGainRecords?.length && (runtime.curveGainErrors?.length || runtime.curveGainPending ||
+      runtime.curveGainRecords.length !== spectralPrefixes.length * 2)) throw new Error('Complete curve gain chain required');
   const blend = readDescriptor(runtime.shaping.blendVector);
   if (blend.length !== spectralPrefixes.length * 4) throw new Error('Curve mix vector differs');
   for (let channel = 0; channel < spectralPrefixes.length; channel++) {
+    computedCurveGains[channel] = [];
     for (let kind = 0; kind < 2; kind++) {
       const curve = kind ? runtime.shaping.channelCurveObjects[channel] : runtime.shaping.globalCurve;
       const header = readDescriptor(curve.header);
@@ -206,6 +209,8 @@ if (runtime.curveGainRecords?.length) {
       const predicted = soundboardCurveGain({x: floats(24), y: floats(48), dimensions: header.readUInt32LE(72),
         mode: header[77], logX: header[76]}, {length: spectralPrefixes[channel].magnitude.length,
         smoothingWidth: width, mix, binSpacing: parameters[2]});
+      computedCurveGains[channel].push(predicted.output);
+      if (!runtime.curveGainRecords?.length) continue;
       const record = runtime.curveGainRecords[channel * 2 + kind];
       if (record.number !== channel * 2 + kind || record.parameters?.length !== 3 ||
           parameters.some((v, i) => !Object.is(v, record.parameters[i]))) {
@@ -216,13 +221,28 @@ if (runtime.curveGainRecords?.length) {
     }
   }
 }
+if (runtime.fftRecords?.length) {
+  if (runtime.fftErrors?.length || runtime.fftPending || runtime.fftRecords.length !== spectralPrefixes.length) {
+    throw new Error('Complete inverse-only FFT chain required');
+  }
+  for (let channel = 0; channel < spectralPrefixes.length; channel++) {
+    const record = runtime.fftRecords[channel];
+    if (record.number !== channel || record.direction !== 1 || record.length !== 16384 ||
+        record.returnAddress !== 0x10069c834) throw new Error('Inverse FFT profile differs');
+    const predicted = computeSoundboardInverseSpectrum(spectralPrefixes[channel],
+      {power: runtime.shaping.scalars[0], globalGain: computedCurveGains[channel][0],
+        channelGain: computedCurveGains[channel][1]});
+    inverseInputComparisons.push(compare(predicted.inverseInput, record.input, channel));
+    inverseOutputComparisons.push(compare(predicted.inverseOutput, record.output, channel));
+  }
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons];
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons];
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !spectralControlMismatches.length,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
@@ -242,6 +262,8 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   leadingMode: leading?.mode ?? null,
   leadingNativeTargetVerified: leadingComparisons.length > 0 && leadingComparisons.every((c) => !c.mismatches),
   magnitudeComparisons, whiteningComparisons, curveGainComparisons, spectralControlMismatches,
+  inverseInputComparisons, inverseOutputComparisons,
+  inverseSpectrumComputed: inverseInputComparisons.length > 0,
   spectralPrefixComputed: spectralPrefixes.length > 0,
   curveGainControlsFromShapingCapture: curveGainComparisons.length > 0,
   spectralNativeTargetsUsedForPrediction: false,
