@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {MidiRawNodeLifecycle,rawNodeCanRetire} from '../dsp/midi-raw-node-lifecycle.mjs';
 import {GlobalRawKeys} from '../dsp/global-raw-keys.mjs';
-const curve=y=>({x:[0,1],y}),identity=curve([0,1]);
+const curve=y=>({version:32771,x:[0,1],y}),identity=curve([0,1]);
 const baseFields=[{object_offset:0x6d8,value:identity},{object_offset:0x728,value:identity},
  {object_offset:0x2f10,kind:'mar_param',value:{fields:[
   {object_offset:0xd18,kind:'c',value:curve([.01,.01])},{object_offset:0xd68,kind:'c',value:curve([60,60])},
@@ -9,11 +9,14 @@ const baseFields=[{object_offset:0x6d8,value:identity},{object_offset:0x728,valu
 const presetFields=[0xd88,0xe28,0xe78].map(object_offset=>({object_offset,value:identity}));
 presetFields.push({object_offset:0xdd8,value:curve([1,1])},{object_offset:0xf20,value:0},{object_offset:0x1518,value:[2,3,4,6]});
 
+baseFields.find(r=>r.object_offset===0x2f10).value.fields.push({object_offset:0xe08,kind:'u',value:91},{object_offset:0xc78,kind:'c',value:curve([0,0])});
+presetFields.push({object_offset:0x1168,kind:'f32',value:91},{object_offset:0x1170,kind:'curve',value:curve([0,0])});
 const initial={samples:64,sampleRate:48000,hostControl:0,hostBlend:.5,softControl:0,pedalControl:0,binaryPedal:0,bypassFlags:[0,0],keys:[{flags:[1,0,0],localControl:0,localSoftControl:0,nodes:[{object:'native-initial',id:7,tag:0,velocity:-100,position:0,intermediate:0}]}]};
 const config={baseFields,presetFields,keyIndex:0,initialNoteBase:69,eventClock:{sampleRate:48000,blockSize:64,events:[
  {kind:'noteOn',frame:640,note:69,channel:0,velocity:96},{kind:'noteOff',frame:1280,note:69,channel:0,velocity:0},
  {kind:'noteOn',frame:1920,note:69,channel:0,velocity:96}]}};
 // Neither native initial IDs nor numeric node snapshots may seed the producer.
+initial.keys[0].flags=[NaN,NaN,NaN];initial.keys[0].localControl=NaN;initial.keys[0].localSoftControl=NaN;
 initial.keys[0].nodes=[{object:'POISON-INITIAL',id:123,tag:456,velocity:NaN,position:NaN,intermediate:NaN}];
 const driver=new MidiRawNodeLifecycle(initial,config),raw=new GlobalRawKeys(driver.initialState());
 // Changes to the caller's initial profile after construction cannot update held state.
@@ -49,7 +52,7 @@ changed.baseFields.find(r=>r.object_offset===0x2f10).value.fields.find(r=>r.obje
 const altered=new MidiRawNodeLifecycle(initial,changed);
 assert.equal(altered.nodes[0][0].velocity,Math.fround(-1/Math.fround(.02)));
 assert.notEqual(altered.nodes[0][0].velocity,new MidiRawNodeLifecycle(initial,config).nodes[0][0].velocity);
-const undamped=structuredClone(initial);undamped.keys[0].flags[0]=0;
-assert.equal(new MidiRawNodeLifecycle(undamped,config).nodes[0][0].position,1);
+const undamped=structuredClone(config);undamped.presetFields.find(r=>r.object_offset===0x1168).value=68;
+assert.equal(new MidiRawNodeLifecycle(initial,undamped).nodes[0][0].position,1);
 assert.throws(()=>new MidiRawNodeLifecycle(initial,{...config,initialNoteBase:68}));
 console.log('Archive-derived initial velocity, poisoned initial snapshot, undamped idle and explicit note mapping guards passed (synthetic).');
