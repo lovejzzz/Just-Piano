@@ -40,9 +40,9 @@ export function createMidiKeyReleaseTimeline({baseFields, presetFields, eventClo
   ]}]});
   const negativeVelocity = producer.apply({key: 0, id: 0, tag: 0, clearMask: 1, negativeOnly: 0,
     release, controls, nodes: [{object: 'midi-key69', voice: '0x0'}]})[0].velocity;
-  const states = [], dt = f(f(64) / f(eventClock.sampleRate));
+  const states = [], velocities = [], dt = f(f(64) / f(eventClock.sampleRate));
   let position = 0, velocity = 0, index = 0;
-  return Object.freeze({
+  const timeline = {
     stateAtFrame(frame) {
       if (!Number.isSafeInteger(frame) || frame < 0 || frame % 64 || frame > 384000 * 600)
         throw new RangeError('Bounded absolute key block time required');
@@ -54,9 +54,15 @@ export function createMidiKeyReleaseTimeline({baseFields, presetFields, eventClo
           else velocity = negativeVelocity;
         }
         if (velocity < 0) position = advanceReleasedKey({position, velocity, dt, keyCap: 1, softCap: 1}).position;
+        velocities.push(velocity);
         states.push({u: position, releaseFlag: Number(position < 0.999 && velocity < 0)});
       }
       return {...states[frame / 64], frame};
     },
-  });
+    velocityAtFrame(frame) {
+      timeline.stateAtFrame(frame);
+      return velocities[frame / 64];
+    },
+  };
+  return Object.freeze(timeline);
 }

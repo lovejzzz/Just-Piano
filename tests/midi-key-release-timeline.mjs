@@ -21,6 +21,9 @@ assert.deepEqual(own.stateAtFrame(640), {u: 0.8685315251350403, releaseFlag: 1, 
 assert.deepEqual(own.stateAtFrame(1088), {u: 0, releaseFlag: 1, frame: 1088});
 assert.deepEqual(own.stateAtFrame(1280), {u: 1, releaseFlag: 0, frame: 1280});
 assert.equal(own.stateAtFrame(640).u, 0.8685315251350403); // Cached historical query does not rewind state.
+assert.equal(own.velocityAtFrame(576),Math.fround(1e10));
+assert.ok(own.velocityAtFrame(640)<0);
+assert.equal(own.velocityAtFrame(1280),Math.fround(1e10));
 assert.throws(() => own.stateAtFrame(641), RangeError);
 assert.equal(releaseLinkSuppressed({velocity: .5, release: .5}, {velocity: .5, release: .5}, 1), true);
 assert.equal(releaseLinkSuppressed({velocity: .5, release: .5}, {velocity: .5, release: .75}, 1), false);

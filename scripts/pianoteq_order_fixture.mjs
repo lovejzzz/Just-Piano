@@ -39,7 +39,7 @@ function postProfile(post) {
   copy.filters.forEach(filter => { delete filter.root; });
   return copy;
 }
-function levels(data) {
+function levels(data,midiRawVelocitySource,keyIndex) {
   if (data.warmups?.length !== 1 || data.warmups[0].callerSites[0] !== '0x1006b95e8' || data.records.length !== 2320)
     throw Error('Complete zero-time raw initializer and render sequence required');
   const initial = data.initial, cold = structuredClone(initial.rawKeys);
@@ -47,6 +47,7 @@ function levels(data) {
     if ((key.flags[0] & 1) && !(key.flags[1] & 1) && !Object.is(node.position, 0)) throw Error('Zero live cold raw state required');
     node.position = 0; node.intermediate = 0;
   }
+  const velocities=midiRawVelocitySource?.create(initial.rawKeys,keyIndex);
   const raw = new GlobalRawKeys(cold), sensor = new GlobalDriveLevel({ weights: initial.weights, sampleRate: 48000,
     enabledGain: initial.enabledGain, initialReset: initial.reset });
   let checks = 0;
@@ -57,14 +58,16 @@ function levels(data) {
     if (item.frameEndTarget !== (warmup ? 0 : i * 64) || item.rawBefore.samples !== 64 || item.rawBefore.sampleRate !== 48000)
       throw Error('Complete fixed raw clock required');
     item.pairsBefore.forEach(([timer, previous], k) => { equal(sensor.timers[k], timer); equal(sensor.previous[k], previous); });
-    const keys = raw.process(item.rawBefore, warmup ? { timeStep: 0 } : {});
+    const ownVelocities=velocities?.velocitiesFor(item.rawBefore,warmup?0:(i-1)*64);
+    if(ownVelocities)for(const key of item.rawBefore.keys)for(const node of key.nodes)equal(ownVelocities.get(node.object),node.velocity);
+    const keys = raw.process(item.rawBefore, {...(warmup ? { timeStep: 0 } : {}),...(ownVelocities?{nodeVelocities:ownVelocities}:{})});
     keys.values.forEach((value, k) => equal(value, item.input[k]));
     const value = sensor.process(keys.values, Math.max(item.rawBefore.pedalControl, item.rawBefore.extraPedalControl));
     item.pairsAfter.forEach(([timer, previous], k) => { equal(sensor.timers[k], timer); equal(sensor.previous[k], previous); });
     equal(value, item.levelTarget);
     if (!warmup) output.push(value);
   }
-  return { values: output, checks, configuration: { weights: initial.weights, enabledGain: initial.enabledGain, initialReset: initial.reset } };
+  return { values: output, checks, midiRawVelocitySummary:velocities?.summary()??null,configuration: { weights: initial.weights, enabledGain: initial.enabledGain, initialReset: initial.reset } };
 }
 export function readPcm(file) {
   const bytes = fs.readFileSync(file);
@@ -83,7 +86,7 @@ export function readPcm(file) {
     throw Error('Complete primary stereo24/48k PCM required');
   return pcm;
 }
-export function loadOrderFixture(directory) {
+export function loadOrderFixture(directory,{midiRawVelocitySource=null}={}) {
   const root = path.resolve(directory), runtimeBytes = fs.readFileSync(path.join(root, 'runtime.json')), data = JSON.parse(runtimeBytes);
   const launch = JSON.parse(fs.readFileSync(path.join(root, 'launch.json')));
   if (!data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.targetMutation !== false || data.errors.length || data.keyAudioErrors.length ||
@@ -107,7 +110,13 @@ export function loadOrderFixture(directory) {
     return value;
   };
   const mono = sidecar('monoBody'), keys = sidecar('keyResonance'), room = sidecar('globalExcitation'), lattice = sidecar('feedbackLattice'), raw = sidecar('driveLevel');
-  const computedLevels = levels(raw);
+  let velocityKeyIndex;
+  if(midiRawVelocitySource){
+    const m=midiRawVelocitySource.metadata;
+    if(m.midiSha256!==fixture.midiSha256||m.presetSha256!==fixture.selection.sha256||m.resourceSha256!==fixture.resourceSha256)throw Error('Identical MIDI raw velocity fixture required');
+    const indices=[...new Set(data.keyAudioRecords.map(r=>r.keyIndex))];if(indices.length!==1)throw Error('Explicit single played-key mapping required');velocityKeyIndex=indices[0];
+  }
+  const computedLevels = levels(raw,midiRawVelocitySource,velocityKeyIndex);
   const stream = name => {
     const bytes = fs.readFileSync(path.join(root, data[name + 'File']));
     if (bytes.length !== data[name + 'Bytes'] || sha(bytes) !== data[name + 'Sha256']) throw Error('Complete bound audio stream required');
@@ -183,7 +192,7 @@ export function loadOrderFixture(directory) {
     if (w.afterGlobalBlocks !== (i + 1) * 4 || w.samples !== 256 || w.channels !== 2 || w.sourceOffsetFrames !== 0) throw Error('Exact common writer spans required');
     return { afterGlobalBlocks: w.afterGlobalBlocks, samples: w.samples, channels: w.channels, sourceOffsetFrames: w.sourceOffsetFrames };
   });
-  return { root, data, fixture, runtimeSha256: sha(runtimeBytes), profile, controls, order, voices, writers, computedLevelChecks: computedLevels.checks,
+  return { root, data, fixture, runtimeSha256: sha(runtimeBytes), profile, controls, order, voices, writers, computedLevelChecks: computedLevels.checks,midiRawVelocitySummary:computedLevels.midiRawVelocitySummary,velocityKeyIndex,
     pcm: readPcm(path.join(root, 'observed.wav')), target(block) {
       const m = mono.observations[block];
       return { keyInputs: [m.driveInputBefore[0], m.bodyInputs[1][0], m.bodyInputs[2][0]], bodyBefore: [m.bodyBefore[0]], drive: [m.driveScratch[0]],
