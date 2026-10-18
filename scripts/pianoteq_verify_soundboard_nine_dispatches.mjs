@@ -30,8 +30,12 @@ for (let group = 0; group < 3; group++) {
   if (!replay.passed || !replay.sameRunCapturedSourceBound || !replay.dispatchComputed ||
       replay.dispatchComparisons?.length !== 3 || replay.nativeBlockCacheUsedForPrediction !== false ||
       replay.spectralNativeTargetsUsedForPrediction !== false) throw new Error('Independent group replay incomplete');
+  if (runtime.initializationInputs && (!replay.initializationComputed || replay.sourceExcitationUsedForPrediction !== false ||
+      replay.sourceGridScalarsUsedForPrediction !== false)) throw new Error('Configuration initialization not used');
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
-    steps: replay.steps, sourceHashes: replay.sourceHashes});
+    steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
+    sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
+    sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
   for (let channel = 0; channel < 3; channel++) {
     const node = group * 3 + channel, target = native.nodeRecord.targets[node];
     const predicted = replay.dispatchComparisons[channel], targetSha256 = readTarget(target);
@@ -43,6 +47,9 @@ for (let group = 0; group < 3; group++) {
 const passed = comparisons.every((c) => c.matches);
 console.log(JSON.stringify({passed, comparisons, groupReports,
   allNineDispatcherResponsesComputedFromCapturedSourceState: passed,
+  allNineInitializedFromConfiguration: groupReports.every((g) => g.initializationComputed),
+  capturedGridScalarsOrExcitationUsedForPrediction: groupReports.some((g) =>
+    g.sourceExcitationUsedForPrediction || g.sourceGridScalarsUsedForPrediction),
   nodeOracleCapturedInOneProcess: true, sourceGroupsCapturedInSeparateProcesses: true,
   sourceMatricesAndObservationGroupsStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,

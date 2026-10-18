@@ -18,6 +18,7 @@ import {reconstructSoundboardTime} from '../dsp/soundboard-time-reconstruction.m
 import {normalizeSoundboardResponses} from '../dsp/soundboard-response-normalization.mjs';
 import {createSoundboardResamplingPlan, resampleSoundboardResponse} from '../dsp/soundboard-resampling.mjs';
 import {finalizeSoundboardDispatch} from '../dsp/soundboard-dispatch-output.mjs';
+import {initializeSoundboardFromConfig} from '../dsp/soundboard-initialization.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -81,12 +82,33 @@ const observations = runtime.records.map((record) => {
   if (coefficient !== coeff.length) throw new Error('Unconsumed observation coefficients');
   return {length: record.length, groups};
 });
-const controls = soundboardScalarControls(source.controls);
+let initialization = null;
+const initializationControlMismatches = [];
+let propagationControls = source.controls, conversionControls = source.conversion;
+let excitation = Float32Array.from(source.excitation), excitationIndex = source.excitationIndex, stateSize = 1500;
+if (runtime.initializationInputs) {
+  const bridge = new Float32Array(Uint8Array.from(readDescriptor(runtime.initializationInputs.bridge)).buffer);
+  initialization = initializeSoundboardFromConfig(readDescriptor(runtime.initializationInputs.config), bridge);
+  propagationControls = initialization.propagationControls; conversionControls = initialization.conversion;
+  excitation = initialization.excitation.output; excitationIndex = initialization.grid.excitationIndex;
+  stateSize = initialization.grid.size;
+  for (const [name, actual] of Object.entries(propagationControls)) {
+    if (!Object.is(actual, source.controls[name])) initializationControlMismatches.push({name, actual, expected: source.controls[name]});
+  }
+  for (const [name, actual] of Object.entries(conversionControls)) {
+    if (!Object.is(actual, source.conversion[name])) initializationControlMismatches.push({name: `conversion.${name}`, actual, expected: source.conversion[name]});
+  }
+  if (excitationIndex !== source.excitationIndex || source.excitation.length !== excitation.length ||
+      excitation.some((v, i) => !Object.is(v, source.excitation[i]))) {
+    initializationControlMismatches.push({name: 'excitation', actualIndex: excitationIndex, expectedIndex: source.excitationIndex});
+  }
+}
+const controls = soundboardScalarControls(propagationControls);
 const result = computeSoundboardResponses({propagation: {
-  matrixA: normalizeSoundboardRows(JSON.parse(read(source.matrixA)).rows, 1500),
-  matrixC: normalizeSoundboardRows(JSON.parse(read(source.matrixC)).rows, 1500),
+  matrixA: normalizeSoundboardRows(JSON.parse(read(source.matrixA)).rows, stateSize),
+  matrixC: normalizeSoundboardRows(JSON.parse(read(source.matrixC)).rows, stateSize),
   controls, weights: soundboardIrWeights(controls.steps),
-  excitation: Float32Array.from(source.excitation), excitationIndex: source.excitationIndex,
+  excitation, excitationIndex,
   captureBlockStarts: [0],
 }, observations});
 function compare(output, descriptor, channel) {
@@ -120,8 +142,8 @@ let leadingComparisons = [];
 if (needConversion) {
   const lastDelay = Math.max(...observations.flatMap((observation) =>
     observation.groups.map((group) => group.offset)));
-  conversion = convertSoundboardResponses(result.outputs, {...source.conversion,
-    h: source.controls.h, tau: source.controls.tau,
+  conversion = convertSoundboardResponses(result.outputs, {...conversionControls,
+    h: propagationControls.h, tau: propagationControls.tau,
     logicalLength: controls.steps + lastDelay + 1});
   if (runtime.converted?.length) {
     if (runtime.converted.length !== result.outputs.length) throw new Error('Converted channel count differs');
@@ -131,7 +153,7 @@ if (needConversion) {
 }
 if (needTrim) {
   if (!conversion) throw new Error('Conversion required before trimming');
-  trim = trimSoundboardResponses(conversion.outputs, source.controls.tau);
+  trim = trimSoundboardResponses(conversion.outputs, propagationControls.tau);
   if (runtime.trimmed?.length) {
     if (runtime.trimmed.length !== conversion.outputs.length) throw new Error('Trimmed channel count differs');
     trimmedComparisons = trim.outputs.map((output, channel) =>
@@ -181,7 +203,7 @@ if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length || need
     const amount = amounts.readFloatLE(channel * 4), flag = Number(flags.readUInt32LE(channel * 4) !== 0);
     const width = runtime.shaping.scalars[1];
     const prefix = prepareSoundboardSpectralPrefix(leading.outputs[channel],
-      {tau: source.controls.tau, amount, width, flags: flag});
+      {tau: propagationControls.tau, amount, width, flags: flag});
     spectralPrefixes.push(prefix);
     if (!runtime.whiteningRecords?.length) continue;
     const target = runtime.whiteningRecords[channel];
@@ -328,8 +350,11 @@ const sameRunSource = Boolean(provenance &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
 const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons, ...dispatchComparisons];
-const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length;
+const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length + initializationControlMismatches.length;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount,
+  initializationControlMismatches, initializationComputed: Boolean(initialization),
+  initializationConfigurationStillCaptured: Boolean(initialization),
+  sourceExcitationUsedForPrediction: !initialization, sourceGridScalarsUsedForPrediction: !initialization,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
   conversionMode: conversion?.mode ?? null,

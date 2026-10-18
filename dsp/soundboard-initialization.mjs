@@ -10,5 +10,10 @@ export function initializeSoundboardFromConfig(bytes, bridge) {
     sourcePosition: get(0x80), bridge});
   const amplitude = Math.fround(get(0x8c) * Math.fround(get(0x98) + get(0x9c))), width = get(0xe8);
   const excitation = constructSoundboardExcitation(grid, {amplitude, width});
-  return {grid, excitation, excitationParameters: [amplitude, width]};
+  const mode = view.getUint32(0xe4, true);
+  if (![1, 2].includes(mode)) throw new RangeError('Supported soundboard propagation mode required');
+  const propagationControls = {T: get(0xac), p: get(0x84), q: get(0xa4), r: get(0xa8), h: grid.h, tau: grid.tau};
+  const word = new Uint32Array([0x3f9a362c]);
+  const conversion = {mode: Number(mode === 2), speed: get(0x88), density: new Float32Array(word.buffer)[0]};
+  return {grid, excitation, excitationParameters: [amplitude, width], propagationControls, conversion};
 }
