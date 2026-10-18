@@ -20,10 +20,11 @@ export class GlobalRawKeys {
    if(this.nodes.get(node.object).key!==i)throw new Error('Raw node owner changed');
   }
  }
- process(snapshot,{nodeVelocities}={}){
+ process(snapshot,{nodeVelocities,timeStep}={}){
   const {samples,sampleRate,hostControl,hostBlend,softControl,pedalControl,binaryPedal,bypassFlags}=snapshot;
   if(!Number.isInteger(samples)||samples<=0||![sampleRate,hostControl,hostBlend,softControl,pedalControl].every(Number.isFinite)||sampleRate<=0||bypassFlags.length!==2||bypassFlags.some(x=>x!==0))throw new Error('Unverified raw key clock/extra processors');
-  this.ensureNodes(snapshot);const dt=f(f(samples)/f(sampleRate)),values=[],flags=[];
+  if(timeStep!==undefined&&(!Number.isFinite(timeStep)||timeStep<0))throw new Error('Invalid explicit raw key time step');
+  this.ensureNodes(snapshot);const dt=timeStep===undefined?f(f(samples)/f(sampleRate)):f(timeStep),values=[],flags=[];
   for(let i=0;i<this.keyCount;i++){
    const key=snapshot.keys[i];
    if(![key.localControl,key.localSoftControl].every(Number.isFinite)||key.flags.length!==3)throw new Error('Invalid raw key controls');
