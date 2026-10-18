@@ -34,6 +34,10 @@ WITH_KEY_RESONANCE = os.environ.get('PIANOTEQ_CAPTURE_KEY_RESONANCE') == '1'
 if WITH_KEY_RESONANCE:
     if not WITH_KEY_MONO or not WITH_LEVEL: raise ValueError('Key recurrence requires complete mono/level capture')
     import pianoteq_capture_key_resonance as key_resonance
+WITH_EXCITATION = os.environ.get('PIANOTEQ_CAPTURE_GLOBAL_EXCITATION') == '1'
+if WITH_EXCITATION:
+    if not WITH_KEY_RESONANCE: raise ValueError('Global excitation requires full key recurrence capture')
+    import pianoteq_capture_global_excitation as excitation
 mono_rows = []
 mono_pending = None
 if WITH_LATTICE:
@@ -51,6 +55,7 @@ if WITH_MONO:
     sites = {0x100829d48: 'bodyDrive', **sites}
 
 if WITH_LEVEL: sites[level.RAW_SITE] = 'rawKeys'
+
 
 
 def save():
@@ -90,6 +95,10 @@ def save():
         resonance_bytes = json.dumps(key_resonance.payload(base.run_status, errors), separators=(',', ':'), allow_nan=False).encode()
         (base.ROOT / 'key-resonance.json').write_bytes(resonance_bytes)
         data.update(keyResonanceSameRun=True, keyResonanceFile='key-resonance.json', keyResonanceSha256=hashlib.sha256(resonance_bytes).hexdigest())
+    if WITH_EXCITATION:
+        excitation_bytes = json.dumps(excitation.payload(base.run_status, errors), separators=(',', ':'), allow_nan=False).encode()
+        (base.ROOT / 'global-excitation.json').write_bytes(excitation_bytes)
+        data.update(globalExcitationSameRun=True, globalExcitationPassive=True, globalExcitationFile='global-excitation.json', globalExcitationSha256=hashlib.sha256(excitation_bytes).hexdigest())
     if WITH_WRITER:
         key.global_stream.flush()
         data.update(keyGlobalSameRun=True, globalAudioBoundary='post-feedback', globalSnapshotSite='0x1006c2fd4',
@@ -169,6 +178,10 @@ def observed(frame, location, internal):
             mono_pending = mono.begin_block(frame, len(key.global_rows))
             if WITH_KEY_RESONANCE: key_resonance.observe(frame, mono_pending['_root'], len(key.global_rows))
             state = scalar(frame, mono_pending['_root'] + 0x50, 'Q')
+            if WITH_EXCITATION:
+                mono_pending['keyDirectBefore'] = mono.rows(frame, mono_pending['_workspace'] + 0x238)
+                mono_pending['directScratchGain'] = scalar(frame, state + 0x370)
+                excitation.passive_begin(frame, mono_pending['_root'], mono_pending['_workspace'], len(key.global_rows))
             external = scalar(frame, mono_pending['_root'] + 0x68, 'Q')
             begin, end = unpack(frame, external + 8, 'QQ')
             if end < begin or (end - begin) % 56 or not 1 <= (end - begin) // 56 <= 64:
@@ -231,6 +244,7 @@ def observed(frame, location, internal):
             if len(records) % 128 == 0: save()
             return False
         if name == 'feedbackRoute':
+            if WITH_EXCITATION: excitation.passive_finish(frame)
             state = reg('x21')
             if WITH_MONO:
                 if mono_pending is None or mono_pending['ordinal'] != len(key.global_rows): raise ValueError('Same-block mono predecessor required')

@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import { VectorDelay64 } from '../dsp/global-room-excitation.mjs';
+
+const ring = new VectorDelay64({ capacity: 4, width: 64 });
+assert.deepEqual(ring.empty, [true]);
+assert(ring.read(0).every(x => Object.is(x, 0)));
+assert.deepEqual(ring.empty, [false]);
+const input = Float32Array.from({ length: 64 }, (_, i) => 100 + i);
+ring.advance().set(input);
+assert.deepEqual(ring.read(1), Float32Array.from({ length: 64 }, (_, i) => i ? 99 + i : 0));
+ring.advance();
+assert.deepEqual(ring.read(64), input);
+const target = new Float32Array(64).fill(1);
+ring.addTo(target, 64, 0.5);
+assert.equal(target[0], 51); assert.equal(target[63], 82.5);
+ring.advance(); ring.advance(true);
+assert.equal(ring.cursor, 0); assert.equal(ring.filled, 4);
+assert(ring.current().every(x => Object.is(x, 0)));
+assert.throws(() => ring.read(-1));
+assert.throws(() => new VectorDelay64({ capacity: 3, width: 64 }));
+const untouched = new VectorDelay64({ capacity: 8, width: 64 });
+untouched.addTo(target, 0, 0);
+assert.deepEqual(untouched.empty, [true, true]);
+console.log('vector delay: lazy clear, sample-offset read, wrap, gain add and zero-gain state preservation passed');

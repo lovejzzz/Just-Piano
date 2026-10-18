@@ -10,7 +10,7 @@ import {injectWorkspaceFeedback} from '../dsp/workspace-feedback.mjs';
 import {encodeObservedPcm24} from '../dsp/pcm24.mjs';
 import {applyIrPack} from '../dsp/ir-pack.mjs';
 import {buildCabinetBanksFromIrPack} from '../dsp/cabinet-bank-source.mjs';
-import {readComputedFeedback} from './pianoteq_feedback_artifact.mjs';
+import {readComputedFeedback, readComputedExcitation} from './pianoteq_feedback_artifact.mjs';
 
 const [directory, sharedReportPath, reportPath, ...flags] = process.argv.slice(2);
 const option = prefix => {
@@ -19,8 +19,10 @@ const option = prefix => {
   return values.length ? values[0].slice(prefix.length) : null;
 };
 const outputWav = option('--output-wav='), packPath = option('--ir-pack=');
+const excitationReportPath = option('--excitation-report='), excitationAudioPath = option('--excitation-audio=');
+if (!!excitationReportPath !== !!excitationAudioPath) throw Error('Paired computed excitation required');
 const feedbackReportPath = option('--feedback-report='), feedbackAudioPath = option('--feedback-audio=');
-if (!directory || !sharedReportPath || !reportPath || !!feedbackReportPath !== !!feedbackAudioPath || new Set(flags).size !== flags.length || flags.some(f => !['--output-wav=', '--ir-pack=', '--feedback-report=', '--feedback-audio='].some(p => f.startsWith(p)) && !['--poison-cabinet-target', '--poison-ir-target', '--poison-plan-target', '--poison-feedback-target'].includes(f)))
+if (!directory || !sharedReportPath || !reportPath || !!feedbackReportPath !== !!feedbackAudioPath || new Set(flags).size !== flags.length || flags.some(f => !['--output-wav=', '--ir-pack=', '--feedback-report=', '--feedback-audio=', '--excitation-report=', '--excitation-audio='].some(p => f.startsWith(p)) && !['--poison-cabinet-target', '--poison-ir-target', '--poison-plan-target', '--poison-feedback-target', '--poison-excitation-target'].includes(f)))
   throw new Error('Usage: private-run shared-report fresh-private-report [--output-wav=private.wav] [--ir-pack=private.json] [--poison-cabinet-target]');
 const root = path.resolve(directory), sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 for (const file of [reportPath, outputWav].filter(Boolean))
@@ -41,6 +43,9 @@ if (data.feedbackLatticeSameRun) {
 const ownFeedback = feedbackReportPath ? readComputedFeedback(root, data, feedbackReportPath, feedbackAudioPath) : null;
 if (ownFeedback && (sharedReport.computedFeedbackAudioSha256 !== ownFeedback.audioSha256 || sharedReport.computedFeedbackReportSha256 !== ownFeedback.reportSha256))
   throw new Error('Shared and final stereo must consume identical computed feedback');
+const ownExcitation = excitationReportPath ? readComputedExcitation(root, data, excitationReportPath, excitationAudioPath) : null;
+if (ownExcitation && (!ownFeedback || ownFeedback.monoReportSha256 !== ownExcitation.directReportSha256)) throw Error('Excitation and feedback must use identical computed mono');
+if (flags.includes('--poison-excitation-target') && !ownExcitation) throw Error('Computed excitation required for target control');
 if (flags.includes('--poison-feedback-target') && !ownFeedback) throw new Error('Feedback target control requires computed feedback');
 const shared = fs.readFileSync(sharedReport.computedGlobalAudioFile), downstream = fs.readFileSync(path.join(root, data.downstreamFile));
 if (sha(shared) !== sharedReport.computedGlobalAudioSha256 || shared.length !== data.globalAudioRecords.length * 3072 ||
@@ -82,7 +87,7 @@ const cabinet = new CabinetConvolution64(head, tail), post = new DryStereoPost64
 const view = new DataView(new ArrayBuffer(4));
 const bits = value => {if (!Number.isFinite(value)) throw new Error('Finite DSP sample required'); view.setFloat32(0, value, true); return view.getUint32(0, true);};
 const fromBits = value => {view.setUint32(0, value, true); return view.getFloat32(0, true);};
-let checks = 0, mismatches = 0, context = null, poisoned = false, feedbackPoisoned = false;
+let checks = 0, mismatches = 0, context = null, poisoned = false, feedbackPoisoned = false, excitationPoisoned = false;
 const failures = [], pcmParts = [], stereoBlocks = [];
 const check = (name, predicted, actual) => {
   checks++;
@@ -94,6 +99,7 @@ function compareRows(name, predicted, actual) {
     let target = bits(actual[row][i]);
     if (name === 'cabinet-source' && flags.includes('--poison-cabinet-target') && !poisoned && actual[row][i] !== 0) {target = (target ^ 1) >>> 0; poisoned = true;}
     if (name === 'feedback-source' && flags.includes('--poison-feedback-target') && !feedbackPoisoned && actual[row][i] !== 0) {target = (target ^ 1) >>> 0; feedbackPoisoned = true;}
+    if (name === 'global-excitation-source' && flags.includes('--poison-excitation-target') && !excitationPoisoned && actual[row][i] !== 0) { target = (target ^ 1) >>> 0; excitationPoisoned = true; }
     check(name, bits(predicted[row][i]), target);
   }
 }
@@ -183,7 +189,9 @@ for (const [ordinal, record] of data.downstreamRecords.entries()) {
       }
       const audio = decode(downstream, byteOffset, 5), sum = ownFeedback ? ownFeedback.rows(nextGlobal) : audio.slice(2);
       if (ownFeedback) compareRows('feedback-source', sum, audio.slice(2));
-      const mix = globalMix.process64(audio.slice(0, 2), sum, record.gateEnabled, record.rowFlags);
+      const excitation = ownExcitation ? ownExcitation.rows(nextGlobal) : audio.slice(0, 2);
+      if (ownExcitation) compareRows('global-excitation-source', excitation, audio.slice(0, 2));
+      const mix = globalMix.process64(excitation, sum, record.gateEnabled, record.rowFlags);
       current = {before: mix.output, injected: injectWorkspaceFeedback([source.slice(0, 3), source.slice(3, 6), source.slice(6, 9)], sum, g.feedbackGain),
         auxiliary: source.slice(9), phase: 'feedback'};
       stage = 'cabinet';
@@ -226,6 +234,7 @@ if (position !== nativeWav.length || !fmt || fmt.length < 16 || fmt.readUInt16LE
     fmt.readUInt16LE(14) !== 24 || !nativePcm || nativePcm.length !== pcm.length) throw new Error('Exact complete native PCM extent required; no cropping');
 let pcmDifferences = 0;
 for (let i = 0; i < pcm.length; i += 3) if (pcm.readIntLE(i, 3) !== nativePcm.readIntLE(i, 3)) pcmDifferences++;
+if (flags.includes('--poison-excitation-target') && !excitationPoisoned) throw Error('Excitation target control not exercised');
 const passed = mismatches === 0 && pcmDifferences === 0;
 if (outputWav) {
   const header = Buffer.alloc(44); header.write('RIFF'); header.writeUInt32LE(pcm.length + 36, 4); header.write('WAVEfmt ', 8); header.writeUInt32LE(16, 16);
@@ -238,8 +247,10 @@ const report = {schema: 'pianoteq-key-stereo-baseline-v1', passed, checks, misma
   internalFramesNotSubmittedToWriter: nextGlobal * 64 - pcm.length / 6, computedPcmSha256: sha(pcm), nativePcmSha256: sha(nativePcm),
   captureRuntimeSha256: sha(runtimeBytes), packSlots, outputWav, sameRunStereoMathVerified: passed,
   perBlockStereoFloatTargetObserved: !data.writerOnlyStereoTarget,
-  nativeVoiceAudioStillObserved: true, nativeRoutingMapsStillObserved: true, nativeFeedbackSourcesStillObserved: true,
-  nativeThreeRowFeedbackUsedForPrediction: !ownFeedback, nativeTwoRowGlobalExcitationStillObserved: true,
+  nativeVoiceAudioStillObserved: true, nativeRoutingMapsStillObserved: true, nativeFeedbackSourcesStillObserved: !ownExcitation,
+  nativeThreeRowFeedbackUsedForPrediction: !ownFeedback, nativeTwoRowGlobalExcitationStillObserved: !ownExcitation, computedGlobalExcitationSource: !!ownExcitation,
+  computedExcitationReportSha256: ownExcitation?.reportSha256 ?? null, computedExcitationAudioSha256: ownExcitation?.audioSha256 ?? null,
+  nativeRoomGainsStillObserved: !!ownExcitation, nativeRoomStaticProfileStillObserved: !!ownExcitation, pedalZeroLevelBranchOnly: !!ownExcitation,
   nativeMonoFeedbackSourceStillObserved: ownFeedback ? !ownFeedback.usesComputedMono : false,
   nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
   nativeDriveScratchUsedForPrediction: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,

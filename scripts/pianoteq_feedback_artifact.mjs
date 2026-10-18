@@ -2,6 +2,53 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
+export function readComputedDirect(root, capture, reportPath, audioPath) {
+  if (!reportPath || !audioPath || !capture.monoBodySameRun || !capture.globalExcitationSameRun)
+    throw Error('Paired same-run computed direct proof required');
+  const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+  const source = fs.readFileSync(path.join(root, capture.monoBodyFile)), data = JSON.parse(source);
+  const raw = fs.readFileSync(reportPath), report = JSON.parse(raw), audio = fs.readFileSync(audioPath);
+  const blocks = capture.globalAudioRecords.length;
+  if (sha(source) !== capture.monoBodySha256 || report.inputSha256 !== sha(source) || report.passed !== true || report.mismatches !== 0 ||
+      report.blocks !== blocks || blocks !== 2320 || report.computedDirectSource !== true || report.nativeDirectAudioUsedForPrediction !== false ||
+      report.computedKeyInputsSource !== true || report.computedBodyBeforeSource !== true || report.nativeModalInputsAndExistingMonoUsedForPrediction !== false ||
+      !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.runStatus.pid !== capture.runStatus.pid || data.errors.length || data.pending ||
+      audio.length !== blocks * 256 || sha(audio) !== report.computedDirectSha256)
+    throw Error('Complete bound computed direct source required');
+  return { reportSha256: sha(raw), audioSha256: sha(audio), row(block) {
+    if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound direct block required');
+    return Float32Array.from({ length: 64 }, (_, i) => {
+      const value = audio.readFloatLE(block * 256 + i * 4);
+      if (!Number.isFinite(value)) throw Error('Finite computed direct source required');
+      return value;
+    });
+  } };
+}
+
+export function readComputedExcitation(root, capture, reportPath, audioPath) {
+  if (!reportPath || !audioPath || !capture.globalExcitationSameRun) throw Error('Paired same-run excitation proof required');
+  const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+  const runtime = fs.readFileSync(path.join(root, 'runtime.json'));
+  const source = fs.readFileSync(path.join(root, capture.globalExcitationFile)), data = JSON.parse(source);
+  const raw = fs.readFileSync(reportPath), report = JSON.parse(raw), audio = fs.readFileSync(audioPath), blocks = capture.globalAudioRecords.length;
+  if (report.captureRuntimeSha256 !== sha(runtime) || report.inputSha256 !== sha(source) || sha(source) !== capture.globalExcitationSha256 ||
+      report.passed !== true || report.mismatches !== 0 || !(report.checks > 0) || report.blocks !== blocks || blocks !== 2320 ||
+      report.nativeDirectSourceUsedForPrediction !== false || report.nativeRoomOutputOrRingHistoryUsedForPrediction !== false ||
+      !/^[a-f0-9]{64}$/.test(report.computedDirectReportSha256) || !/^[a-f0-9]{64}$/.test(report.computedDirectAudioSha256) ||
+      !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.runStatus.pid !== capture.runStatus.pid || data.errors.length || data.pending ||
+      audio.length !== blocks * 512 || sha(audio) !== report.computedExcitationSha256)
+    throw Error('Complete bound independently computed excitation required');
+  return { reportSha256: sha(raw), audioSha256: sha(audio), directReportSha256: report.computedDirectReportSha256,
+    rows(block) {
+      if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound excitation block required');
+      return Array.from({ length: 2 }, (_, row) => Float32Array.from({ length: 64 }, (_, i) => {
+        const value = audio.readFloatLE(block * 512 + (row * 64 + i) * 4);
+        if (!Number.isFinite(value)) throw Error('Finite computed excitation required');
+        return value;
+      }));
+    } };
+}
+
 export function readComputedBodyBefore(root, capture, reportPath, audioPath) {
   if (!reportPath || !audioPath || capture.keyResonanceSameRun !== true || !capture.monoBodySameRun)
     throw Error('Paired same-run per-key mono proof required');
@@ -108,7 +155,7 @@ export function readComputedFeedback(root, capture, reportPath, audioPath) {
   if (report.nativeMonoSourceUsedForPrediction === false && (!capture.monoBodySameRun ||
       !/^[a-f0-9]{64}$/.test(report.computedMonoReportSha256) || !/^[a-f0-9]{64}$/.test(report.computedMonoAudioSha256)))
     throw Error('Computed mono provenance required');
-  return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedMono: report.nativeMonoSourceUsedForPrediction === false,
+  return { reportSha256: sha(raw), audioSha256: sha(audio), monoReportSha256: report.computedMonoReportSha256, usesComputedMono: report.nativeMonoSourceUsedForPrediction === false,
     usesComputedDrive: report.computedDriveSource === true, usesComputedLevels: report.computedLevelsSource === true, usesComputedKeyInputs: report.computedKeyInputsSource === true, usesComputedBodyBefore: report.computedBodyBeforeSource === true, rows(block) {
     if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound feedback block required');
     return Array.from({ length: 3 }, (_, row) => Float32Array.from({ length: 64 }, (_, i) => {
