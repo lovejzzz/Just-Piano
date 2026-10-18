@@ -1,6 +1,7 @@
 // Build physical source tables and per-strike excitation in the running chain.
 // Registry values, modes and host expression conditions remain explicit dependencies.
-import {constructArchiveSourceContext, prepareArchiveSourceTables, archiveTunedNote} from './archive-source-context.mjs';
+import {constructArchiveSourceContext, archiveTunedNote} from './archive-source-context.mjs';
+import {prepareArchiveExcitationInitialSources} from './archive-excitation-initial-sources.mjs';
 import {archiveHardnessAt69, linearModelCurve} from './model-curves.mjs';
 import {buildManagerEventTables, managerEventCurvesFromArchive} from './manager-event-tables.mjs';
 import {ExcitationManagerRandom} from './excitation-manager-random.mjs';
@@ -30,24 +31,14 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
   const hardnessControls = {...historyModel.hardnessControls, fallbackFrequency: archiveTunedNote(context, {note: 69}).frequency};
   const spectrumModel = archiveExcitationSpectrum({baseFields: base.fields, note: 69, noteBranch: runtime.noteBranch});
   const extraTableModel = archiveExcitationExtraTables({baseFields: base.fields, note: 69});
-  const sources = new Map([0, 1].map(mode => {
-    const options = structuredClone(runtime.sourceOptions[mode]);
-    if (options.instrumentMode !== runtime.instrumentMode || options.impedanceRuntime?.mode !== mode ||
-        !options.weightSource?.harmonicCurveMode || options.weightSource.harmonicCurveModes !== undefined)
-      throw new Error('Explicit matching mode and harmonic curve conditions required');
-    const presetGrid = preset.decoded_tail.fields.find(r => r.object_offset === 0x9a8)?.value?.grid;
-    const baseGrid = base.fields.find(r => r.object_offset === 0x1018)?.value?.rows;
-    if (!Array.isArray(presetGrid) || !Array.isArray(baseGrid)) throw new Error('Complete archive harmonic grids required');
-    options.weightSource.harmonicCurveModes = {preset: presetGrid.map(() => options.weightSource.harmonicCurveMode),
-      base: baseGrid.map(() => options.weightSource.harmonicCurveMode)};
-    delete options.weightSource.harmonicCurveMode;
-    const source = prepareArchiveSourceTables(context, {...options, note: 69, noteIndex: 69});
+  const sources = prepareArchiveExcitationInitialSources({context, baseFields: base.fields,
+    presetFields: preset.decoded_tail.fields, sourceOptions: runtime.sourceOptions, instrumentMode: runtime.instrumentMode, note: 69});
+  for (const [mode, source] of sources) {
     if (source.columns !== 3 || source.rows !== (mode === 0 ? 26 : 10) ||
         !source.coupledPolesComputed || !source.archiveRuntimeControlsComputed ||
         source.coupledPoleTraces.some(r => r.rootAlgorithm !== 'recovered-native-cubic-qr'))
       throw new Error('Complete own native-QR coupled source required');
-    return [mode, source];
-  }));
+  }
   const curves = managerEventCurvesFromArchive({baseFields: base.fields, presetFields: preset.decoded_tail.fields});
   const baseTableModel = archiveExcitationBaseTables({baseFields: base.fields, note: 69, primarySource: sources.get(0)});
   const eventTable = buildManagerEventTables({...curves, useGlobal: false, runtimeMode: 'linear-clamp'}).noteOn;

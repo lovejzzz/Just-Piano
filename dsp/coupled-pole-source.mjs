@@ -6,6 +6,7 @@ import {nativeImpedanceMath} from './native-impedance-math.mjs';
 import {coupledModes} from './modal-poles.mjs';
 import {archiveImpedanceSource} from './archive-impedance-source.mjs';
 import {singleComponentPole} from './single-component-pole.mjs';
+import {sortInitialPoleColumns} from './initial-pole-column-sort.mjs';
 const f=Math.fround;
 export function constructCoupledPoles({prepared,coordinateScale,coordinates,note,
   frequencyGrid,runtimeCurveModes,impedance,jitterAmount,sampleRate,frequencyCutoff,archiveContext,polynomialControls}){
@@ -45,7 +46,8 @@ export function constructCoupledPoles({prepared,coordinateScale,coordinates,note
       factor,p,q,coefficients:result.coefficients,roots:result.solver?.roots,rootAlgorithm:result.solver?.algorithm??result.algorithm,
       frequency:result.frequency,rawDecay:result.decay,...(columns===1?{singleComponentReference}:{})});
   }
-  return {rows:traces.length,columns,frequency:Float32Array.from(frequency),rawDecay:Float32Array.from(rawDecay),
+  const sorted=sortInitialPoleColumns({rows:traces.length,columns,frequency,rawDecay});
+  return {rows:traces.length,columns,...sorted,poleEvaluationTracesBeforeColumnSort:true,
     rowLimit:coordinates.length,threshold,traces,impedanceAndPolesComputed:true,impedanceFromArchive:archiveContext!==undefined,
     polynomialControlsRequired:columns>=2,nativeCoupledTrajectoryVerified:false};
 }

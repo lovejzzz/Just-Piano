@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {sortInitialPoleColumns} from '../dsp/initial-pole-column-sort.mjs';
+const frequency = [3, 1, 1, 3, 2, 2], rawDecay = [30, 10, 11, 31, 20, 21];
+const original = [...frequency], sorted = sortInitialPoleColumns({rows: 3, columns: 2, frequency, rawDecay});
+assert.deepEqual(Array.from(sorted.frequency), [1, 1, 2, 2, 3, 3]);
+assert.deepEqual(Array.from(sorted.rawDecay), [11, 10, 20, 21, 30, 31]);
+assert.deepEqual(sorted.columnOrders, [[1, 2, 0], [0, 2, 1]]);
+assert.deepEqual(frequency, original);
+const ties = sortInitialPoleColumns({rows: 4, columns: 1, frequency: [1, -0, 0, 1], rawDecay: [10, 20, 30, 40]});
+assert.deepEqual(Array.from(ties.frequency), [-0, 0, 1, 1]);
+assert.deepEqual(Array.from(ties.rawDecay), [20, 30, 10, 40]);
+assert.equal(sortInitialPoleColumns({rows: 0, columns: 1, frequency: [], rawDecay: []}).swaps, 0);
+assert.throws(() => sortInitialPoleColumns({rows: 1, columns: 1, frequency: [Infinity], rawDecay: [1]}));
+assert.throws(() => sortInitialPoleColumns({rows: 2, columns: 1, frequency: [1], rawDecay: [1]}));
+console.log('Independent column ordering, aligned decay, stable ties and input guards passed');

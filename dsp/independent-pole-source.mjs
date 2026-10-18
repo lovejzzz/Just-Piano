@@ -5,6 +5,7 @@ import {modalImpedance,couplingJitterFactors} from './modal-impedance.mjs';
 import {nativeImpedanceMath} from './native-impedance-math.mjs';
 import {singleComponentPole} from './single-component-pole.mjs';
 import {archiveImpedanceSource} from './archive-impedance-source.mjs';
+import {sortInitialPoleColumns} from './initial-pole-column-sort.mjs';
 const f=Math.fround;
 export function constructIndependentPoles({prepared,coordinateScale,coordinates,note,
   frequencyGrid,runtimeCurveModes,componentPowerScale,impedance,jitterAmount,sampleRate,frequencyCutoff,archiveContext}){
@@ -43,7 +44,7 @@ export function constructIndependentPoles({prepared,coordinateScale,coordinates,
       traces.push({component:endpoint.component,row,mode,center:poleInputs.center,inputs:args.inputs,
         impedanceP:own.p,impedanceQ:own.q,factor,p,q,singleComponentReference,frequency:result.frequency[0],rawDecay:result.decay[0]});
     }
-    return {rows:frequency.length,columns:1,frequency:Float32Array.from(frequency),rawDecay:Float32Array.from(rawDecay)};
+    return {rows:frequency.length,columns:1,...sortInitialPoleColumns({rows:frequency.length,columns:1,frequency,rawDecay})};
   });
   return {componentPoles,rowLimit:coordinates.length,threshold,traces,
     impedanceAndPolesComputed:true,impedanceFromArchive:archiveContext!==undefined,nativeIndependentTrajectoryVerified:false};
