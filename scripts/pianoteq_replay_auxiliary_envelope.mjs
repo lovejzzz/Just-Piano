@@ -1,0 +1,11 @@
+import fs from 'node:fs';import path from 'node:path';
+import {produceAuxiliaryEnvelope} from './pianoteq_auxiliary_source_producer.mjs';
+const [directory,output,...flags]=process.argv.slice(2);
+const audioFlags=flags.filter(x=>x.startsWith('--output-audio=')),audioPath=audioFlags[0]?.slice('--output-audio='.length);
+if(!output||audioFlags.length>1||new Set(flags).size!==flags.length||flags.some(x=>x!=='--poison-audio-target'&&!x.startsWith('--output-audio=')))throw Error('Usage: complete-private-source fresh-private-report [--output-audio=fresh-private.bin] [--poison-audio-target]');
+for(const file of [output,audioPath].filter(Boolean))if(fs.existsSync(file)||path.resolve(file).startsWith(path.resolve('.')+path.sep))throw Error('Fresh private outputs required');
+const {report,computed}=produceAuxiliaryEnvelope(directory,{poisonAudioTarget:flags.includes('--poison-audio-target')});
+report.computedAudioFile=audioPath?path.resolve(audioPath):null;
+if(audioPath)fs.writeFileSync(audioPath,computed,{flag:'wx',mode:0o600});
+fs.writeFileSync(output,JSON.stringify(report,null,2)+'\n',{flag:'wx',mode:0o600});
+console.log(JSON.stringify({...report,predictions:undefined}));if(report.mismatches)process.exitCode=1;
