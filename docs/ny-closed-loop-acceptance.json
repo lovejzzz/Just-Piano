@@ -2,6 +2,17 @@
   "schema": 1,
   "baselineCodeCommit": "aa93d3b3a37a252e6998f1c685f0436a19c4fd18",
   "objectiveComplete": false,
+  "generatedAuxiliaryWaveformEvidence": {
+    "pass": 313,
+    "generatedEntries": 125,
+    "nativeSourceTablesCompared": 9,
+    "exactFloat32Samples": 864000,
+    "negativeTargetFailsWithUnchangedGeneratedHashes": true,
+    "productionSourceSelectionOwned": false,
+    "integratedIntoStereo": false,
+    "newCompleteStereoComparison": false,
+    "reference": "docs/pianoteq-generated-auxiliary-waveforms-pass313.md"
+  },
   "primaryBaseline": {
     "model": "steinwayny",
     "presetKind": "private FXP used by the existing continuous-chain evidence",
