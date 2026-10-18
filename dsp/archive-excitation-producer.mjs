@@ -17,6 +17,7 @@ import {archiveExcitationExtraTables} from './archive-excitation-extra-tables.mj
 import {archiveExcitationBaseTables} from './archive-excitation-base-tables.mjs';
 import {archiveExcitationControl30} from './archive-excitation-control30.mjs';
 import {createMidiRattleTimeline} from './midi-rattle-timeline.mjs';
+import {createMidiKeyReleaseTimeline} from './midi-key-release-timeline.mjs';
 
 export function createArchiveExcitationProducer({baseFields, presetFields, runtime, events, eventClock = null}) {
   if (runtime?.note !== 69 || runtime.instrumentMode !== 1 || runtime.hostMode !== 0 ||
@@ -32,6 +33,8 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
   const base = {fields: structuredClone(baseFields)}, preset = {decoded_tail: {fields: structuredClone(presetFields)}};
   const rattleTimeline = eventClock?.events ? createMidiRattleTimeline({events: eventClock.events,
     presetFields: preset.decoded_tail.fields, noteOnFrames: eventClock.noteOnFrames}) : null;
+  const keyTimeline = eventClock?.events ? createMidiKeyReleaseTimeline({baseFields: base.fields,
+    presetFields: preset.decoded_tail.fields, eventClock}) : null;
   const context = constructArchiveSourceContext({baseFields: base.fields, presetFields: preset.decoded_tail.fields, ...runtime.tuning});
   if (runtime.sourceOptions[0].sampleRate !== runtime.sourceOptions[1].sampleRate) throw new Error('One physical sample rate required');
   const historyModel = archiveExcitationHistory({baseFields: base.fields, note: 69,
@@ -80,11 +83,17 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     control30SpectrumTableFromArchive: true, computedExtraSpectrumTables: ['floor', 'blend', 'control30'],
     oldVoiceCounterComputedFromMidi: Boolean(eventClock), repeatHostRateFromExplicitRender: Boolean(eventClock),
     rattleSourceValuesFromMidi: Boolean(rattleTimeline), rattleConsumerClockStillObserved: true,
+    keyReleaseTimelineFromMidiAndArchive: Boolean(keyTimeline),
     eventClockSampleRate: eventClock?.sampleRate, oldVoiceSelectionStillObserved: true,
     baseSpectrumTablesFromArchiveAndOwnInitialSource: true, spectrumCoordinatesFromArchive: true,
     sameRunModelGenerationVerified: false, wholeEngineEquivalent: false});
   return {
     metadata,
+    keyStateAtConsumerAge(epoch, age) {
+      if (!keyTimeline || !Number.isInteger(epoch) || !Number.isSafeInteger(eventClock.noteOnFrames[epoch]) ||
+          !Number.isSafeInteger(age) || age < 0 || age % 64) throw new Error('Supported source MIDI key clock required');
+      return keyTimeline.stateAtFrame(eventClock.noteOnFrames[epoch] + age);
+    },
     initialRattleValue(epoch) {
       if (!rattleTimeline) throw new Error('Source MIDI Rattle timeline required');
       return rattleTimeline.initialValue(epoch);
