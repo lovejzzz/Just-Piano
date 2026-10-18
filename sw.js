@@ -1,10 +1,11 @@
 // Network-first cache so Just Piano also works offline after the first visit.
-const CACHE = "just-piano-v3";
+const CACHE = "just-piano-v4";
 const FILES = [
   "./",
   "index.html",
   "style.css",
   "app.js",
+  "verified-preview.js",
   "presets.js",
   "piano-worklet.js",
   "icon.svg",
@@ -36,6 +37,7 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   if (
     e.request.method !== "GET" ||
+    new URL(e.request.url).pathname.startsWith("/__local/") ||
     new URL(e.request.url).origin !== location.origin
   )
     return;

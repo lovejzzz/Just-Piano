@@ -2,6 +2,11 @@
 
 An independent, sample-free browser piano with an 88-key keyboard, Web MIDI input, six original voicings, and a dark, warm-lit interface.
 
+**Continuing this project:** read [HANDOFF.md](HANDOFF.md) first. The latest research
+pipeline is separate from the realtime keyboard. A loopback-only preview server
+can add the latest verified offline render to this page; commercial audio and
+models remain outside this repository. See the handoff for the exact local command.
+
 ## Run
 
 ```sh

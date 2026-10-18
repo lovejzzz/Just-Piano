@@ -347,7 +347,7 @@
   const held = new Map(); // key -> sounding note
   window.addEventListener("keydown", (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.target.closest("select, input, a")) return;
+    if (e.target.closest("select, input, a, audio")) return;
     if (e.target.closest("button") && (e.key === " " || e.key === "Enter"))
       return;
     if (!node) return;

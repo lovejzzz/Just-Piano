@@ -26,6 +26,19 @@
           ><span id="audioLabel">Enable audio</span>
         </button>
       </header>
+      <section id="verifiedPreview" class="verified-preview" aria-labelledby="verifiedTitle" hidden>
+        <div>
+          <div class="eyebrow">LOCAL RESEARCH PREVIEW · <span id="previewRevision"></span></div>
+          <h2 id="verifiedTitle">最新验证音频 · NY Steinway D</h2>
+          <p>试听最新离线计算：五次重复击键、松键与尾音。完整音频与原生参考逐字节一致。</p>
+          <p class="preview-caveat">实时琴键仍使用独立浏览器合成器；验证链尚有原生控制依赖，尚未接入实时琴键。</p>
+        </div>
+        <div class="preview-player">
+          <button id="playVerified" type="button">试听最新成果</button>
+          <audio id="verifiedAudio" controls preload="metadata" aria-label="最新 NY Steinway D 验证音频"></audio>
+          <span id="previewStatus" role="status"></span>
+        </div>
+      </section>
       <div class="workspace">
         <aside class="library">
           <div class="eyebrow">YOUR INSTRUMENT</div>
@@ -309,5 +322,6 @@
     </main>
     <script src="presets.js"></script>
     <script src="app.js"></script>
+    <script src="verified-preview.js"></script>
   </body>
 </html>
