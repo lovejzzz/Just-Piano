@@ -24,6 +24,10 @@ WITH_MONO = os.environ.get('PIANOTEQ_CAPTURE_MONO') == '1'
 if WITH_MONO:
     import pianoteq_capture_mono_body_continuous as mono
     if not WITH_LATTICE: raise ValueError('Body mode requires lattice mode')
+WITH_LEVEL = os.environ.get('PIANOTEQ_CAPTURE_LEVEL') == '1'
+if WITH_LEVEL:
+    if not WITH_MONO: raise ValueError('Level phases require mono mode')
+    import pianoteq_capture_drive_level_phases as level
 mono_rows = []
 mono_pending = None
 if WITH_LATTICE:
@@ -39,6 +43,8 @@ if WITH_LATTICE: del sites[0x1001bc114]
 if WITH_MONO:
     del sites[0x1006ca950]
     sites = {0x100829d48: 'bodyDrive', **sites}
+
+if WITH_LEVEL: sites[level.RAW_SITE] = 'rawKeys'
 
 
 def save():
@@ -68,6 +74,11 @@ def save():
             'observations': mono_rows}, separators=(',', ':'), allow_nan=False).encode()
         (base.ROOT / 'mono-body.json').write_bytes(mono_bytes)
         data.update(monoBodySameRun=True, monoBodyFile='mono-body.json', monoBodySha256=hashlib.sha256(mono_bytes).hexdigest())
+    if WITH_LEVEL:
+        level_bytes = json.dumps(level.payload(base.run_status, errors), separators=(',', ':'), allow_nan=False).encode()
+        (base.ROOT / 'drive-level.json').write_bytes(level_bytes)
+        data.update(driveLevelSameRun=True, driveLevelFile='drive-level.json',
+            driveLevelSha256=hashlib.sha256(level_bytes).hexdigest(), driveLevelPhaseTransitions=level.transitions)
     if WITH_WRITER:
         key.global_stream.flush()
         data.update(keyGlobalSameRun=True, globalAudioBoundary='post-feedback', globalSnapshotSite='0x1006c2fd4',
@@ -127,7 +138,11 @@ def observed(frame, location, internal):
         if pc not in sites or len(records) >= 16000: raise ValueError('Bounded downstream point required')
         reg = lambda name: frame.FindRegister(name).GetValueAsUnsigned()
         name = sites[pc]
+        if name == 'rawKeys':
+            level.begin(frame)
+            return False
         if name == 'bodyDrive':
+            if WITH_LEVEL: level.body(frame, len(key.global_rows))
             if mono_pending is not None or lattice_pending is not None: raise ValueError('Unique body/lattice block required')
             mono_pending = mono.begin_block(frame, len(key.global_rows))
             state = scalar(frame, mono_pending['_root'] + 0x50, 'Q')
@@ -302,11 +317,14 @@ def __lldb_init_module(debugger, internal):
         if not result.Succeeded(): raise RuntimeError(result.GetError())
         hook = target.GetBreakpointAtIndex(target.GetNumBreakpoints() - 1)
         if address == 0x10091baa4 and not WITH_LATTICE: hook.SetEnabled(False)
+        if WITH_LEVEL and address in (level.RAW_SITE, level.DRIVE_SITE):
+            level.hooks[address] = hook
+            hook.SetEnabled(address == level.RAW_SITE)
         hook.SetAutoContinue(True); base.hooks.append(hook)
     for hook in base.hooks:
         error = hook.SetScriptCallbackFunction(__name__ + '.observed')
         if error and error.Fail(): raise RuntimeError(str(error))
-    if len(base.hooks) != (5 if WITH_LATTICE else 6) or sum(h.IsEnabled() for h in base.hooks) != (5 if WITH_WRITER else 6):
+    if len(base.hooks) != (6 if WITH_LEVEL else 5 if WITH_LATTICE else 6) or sum(h.IsEnabled() for h in base.hooks) != (5 if WITH_WRITER else 6):
         raise ValueError('Six registered hardware points and bounded writer handoff required')
     base.save = save
     save()

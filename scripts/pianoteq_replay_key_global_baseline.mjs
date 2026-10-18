@@ -26,6 +26,7 @@ function verifyHelpers(sourceRoot, manifest) {
     ['pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_soundboard_responses.py', 'pianoteq_damper_runtime_capture.py']);
   if (manifest.feedbackLatticeSameRun) expected.push('pianoteq_capture_feedback_allpass_continuous.py', 'pianoteq_capture_feedback_allpass_probe.py');
   if (manifest.monoBodySameRun) expected.push('pianoteq_capture_mono_body_continuous.py', 'pianoteq_capture_global_recurrence.py');
+  if (manifest.driveLevelSameRun) expected.push('pianoteq_capture_drive_level_phases.py', 'pianoteq_capture_drive_level_producer.py');
   expected.sort();
   if (JSON.stringify(Object.keys(manifest.helperSha256).sort()) !== JSON.stringify(expected) ||
       manifest.collectorSha256 !== manifest.helperSha256[isStereo ? 'pianoteq_capture_key_stereo_baseline.py' : 'pianoteq_capture_key_audio_baseline.py']) throw new Error('Complete bound collector closure required');
@@ -59,6 +60,7 @@ if (extended) {
   if (!data.writerOnlyStereoTarget) expectedSites.push('0x1001bc114');
 }
 if (withWriter) expectedSites.push('0x10091baa4');
+if (data.driveLevelSameRun) expectedSites.push('0x100096558');
 if (JSON.stringify(launch.sites) !== JSON.stringify(expectedSites) || !data.keyGlobalSameRun ||
     !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.errors.length || data.keyAudioErrors.length ||
     data.targetMutation !== false || data.hardwareBreakpoints !== expectedSites.length || data.pendingGlobalContributors.length ||
@@ -280,7 +282,9 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
   nativeDriveScratchUsedForPrediction: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
   nativeModalInputsAndExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
-  nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive,
+  nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
+  nativeDriveLevelUsedForPrediction: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
+  nativeDriveGainStillObserved: !!ownFeedback?.usesComputedDrive, computedLevelsSource: !!ownFeedback?.usesComputedLevels,
   nativeDriveStaticProfileAndWindowStillObserved: !!ownFeedback?.usesComputedDrive,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};

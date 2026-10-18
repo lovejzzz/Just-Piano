@@ -121,6 +121,7 @@ const report = { schema: 1, passed, inputSha256: sha(raw), blocks: data.observat
   nativeBodyOutputUsedForPrediction: false, nativePreLatticeMonoUsedForPrediction: false,
   nativeModalInputsAndExistingMonoUsedForPrediction: true, nativeCoefficientVersionsUsedForPrediction: true,
   nativeDriveScratchUsedForPrediction: !ownDrive, nativeFirstModalInputAfterDriveUsedForPrediction: !ownDrive,
+  computedLevelsSource: !!ownDrive?.usesComputedLevels,
   computedDriveReportSha256: ownDrive?.reportSha256 ?? null, computedDriveAudioSha256: ownDrive?.audioSha256 ?? null,
   nativeQueueSourcesUsedForPrediction: queueBlocks > 0,
   nativeDirectSourceUsedForPrediction: false, independentEngineStereoVerified: false };

@@ -30,7 +30,7 @@ const launch = JSON.parse(fs.readFileSync(path.join(root, 'launch.json')));
 const sharedReport = JSON.parse(fs.readFileSync(sharedReportPath));
 if (!data.keyStereoSameRun || !data.writerInputObserved || data.globalAudioBoundary !== 'post-feedback' ||
     !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.downstreamErrors.length || data.keyAudioErrors.length ||
-    data.errors.length || data.downstreamPending !== null || data.hardwareBreakpoints !== (data.writerOnlyStereoTarget ? 5 : 6) || data.activeHardwareBreakpoints !== (data.feedbackLatticeSameRun && !data.writerOnlyStereoTarget ? 6 : 5) ||
+    data.errors.length || data.downstreamPending !== null || data.hardwareBreakpoints !== (data.driveLevelSameRun ? 6 : data.writerOnlyStereoTarget ? 5 : 6) || data.activeHardwareBreakpoints !== (data.feedbackLatticeSameRun && !data.writerOnlyStereoTarget ? 6 : 5) ||
     sharedReport.captureRuntimeSha256 !== sha(runtimeBytes) || !sharedReport.nativeAccumulationMathVerified || sharedReport.mismatches ||
     sharedReport.computedGlobalAudioBoundary !== 'pre-feedback') throw new Error('Bound complete accepted shared computation and writer capture required');
 if (data.feedbackLatticeSameRun) {
@@ -244,7 +244,9 @@ const report = {schema: 'pianoteq-key-stereo-baseline-v1', passed, checks, misma
   nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
   nativeDriveScratchUsedForPrediction: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
   nativeModalInputsAndExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
-  nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive,
+  nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
+  nativeDriveLevelUsedForPrediction: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
+  nativeDriveGainStillObserved: !!ownFeedback?.usesComputedDrive, computedLevelsSource: !!ownFeedback?.usesComputedLevels,
   nativeDriveStaticProfileAndWindowStillObserved: !!ownFeedback?.usesComputedDrive, computedFeedbackReportSha256: ownFeedback?.reportSha256 ?? null,
   computedFeedbackAudioSha256: ownFeedback?.audioSha256 ?? null,
   nativeIrTimeInputsStillObserved: !independentIrPack, nativeIrCopyUsedForPrediction: !packPath,

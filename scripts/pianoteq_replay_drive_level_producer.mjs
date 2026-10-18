@@ -12,6 +12,16 @@ const bytes = fs.readFileSync(input), data = JSON.parse(bytes);
 if (!data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.errors.length || data.pending || data.targetMutation !== false || data.records.length !== 2320 || !data.initial) throw Error('Complete primary key/level capture required');
 if (data.warmups?.length !== 1 || data.warmups[0].kind !== 'initialization' || data.warmups[0].callerSites[0] !== '0x1006b95e8') throw Error('Actual zero-time initialization call required');
 const sha = x => crypto.createHash('sha256').update(x).digest('hex');
+const phaseMode = data.capRegisterObserved === false;
+if (phaseMode) {
+  if (JSON.stringify(data.sites) !== JSON.stringify(['0x100096558', '0x100829d48']) || data.phaseTransitions?.length !== data.records.length * 2 ||
+      [...data.warmups, ...data.records].some(x => x.capTargetObserved !== false)) throw Error('Complete phase observation boundary required');
+  data.records.forEach((item, i) => {
+    const a = data.phaseTransitions[2 * i], b = data.phaseTransitions[2 * i + 1];
+    if (a.ordinal !== i || a.from !== data.sites[0] || a.to !== data.sites[1] || b.ordinal !== i + 1 || b.from !== a.to || b.to !== a.from)
+      throw Error('Exact alternating raw/drive chronology required');
+  });
+}
 const initial = data.initial;
 if (initial.rawKeys.keys.some(key => (key.flags[0] & 1) && !(key.flags[1] & 1) && key.nodes.some(node => !Object.is(node.position, 0))))
   throw Error('Initial live raw-node position must be zero');
@@ -57,7 +67,8 @@ for (const { block, item, warmup } of phases) {
     check(bits(own.intermediate), bits(node.intermediate), `${block}.node.intermediate`);
   }
   const cap = Math.max(item.rawBefore.pedalControl, item.rawBefore.extraPedalControl);
-  check(bits(cap), bits(item.cap), `${block}.cap`);
+  if (item.capTargetObserved !== false) check(bits(cap), bits(item.cap), `${block}.cap`);
+  else if (data.capRegisterObserved !== false) throw Error('Explicit unobserved cap-register boundary required');
   const level = sensor.process(keys.values, cap);
   pairs(item.pairsAfter, `${block}.after`);
   let target = bits(item.levelTarget);
@@ -70,7 +81,7 @@ const passed = mismatches === 0 && nonzero > 0;
 const report = { schema: 1, passed, inputSha256: sha(bytes), blocks: data.records.length, checks, mismatches, failures, nonzero, poisoned,
   poisonedPosition, poisonedPair,
   crossings: sensor.crossings, expiries: sensor.expiries, rawNodeBirths: raw.nodeBirths, computedLevelsSha256: sha(output),
-  initializationCalls: data.warmups.length, initialSensorPairsComputedFromZero: true,
+  capRegisterCompared: !phaseMode, initializationCalls: data.warmups.length, initialSensorPairsComputedFromZero: true,
   initialRawHistoryComputedFromZero: true, overwrittenInitialNodeValuesNotLoaded: true,
   nativeKeyPositionsUsedForPrediction: false, nativeSensorPairsUsedForPrediction: false, nativeDriveLevelUsedForPrediction: false,
   rawNodeVelocitiesFlagsAndListsStillObserved: true, staticWeightsStillObserved: true, initialResetStillObserved: true,
