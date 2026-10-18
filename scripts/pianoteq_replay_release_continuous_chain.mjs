@@ -256,7 +256,15 @@ for(const [recordIndex,r] of d.records.entries()){
    const referenceBlend=Math.max(ownBlend.blendFloor,ownBlend.inputBlend);check('archive-spectrum:referenceBlend',referenceBlend,r.controls.referenceBlend);spectrumControls.referenceBlend=referenceBlend;
   }
   if(ownHardnessControls){check('archive-extra:direction',ownHardnessControls.direction,r.extraControls.direction);extraControls.direction=ownHardnessControls.direction;}
-  const built=buildReleaseControlledSpectrum({...r,input,controls:spectrumControls,extraControls,repeat:p});const c=built.controls;
+  const extraTables={...r.extraTables};
+  if(preparedSources?.metadata.floorAndBlendSpectrumTablesFromArchive){
+   for(const [key,values] of Object.entries(preparedSources.extraTables(r))){
+    if(values.length!==r.extraTables[key].length)throw new Error('Complete own spectrum extra table required');
+    values.forEach((v,i)=>check('archive-extra-table:'+key+':'+i,v,r.extraTables[key][i]));
+    extraTables[key]=values;
+   }
+  }
+  const built=buildReleaseControlledSpectrum({...r,input,controls:spectrumControls,extraControls,extraTables,repeat:p});const c=built.controls;
   for(const k of ['slope','baseScale'])check('spectrum-control:'+k,c[k],r.actual[k]);
   if(!Number.isInteger(r.count)||r.count<1||r.count>4096||r.actual.extraTable.length!==r.count||r.expWeights.length!==r.count)throw new Error('Incomplete spectrum targets');
   const extra=built.extraTable,log=built.logSpectrum;
