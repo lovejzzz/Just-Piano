@@ -1,7 +1,7 @@
 """Read-only capture of first propagation's observation groups and raw responses.
 
-Three hardware breakpoints: propagation inputs, output worker, completed-block
-boundary before resizing its raw responses. No target writes or expressions.
+Five hardware breakpoints: propagation inputs, output worker, completed-block
+boundary, converted responses and trim completion. No target writes or expressions.
 """
 import hashlib
 import json
@@ -18,6 +18,8 @@ records = []
 errors = []
 completed = False
 captured_source = None
+converted = []
+trimmed = []
 
 
 def memory(frame, address, size):
@@ -43,6 +45,8 @@ def save():
         'schema': 1, 'records': records, 'errors': errors,
         'completed': completed, 'hardwareBreakpoints': len(hooks),
         'capturedSource': captured_source,
+        'converted': converted,
+        'trimmed': trimmed,
         'targetMutation': False,
     }, indent=2, allow_nan=False))
     os.chmod(ROOT / 'runtime.json', 0o600)
@@ -60,7 +64,7 @@ def source_entry(frame, breakpoint, _):
         if set(rows) != {'va0', 'vc0'}:
             raise RuntimeError('Both same-run sparse matrices required')
         scalars = []
-        for index in range(4):
+        for index in range(6):
             error = lldb.SBError()
             value = frame.FindRegister(f's{index}').GetData().GetFloat(error, 0)
             if error.Fail():
@@ -72,7 +76,9 @@ def source_entry(frame, breakpoint, _):
         h, tau = struct.unpack_from('<2f', data)
         config = {
             'matrixA': rows['va0'], 'matrixC': rows['vc0'],
-            'controls': dict(zip(['T', 'p', 'q', 'r'], scalars), h=h, tau=tau),
+            'controls': dict(zip(['T', 'p', 'q', 'r'], scalars[:4]), h=h, tau=tau),
+            'conversion': {'mode': frame.FindRegister('w1').GetValueAsUnsigned(),
+                           'speed': scalars[4], 'density': scalars[5]},
             'excitation': list(struct.unpack('<4f', memory(frame, begin, 16))),
             'excitationIndex': struct.unpack_from('<I', data, 0x68)[0],
         }
@@ -154,9 +160,56 @@ def after_propagation(frame, breakpoint, _):
         for index, record in enumerate(records):
             if outputs.get(record['pointer']) != (record['output'], record['length']):
                 raise RuntimeError('Worker output not owned by completed state')
+            record['workerIndex'] = (record['pointer'] - begin) // 0x78
             record['response'] = dump(f'record-{index}-response.bin',
                                      memory(frame, record['output'], record['length'] * 4))
         completed = True
+        for hook in hooks[:3]:
+            hook.SetEnabled(False)
+        save()
+        return False
+    except Exception:
+        errors.append(traceback.format_exc())
+        save()
+        return True
+
+
+def after_conversion(frame, breakpoint, _):
+    try:
+        if not completed or not captured_source:
+            return False
+        state = frame.FindRegister('x19').GetValueAsUnsigned()
+        if state != captured_source['state']:
+            raise RuntimeError('Converted state differs from captured source')
+        begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
+        if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
+            raise RuntimeError('Invalid converted record vector')
+        for offset in range(0, end - begin, 0x68):
+            pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
+            converted.append(dump(f'converted-{len(converted)}.bin', memory(frame, pointer, length * 4)))
+        for hook in hooks[:4]:
+            hook.SetEnabled(False)
+        save()
+        return False
+    except Exception:
+        errors.append(traceback.format_exc())
+        save()
+        return True
+
+
+def after_trim(frame, breakpoint, _):
+    try:
+        if not converted or not captured_source:
+            return False
+        state = frame.FindRegister('x0').GetValueAsUnsigned()
+        if state != captured_source['state']:
+            raise RuntimeError('Trimmed state differs from captured source')
+        begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
+        if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
+            raise RuntimeError('Invalid trimmed record vector')
+        for offset in range(0, end - begin, 0x68):
+            pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
+            trimmed.append(dump(f'trimmed-{len(trimmed)}.bin', memory(frame, pointer, length * 4)))
         for hook in hooks:
             hook.SetEnabled(False)
         save()
@@ -175,7 +228,8 @@ def __lldb_init_module(debugger, _):
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
     assert not (ROOT / 'runtime.json').exists(), 'Fresh directory required'
     for address, callback in [(0x1005a8874, 'source_entry'),
-                              (0x1005ab0e0, 'worker'), (0x1005a91c8, 'after_propagation')]:
+                              (0x1005ab0e0, 'worker'), (0x1005a91c8, 'after_propagation'),
+                              (0x1005a9578, 'after_conversion'), (0x100817ab0, 'after_trim')]:
         result = lldb.SBCommandReturnObject()
         debugger.GetCommandInterpreter().HandleCommand(
             f'breakpoint set --hardware --address {address:#x} --shlib "Pianoteq 9"', result)
