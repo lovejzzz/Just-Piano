@@ -27,18 +27,9 @@ PLANS = {
 }
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('binary', 'preset', 'archive', 'output'):
-        parser.add_argument(name, type=Path)
-    parser.add_argument('--render-rate', type=float)
-    parser.add_argument('--base-rate', type=int, default=44100)
-    args = parser.parse_args()
-    if args.output.resolve().is_relative_to(Path(__file__).resolve().parent.parent):
-        parser.error('Commercial inputs must remain outside the repository')
-    if args.output.exists():
-        parser.error('Fresh private output required')
-    raw = args.binary.read_bytes()
+def read_static_microphone_registry(binary):
+    """Export only immutable registry sources; accepts no native observations."""
+    raw = binary.read_bytes()
     if hashlib.sha256(raw).hexdigest() != EXPECTED:
         raise ValueError('Unverified binary version')
     if struct.unpack_from('<I', raw)[0] != 0xfeedfacf:
@@ -60,6 +51,28 @@ def main():
             raise ValueError('Unique file-backed data mapping required')
         return list(struct.unpack_from('<' + 'f' * count, raw, matches[0]))
 
+    registry = []
+    for identity, (ordinates, controls) in PLANS.items():
+        mix, amount = ((0.5, 0.5) if controls == 'half' else
+                       (0.0, 0.0) if controls == 'zero' else floats(controls, 2))
+        registry.append({'id': identity, 'mix': mix, 'amount': amount,
+            'curve': {'x': floats(0x100a87150, 200), 'y': floats(ordinates, 200) if ordinates is not None else [0.0] * 200,
+                      'dimensions': 1, 'mode': 0, 'logX': 0}})
+    return registry
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ('binary', 'preset', 'archive', 'output'):
+        parser.add_argument(name, type=Path)
+    parser.add_argument('--render-rate', type=float)
+    parser.add_argument('--base-rate', type=int, default=44100)
+    args = parser.parse_args()
+    if args.output.resolve().is_relative_to(Path(__file__).resolve().parent.parent):
+        parser.error('Commercial inputs must remain outside the repository')
+    if args.output.exists():
+        parser.error('Fresh private output required')
+    registry = read_static_microphone_registry(args.binary)
     spec = importlib.util.spec_from_file_location('microphone_fxp', Path(__file__).with_name('pianoteq-inspect-fxp.py'))
     fxp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fxp)
@@ -70,13 +83,6 @@ def main():
     output = [field['value'] for field in preset['decoded_tail']['fields'] if field['object_offset'] == 0x1760]
     if len(output) != 1 or output[0]['kind'] != 3:
         raise ValueError('Supported microphone output state required')
-    registry = []
-    for identity, (ordinates, controls) in PLANS.items():
-        mix, amount = ((0.5, 0.5) if controls == 'half' else
-                       (0.0, 0.0) if controls == 'zero' else floats(controls, 2))
-        registry.append({'id': identity, 'mix': mix, 'amount': amount,
-            'curve': {'x': floats(0x100a87150, 200), 'y': floats(ordinates, 200) if ordinates is not None else [0.0] * 200,
-                      'dimensions': 1, 'mode': 0, 'logX': 0}})
     archive['microphones'] = {'schema': 1, 'output': output[0], 'registry': registry,
         'soloMicrophone': 0, 'soloMicrophoneSource': 'no-prefs-default',
         'binarySha256': EXPECTED, 'nativeRuntimeTablesUsedForExport': False}

@@ -62,6 +62,14 @@ export function forwardRealCore4096(input,twiddle){
  }
  return a;
 }
+export function forwardRealCore2048(input,twiddle){
+ if(input.length!==8192||twiddle.length!==2048)throw new Error('FFT2048 core shape required');
+ let a=input;
+ for(const [ido,l1,offset] of [[1,512,2044],[4,128,2032],[16,32,1984],[64,8,1792],[256,2,1024]]){
+  a=stage(a,ido,l1,4,twiddle,offset);
+ }
+ return stage(a,1024,1,2,twiddle,0);
+}
 export function forwardRealCore8192(input,twiddle){
  if(input.length!==32768||twiddle.length!==8192)throw new Error('FFT8192 core shape required');
  let a=input;

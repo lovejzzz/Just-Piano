@@ -1,4 +1,4 @@
-"""Read all three completed IR dispatch triplets using one hardware hook."""
+"""Read bounded completed IR dispatch groups using one hardware hook."""
 import json
 import struct
 import traceback
@@ -21,16 +21,17 @@ base.save = save
 
 def completed(frame, breakpoint, _):
     try:
-        if len(records) >= 3:
-            raise ValueError('Only the three initial source groups are covered')
+        if len(records) >= 64:
+            raise ValueError('Soundboard source group bound exceeded')
         config = frame.FindRegister('x19').GetValueAsUnsigned()
         header = base.memory(frame, config, 0x240)
         begin, end = struct.unpack_from('<2Q', header)
-        if end - begin != 3 * 0x30 or begin < 0x1000:
-            raise ValueError('Complete three-channel dispatch required')
+        if end <= begin or (end - begin) % 0x30 or end - begin > 64 * 0x30 or begin < 0x1000:
+            raise ValueError('Complete bounded dispatch required')
+        channels = (end - begin) // 0x30
         record = dict(number=len(records), outputRate=struct.unpack_from('<f', header, 0x44)[0],
                       outputs=[])
-        for channel in range(3):
+        for channel in range(channels):
             output = base.memory(frame, begin + channel * 0x30, 0x30)
             pointer, length = struct.unpack_from('<2Q', output)
             if not 1 <= length <= 100000 or pointer < 0x1000:

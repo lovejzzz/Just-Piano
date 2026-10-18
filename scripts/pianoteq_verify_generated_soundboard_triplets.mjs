@@ -10,9 +10,11 @@ const manifestBytes = fs.readFileSync(path.join(generatedDirectory, 'manifest.js
 const captureBytes = fs.readFileSync(path.join(nativeDirectory, 'runtime.json')), native = JSON.parse(captureBytes);
 const launchBytes = fs.readFileSync(path.join(nativeDirectory, 'launch.json')), launch = JSON.parse(launchBytes);
 const log = fs.readFileSync(path.join(nativeDirectory, 'lldb.log'));
+const components = archive.soundboards?.filters?.length;
 if (own.schema !== 1 || own.sourceArchiveSha256 !== sha(archiveBytes) || own.numericalInputFileCount !== 1 ||
     own.nativeCapturesUsedForPrediction !== false || own.nativeTargetBuffersUsedForPrediction !== false ||
-    own.groups?.length !== 3 || native.dispatchRecords?.length !== 3 || native.targetMutation !== false ||
+    !Number.isInteger(components) || components < 1 || components > 64 ||
+    own.groups?.length !== components || native.dispatchRecords?.length !== components || native.targetMutation !== false ||
     native.hardwareBreakpoints !== 1 || native.runStatus?.terminal !== true || native.runStatus.exitStatus !== 0 ||
     !Array.isArray(native.errors) || native.errors.length || !Array.isArray(native.tripletErrors) || native.tripletErrors.length ||
     /could not read|corrupt (?:FXP file|archive)|marap_oo\.hh|Traceback/i.test(log.toString()))
@@ -21,10 +23,23 @@ function argument(name) {
   if (launch.arguments?.filter(x => x === name).length !== 1) throw new Error('Unique native argument required: ' + name);
   return launch.arguments[launch.arguments.indexOf(name) + 1];
 }
-if (argument('--fxp') !== launch.presetPath || sha(fs.readFileSync(launch.presetPath)) !== launch.presetSha256 ||
-    archive.sources?.presetSha256 !== launch.presetSha256 || Number(argument('--rate')) !== archive.runtimeRates?.renderRate ||
+const factoryPreset = archive.sources?.factoryPreset;
+if (factoryPreset) {
+  if (argument('--preset') !== factoryPreset.name || launch.factoryPreset !== factoryPreset.name ||
+      launch.arguments.includes('--fxp') || launch.factoryStateSha256 !== factoryPreset.stateSha256 ||
+      !/^[a-f0-9]{64}$/.test(factoryPreset.stateSha256) ||
+      sha(fs.readFileSync(launch.resourcePath)) !== archive.sources.resourceSha256 ||
+      archive.sources.resourceSha256 !== 'd8383d3910cb17cda98075acccfeb9e3829b0ad34a6af1fc1cde67484c805d3d')
+    throw new Error('Factory name, complete state digest and native resource binding required');
+} else if (argument('--fxp') !== launch.presetPath || sha(fs.readFileSync(launch.presetPath)) !== launch.presetSha256 ||
+    archive.sources?.presetSha256 !== launch.presetSha256 || launch.arguments.includes('--preset'))
+  throw new Error('Matching native FXP required');
+if (Number(argument('--rate')) !== archive.runtimeRates?.renderRate ||
     argument('--multicore') !== '0' || !launch.arguments.includes('--no-prefs'))
   throw new Error('Preset and render context must bind the generator to this native oracle');
+const channels = archive.microphones?.output?.records?.filter(r => r.type === 1).length;
+if (!Number.isInteger(channels) || channels < 1 || channels > 64)
+  throw new Error('Explicit ordinary channel count required');
 function read(directory, descriptor) {
   if (!descriptor || path.basename(descriptor.file) !== descriptor.file) throw new Error('Invalid response descriptor');
   const bytes = fs.readFileSync(path.join(directory, descriptor.file));
@@ -36,8 +51,8 @@ function read(directory, descriptor) {
 }
 const comparisons = own.groups.flatMap((group, i) => {
   const target = native.dispatchRecords[i];
-  if (group.component !== i || target.number !== i || group.responses?.length !== 3 || target.outputs?.length !== 3 ||
-      group.normalizations?.length !== 3) throw new Error('All nine chronological source-group/channel responses required');
+  if (group.component !== i || target.number !== i || group.responses?.length !== channels || target.outputs?.length !== channels ||
+      group.normalizations?.length !== channels) throw new Error('All chronological source-group/channel responses required');
   return group.responses.map((response, channel) => {
     const actual = target.outputs[channel], a = read(generatedDirectory, response), b = read(nativeDirectory, actual.data);
     if (a.length !== response.length * 4 || b.length !== actual.length * 4)
@@ -56,11 +71,11 @@ const comparisons = own.groups.flatMap((group, i) => {
   });
 });
 const passed = comparisons.every(c => !c.mismatches && c.normalizationMatches && c.outputRateMatches);
-const result = {schema: 'pianoteq-generated-soundboard-triplets-pass261', passed,
+const result = {schema: 'pianoteq-generated-soundboard-triplets-v2', passed, channels, components,
   values: comparisons.reduce((sum, c) => sum + c.generatedValues, 0), comparisons,
   sourceArchiveSha256: sha(archiveBytes), generatedManifestSha256: sha(manifestBytes), nativeCaptureSha256: sha(captureBytes),
   launchSha256: sha(launchBytes), nativeLogSha256: sha(log),
-  nativeCapturesUsedForPrediction: false, nativeBoundary: 'completed-dispatch-triplets',
+  nativeCapturesUsedForPrediction: false, nativeBoundary: 'completed-dispatch-groups',
   modelNodeOwnershipVerifiedHere: false, allModelFamiliesAndConfigurationsVerified: false,
   completeVoiceVerified: false, finalStereoAudioVerified: false};
 fs.writeFileSync(output, JSON.stringify(result, null, 2) + '\n', {flag: 'wx', mode: 0o600});

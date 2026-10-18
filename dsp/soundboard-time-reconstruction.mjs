@@ -7,12 +7,12 @@ const log10 = new Float32Array(new Uint32Array([0x40135d8e]).buffer)[0];
 export function reconstructSoundboardTime(input, prefix, inverse) {
   const {start, end, length: n} = prefix;
   if (!(input instanceof Float32Array) || input.some((v) => !Number.isFinite(v)) ||
-      ![16384, 32768].includes(n) || !Number.isInteger(start) || !Number.isInteger(end) ||
+      ![8192, 16384, 32768].includes(n) || !Number.isInteger(start) || !Number.isInteger(end) ||
       start < 0 || end <= start || end > input.length || end - start > n ||
       !(inverse.inverseInput instanceof Float32Array) || inverse.inverseInput.length !== n ||
       !(inverse.inverseOutput instanceof Float32Array) || inverse.inverseOutput.length !== n ||
       [inverse.inverseInput, inverse.inverseOutput].some((v) => v.some((x) => !Number.isFinite(x)))) {
-    throw new RangeError('Finite FFT16384 or FFT32768 inverse and response span required');
+    throw new RangeError('Finite FFT8192, FFT16384 or FFT32768 inverse and response span required');
   }
   const span = end - start;
   const original = new Float32Array(n + 2);

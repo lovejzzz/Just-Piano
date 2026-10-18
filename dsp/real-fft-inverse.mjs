@@ -4,7 +4,7 @@ import {buildRealCoreTwiddles32} from './real-fft-core.mjs';
 import {buildRealFinalizeCoefficients128} from './real-fft-finalize.mjs';
 const f=Math.fround,root2=f(Math.SQRT2);
 function preprocessInverseReal(input,e){
- if(![128,1024,16384,32768].includes(input.length)||e.length!==input.length*3/4)throw new Error('Unverified inverse real FFT size');
+ if(![128,1024,8192,16384,32768].includes(input.length)||e.length!==input.length*3/4)throw new Error('Unverified inverse real FFT size');
  const out=new Float32Array(input.length);
  for(let block=0;block<input.length/32;block++)for(let lane=block?0:1;lane<4;lane++){
   const base=block*32,z=j=>input[base+4*j+lane];
@@ -91,6 +91,17 @@ export function inverseRealCore4096(input,wa){
 }
 export function preprocessInverseReal32768(input,e){
  if(input.length!==32768)throw new Error('32768-point input required');return preprocessInverseReal(input,e);
+}
+export function preprocessInverseReal8192(input,e){
+ if(input.length!==8192)throw new Error('8192-point input required');return preprocessInverseReal(input,e);
+}
+export function inverseRealCore2048(input,wa){
+ if(input.length!==8192||wa.length!==2048)throw new Error('FFT2048 inverse core shape required');
+ let a=backwardStage(input,1024,1,2,wa,0);
+ for(const [ido,l1,offset] of [[256,2,1024],[64,8,1792],[16,32,1984],[4,128,2032],[1,512,2044]]){
+  a=backwardStage(a,ido,l1,4,wa,offset);
+ }
+ return a;
 }
 export function inverseRealCore8192(input,wa){
  if(input.length!==32768||wa.length!==8192)throw new Error('FFT8192 inverse core shape required');
