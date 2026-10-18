@@ -16,5 +16,6 @@ export function initializeSoundboardFromConfig(bytes, bridge) {
   const word = new Uint32Array([0x3f9a362c]);
   const conversion = {mode: Number(mode === 2), speed: get(0x88), density: new Float32Array(word.buffer)[0]};
   const matrixControls = {method: get(0x28), baseScale: get(0x98), bridgeScaleAdd: get(0x9c), contrast: get(0xa0)};
-  return {grid, excitation, excitationParameters: [amplitude, width], propagationControls, conversion, matrixControls};
+  const observationControls = {planeHeight: get(0x34), speed: get(0x88), flags: Number(mode === 2)};
+  return {grid, excitation, excitationParameters: [amplitude, width], propagationControls, conversion, matrixControls, observationControls};
 }

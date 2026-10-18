@@ -35,11 +35,18 @@ for (let group = 0; group < 3; group++) {
       replay.sourceMatricesUsedForPrediction !== false || replay.matrixComparisons?.length !== 2)) {
     throw new Error('Configuration initialization or matrix construction not used');
   }
+  if (runtime.observationConstructionInputs && (!replay.observationGroupsConstructedFromGeometry ||
+      replay.sourceObservationGroupsUsedForPrediction !== false || replay.observationComparisons?.length !== 6)) {
+    throw new Error('Independent observation construction not used');
+  }
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
     sourceMatricesConstructedFromConfiguration: replay.sourceMatricesConstructedFromConfiguration,
     sourceMatricesUsedForPrediction: replay.sourceMatricesUsedForPrediction,
+    observationComparisons: replay.observationComparisons,
+    observationGroupsConstructedFromGeometry: replay.observationGroupsConstructedFromGeometry,
+    sourceObservationGroupsUsedForPrediction: replay.sourceObservationGroupsUsedForPrediction,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
   for (let channel = 0; channel < 3; channel++) {
@@ -59,7 +66,9 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   nodeOracleCapturedInOneProcess: true, sourceGroupsCapturedInSeparateProcesses: true,
   sourceMatricesConstructedFromConfiguration: groupReports.every((g) => g.sourceMatricesConstructedFromConfiguration),
   sourceMatricesUsedForPrediction: groupReports.some((g) => g.sourceMatricesUsedForPrediction),
-  observationGroupsStillCaptured: true,
+  observationGroupsConstructedFromGeometry: groupReports.every((g) => g.observationGroupsConstructedFromGeometry),
+  sourceObservationGroupsUsedForPrediction: groupReports.some((g) => g.sourceObservationGroupsUsedForPrediction),
+  observationGeometryStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
   completeVoiceVerified: false, finalStereoAudioVerified: false}, null, 2));
 if (!passed) process.exitCode = 1;
