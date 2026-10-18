@@ -13,6 +13,9 @@ import { buildCabinetBanksFromIrPack } from './cabinet-bank-source.mjs';
 import { CabinetConvolution64 } from './cabinet-convolution.mjs';
 import { DryStereoPost64 } from './dry-stereo-post.mjs';
 import { fma32 } from './modal-kernel.mjs';
+import { GlobalPedalControl } from './global-pedal-control.mjs';
+import { GlobalControlProducer } from './global-control-producer.mjs';
+import { GlobalKeyMapping } from './global-key-mapping.mjs';
 
 const word = new DataView(new ArrayBuffer(4));
 const fromBits = x => { word.setUint32(0, x, true); return word.getFloat32(0, true); };
@@ -44,12 +47,30 @@ export class ObservedVoiceStereo64 {
     const banks = buildCabinetBanksFromIrPack(irPack);
     this.cabinet = new CabinetConvolution64(banks.head, banks.tail);
     this.post = new DryStereoPost64(structuredClone(profile.post));
+    if (profile.globalCoefficientProducer) {
+      const source = profile.globalCoefficientProducer;
+      this.coefficientProducer = new GlobalControlProducer(source.producer);
+      this.coefficientMapper = new GlobalKeyMapping(source.keys, source.producer, this.coefficientProducer);
+      this.globalScalar = new GlobalPedalControl({...profile.globalScalarProfile,sampleRate:48000,samples:64});
+    }
+  }
+
+  updateCoefficients(input) {
+    const curve = this.profile.globalCoefficientProducer.curve;
+    this.coefficientMapper.mapKeys(input.rawKeys, input.flags, curve);
+    if (input.keyMappingOnly) return;
+    const control = this.globalScalar.process(input.pedal, input.extraPedal);
+    if (!control.shouldUpdate) throw Error('Active global coefficient branch required');
+    this.lastRawGlobalControl = control.output;
+    const result = this.coefficientMapper.mapGlobal(control.output, curve);
+    for (const update of result.updates) this.modal[update.kernel].setModeCoefficients(update.index, update.arguments);
   }
 
   process64(contributors, control) {
-    if (this.block >= 2320 || control.keys.length !== this.keys.length || control.modalVersions.length !== 3 || control.driveGain !== 0 ||
+    if (this.block >= 2320 || control.keys.length !== this.keys.length || (!this.coefficientMapper && control.modalVersions?.length !== 3) || control.driveGain !== 0 ||
         control.routeGain !== 1 || control.cabinetMode !== 1 || JSON.stringify(control.cabinetGain) !== '[1,1,0,0]')
       throw Error('Complete inspected continuous block required');
+    if (this.coefficientMapper) this.updateCoefficients(control.globalCoefficientInput);
     const monoInputs = accumulateKeyMono64(contributors);
     for (const item of contributors) {
       if (item.spatial.length !== 12 || item.mappings.length !== 4 || item.groupGains.length !== 3 || item.selectionMask.some(x => x !== 1))
@@ -72,9 +93,12 @@ export class ObservedVoiceStereo64 {
     const inputs = [first, monoInputs.secondModal, monoInputs.thirdModal];
     let body = bodyBefore;
     this.modal.forEach((model, i) => {
-      const coefficients = this.profile.modal[i].coefficientVersions[control.modalVersions[i]];
-      if (!coefficients) throw Error('Bound global modal coefficients required');
-      model.setCoefficients(coefficients); body = model.process64(inputs[i], body);
+      if (!this.coefficientMapper) {
+        const coefficients = this.profile.modal[i].coefficientVersions[control.modalVersions[i]];
+        if (!coefficients) throw Error('Bound global modal coefficients required');
+        model.setCoefficients(coefficients);
+      }
+      body = model.process64(inputs[i], body);
     });
     const direct = add(add(monoInputs.direct, body, control.directGain), drive, control.directScratchGain);
     const mono = add(body, drive, control.scratchGain);

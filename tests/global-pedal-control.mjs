@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';import {GlobalPedalControl} from '../dsp/global-pedal-control.mjs';
+const profile={sampleRate:48000,samples:64,threshold:0.5,forceExtra:0,bodyEnabled:1,excitationEnabled:0};
+const x=new GlobalPedalControl(profile);assert.equal(x.process(1,0).output,1);assert.equal(x.previousAbove,1);
+assert.equal(x.process(0,1).output,0);assert.equal(x.rearmRemaining,14336);
+for(let i=0;i<224;i++)assert.equal(x.process(0,1).output,0);
+assert.equal(x.rearmRemaining,0);assert.equal(x.process(0,1).output,1);
+x.hold(0.75,32);assert.equal(x.process(0,0).output,0.75);assert.equal(x.holdRemaining,0);assert.equal(x.process(0,0).output,0);
+const forced=new GlobalPedalControl({...profile,forceExtra:1});assert.equal(forced.process(0,0).output,1);
+assert.equal(new GlobalPedalControl({...profile,bodyEnabled:0}).process(0,0).shouldUpdate,false);
+console.log('Synthetic scalar timing, selection, falling edge, held override and update gate passed');
