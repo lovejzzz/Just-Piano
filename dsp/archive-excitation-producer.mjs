@@ -15,6 +15,7 @@ import {archiveExcitationHistory} from './archive-excitation-history.mjs';
 import {archiveExcitationSpectrum} from './archive-excitation-spectrum.mjs';
 import {archiveExcitationExtraTables} from './archive-excitation-extra-tables.mjs';
 import {archiveExcitationBaseTables} from './archive-excitation-base-tables.mjs';
+import {archiveExcitationControl30} from './archive-excitation-control30.mjs';
 
 export function createArchiveExcitationProducer({baseFields, presetFields, runtime, events}) {
   if (runtime?.note !== 69 || runtime.instrumentMode !== 1 || runtime.hostMode !== 0 ||
@@ -41,6 +42,9 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
   }
   const curves = managerEventCurvesFromArchive({baseFields: base.fields, presetFields: preset.decoded_tail.fields});
   const baseTableModel = archiveExcitationBaseTables({baseFields: base.fields, note: 69, primarySource: sources.get(0)});
+  const control30Model = archiveExcitationControl30({baseFields: base.fields, presetFields: preset.decoded_tail.fields,
+    note: 69, rows: sources.get(0).rows});
+  extraTableModel.control30 = control30Model.table;
   const eventTable = buildManagerEventTables({...curves, useGlobal: false, runtimeMode: 'linear-clamp'}).noteOn;
   const a = new Map(preset.decoded_tail.fields.map(r => [r.object_offset, r.value]));
   const shape = linearModelCurve(a.get(0xed0), 69, {runtimeMode: 'linear-clamp'});
@@ -66,6 +70,7 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     hardnessControlsFromArchive: true, supportHistoryControlsFromArchive: true, directionBranchStillExplicit: true,
     spectrumBaseControlsFromArchive: true, spectrumExpressionAndNonzeroSlopeCoverageStillIncomplete: true,
     floorAndBlendSpectrumTablesFromArchive: true, otherSpectrumTablesStillObserved: true,
+    control30SpectrumTableFromArchive: true, computedExtraSpectrumTables: ['floor', 'blend', 'control30'],
     baseSpectrumTablesFromArchiveAndOwnInitialSource: true, spectrumCoordinatesFromArchive: true,
     sameRunModelGenerationVerified: false, wholeEngineEquivalent: false});
   return {

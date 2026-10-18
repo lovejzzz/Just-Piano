@@ -76,7 +76,7 @@ assert.equal(sourceValues, 2160); assert.equal(velocityValues, 5); assert.equal(
 assert.equal(blendValues, 40);
 assert.equal(hardnessControlValues, 50); assert.equal(historyValues, 160);
 assert.equal(spectrumValues, 80);
-assert.equal(extraTableValues, 250);
+assert.equal(extraTableValues, 510);
 assert.equal(baseTableValues, 180); assert.equal(coordinateValues, 260);
 assert.throws(() => own.beginVelocity({stage: 'before', epoch: 0, note: 69}), /Chronological/);
 const result = {passed: true, sourceValues, velocityValues, randomWords, hardnessValues, blendValues, historyValues, hardnessControlValues, spectrumValues, extraTableValues, baseTableValues, coordinateValues, deniedAccesses, originalObservationFileReads,
