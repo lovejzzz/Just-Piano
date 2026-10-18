@@ -62,6 +62,8 @@ export function writeTerminalArtifact(directory, report, reportFile, args) {
     arguments: args, sourceClosure: closure(), audioSha256: sha(bytes), audioBytes: bytes.length, index,
     fixture: {midiSha256: archive.midiSha256, presetSha256: archive.presetSha256, resourceSha256: archive.resourceSha256},
     nativeReleaseCuePrimaryWaveformUsedForPrediction: !report.computedReleaseWaveform,
+    nativeKind1WaveformsUsedForPrediction: !report.computedAuxiliaryWaveforms,
+    nativeKind1PointerSelectionUsedForPrediction: !report.computedAuxiliaryWaveforms,
     nativeExtraGainUsedForPrediction: !report.computedExtraGain,
     nativeDampingShapeAndBandsUsedForPrediction: !report.computedDampingProfile,
     nativeHeaderRatiosUsedForPrediction: !report.computedHeaderRatios,
@@ -91,6 +93,8 @@ export function readTerminalArtifact(directory, fixture) {
       report.captureSha256 !== m.inputs[0].sha256 || report.preparedSourceBridge?.historicalPredictionReportRequired !== false)
     throw Error('Passed archive-source producer required');
   if(m.nativeReleaseCuePrimaryWaveformUsedForPrediction!==!report.computedReleaseWaveform||report.computedReleaseWaveform&&report.auxiliarySourceProducer?.releaseCuePrimaryWaveformStillObserved!==false)throw Error('Explicit release waveform prediction boundary required');
+  if(m.nativeKind1WaveformsUsedForPrediction!==!report.computedAuxiliaryWaveforms||m.nativeKind1PointerSelectionUsedForPrediction!==!report.computedAuxiliaryWaveforms||report.computedAuxiliaryWaveforms&&
+    (report.auxiliarySourceProducer?.nativeKind1WaveformsUsedForPrediction!==false||report.auxiliarySourceProducer?.nativeKind1PointerSelectionUsedForPrediction!==false||report.auxiliarySourceProducer?.sourceSelectionFromMidiAndOwnDetunes!==true||report.auxiliarySourceProducer?.nativeSourceTablesStillObserved!==false))throw Error('Explicit generated auxiliary bank prediction boundary required');
   if(m.nativeExtraGainUsedForPrediction!==!report.computedExtraGain)throw Error('Explicit extra gain prediction boundary required');
   if(m.nativeDampingShapeAndBandsUsedForPrediction!==!report.computedDampingProfile)throw Error('Explicit damping profile prediction boundary required');
   if(m.nativeHeaderRatiosUsedForPrediction!==!report.computedHeaderRatios)throw Error('Explicit header ratio prediction boundary required');

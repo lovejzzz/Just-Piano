@@ -3,15 +3,21 @@
   "baselineCodeCommit": "aa93d3b3a37a252e6998f1c685f0436a19c4fd18",
   "objectiveComplete": false,
   "generatedAuxiliaryWaveformEvidence": {
-    "pass": 313,
+    "pass": 314,
     "generatedEntries": 125,
     "nativeSourceTablesCompared": 9,
     "exactFloat32Samples": 864000,
     "negativeTargetFailsWithUnchangedGeneratedHashes": true,
-    "productionSourceSelectionOwned": false,
-    "integratedIntoStereo": false,
-    "newCompleteStereoComparison": false,
-    "reference": "docs/pianoteq-generated-auxiliary-waveforms-pass313.md"
+    "continuousBindingSampleChecks": 2880000,
+    "primarySecondaryIdentitiesComputed": true,
+    "nativeBankPointersUsedForPrediction": false,
+    "detuneInitializationControlsStillObserved": true,
+    "auxiliaryGainsDelayAndFiltersStillObserved": true,
+    "integratedIntoStereo": true,
+    "newCompleteStereoComparison": true,
+    "completeExactNativePCMFrames": 148224,
+    "independentMidiToStereo": false,
+    "reference": "docs/pianoteq-owned-auxiliary-source-selection-pass314.md"
   },
   "primaryBaseline": {
     "model": "steinwayny",
