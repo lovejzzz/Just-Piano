@@ -24,22 +24,26 @@ import {reconstructSoundboardTime} from './soundboard-time-reconstruction.mjs';
 import {normalizeSoundboardResponses} from './soundboard-response-normalization.mjs';
 import {createSoundboardResamplingPlan,resampleSoundboardResponse} from './soundboard-resampling.mjs';
 import {finalizeSoundboardDispatch} from './soundboard-dispatch-output.mjs';
+import {constructSoundboardFamilyPolicy} from './soundboard-family-policy.mjs';
 
 export function generateSoundboardArchiveIRs(archive){
   if(!archive?.runtimeRates||!archive.microphones||!archive.modelFeatures)
     throw new RangeError('Complete archive, microphone and explicit render inputs required');
   const sources=constructSoundboardArchiveSources(archive);
+  const familyPolicy=constructSoundboardFamilyPolicy(archive);
   const groups=sources.components.map((source,component)=>{
-    const configuration=constructSoundboardModelConfig({...source,component,runtimeRates:archive.runtimeRates});
+    const configuration=constructSoundboardModelConfig({...source,component,runtimeRates:archive.runtimeRates,
+      familyPolicy,rootLidEnabled:familyPolicy.rootLidEnabled});
     const view=new DataView(configuration.config.buffer),value=offset=>view.getFloat32(offset,true);
-    const microphones=constructSoundboardMicrophoneSources(archive.microphones,source.model);
+    const microphones=constructSoundboardMicrophoneSources(archive.microphones,source.model,familyPolicy);
     const initialized=initializeSoundboardFromConfig(configuration.initializationConfig,configuration.bridge);
     const matrices=constructSoundboardMatrices(initialized.grid,initialized.matrixControls);
     const receivers=constructSoundboardReceiverGeometry({grid:initialized.grid,shape:matrices.shape,
       ...initialized.receiverControls,primary:microphones.primary,offsets:microphones.offsets,parents:microphones.parents,
       offsetScale:value(0x1c8),mirror:configuration.config[0x1d0]});
     const processing=constructSoundboardProcessingConfig({archive,microphones,geometry:receivers.geometry});
-    const gains=constructSoundboardLidGains({curve:source.lidCurve,preset:source.preset,modelFamily:0}).output;
+    const gains=constructSoundboardLidGains({curve:source.lidCurve,preset:source.preset,modelFamily:familyPolicy.modelFamily,
+      familyPolicy,rootLidEnabled:familyPolicy.rootLidEnabled}).output;
     const controls=soundboardScalarControls(initialized.propagationControls);
     const observations=constructSoundboardObservationGroups({grid:initialized.grid,geometry:receivers.geometry,gains,
       ...initialized.observationControls,steps:controls.steps,phaseMode:Boolean(configuration.config[0x1cc])}).observations;

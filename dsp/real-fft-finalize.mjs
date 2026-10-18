@@ -3,7 +3,7 @@ import {fma32} from './modal-kernel.mjs';
 import {forwardRealCore32,buildRealCoreTwiddles32} from './real-fft-core.mjs';
 const f=Math.fround,halfRoot=f(Math.SQRT1_2);
 function finalizeReal(input,e){
- if(![128,1024,8192,16384,32768].includes(input.length)||e.length!==input.length*3/4)throw new Error('Unverified real FFT finalization size');
+ if(![128,1024,2048,8192,16384,32768].includes(input.length)||e.length!==input.length*3/4)throw new Error('Unverified real FFT finalization size');
  const out=new Float32Array(input.length);
  for(let block=0;block<input.length/32;block++){
   const base=block*32;
@@ -31,6 +31,7 @@ function finalizeReal(input,e){
 export function finalizeReal128(input,e){if(input.length!==128)throw new Error('128-point input required');return finalizeReal(input,e);}
 export function finalizeReal1024(input,e){if(input.length!==1024)throw new Error('1024-point input required');return finalizeReal(input,e);}
 export function finalizeReal8192(input,e){if(input.length!==8192)throw new Error('8192-point input required');return finalizeReal(input,e);}
+export function finalizeReal2048(input,e){if(input.length!==2048)throw new Error('2048-point input required');return finalizeReal(input,e);}
 export function finalizeReal16384(input,e){if(input.length!==16384)throw new Error('16384-point input required');return finalizeReal(input,e);}
 export function finalizeReal32768(input,e){if(input.length!==32768)throw new Error('32768-point input required');return finalizeReal(input,e);}
 export function forwardReal128(input,e=buildRealFinalizeCoefficients128()){return finalizeReal128(forwardRealCore32(input,buildRealCoreTwiddles32()),e);}

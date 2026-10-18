@@ -8,14 +8,16 @@ const f32Copies=[[0x24,0x154],[0x28,0x158],[0x30,0x54],[0x3c,0x60],[0x60,0x108],
  [0x140,0x1dc],[0x144,0x1e0],[0x148,0x1e4],[0x14c,0x150]];
 
 export function constructSoundboardModelConfig({model,preset,bridge,propagationModes,component,
- linearPosition=false,twoPosition=false,rootLidEnabled=null,mode=0,runtimeRates=null}){
+ linearPosition=false,twoPosition=false,rootLidEnabled=null,mode=0,runtimeRates=null,familyPolicy=null}){
  if(!(model instanceof Uint8Array)||model.byteLength<0x1e8||!(preset instanceof Uint8Array)||preset.byteLength<0x1840||
   !(bridge instanceof Float32Array)||bridge.length!==4||bridge.some(v=>!Number.isFinite(v))||
   !(propagationModes instanceof Float32Array)||propagationModes.length!==3||propagationModes.some(v=>!Number.isFinite(v))||
   !Number.isInteger(component)||component<0||component>0xffffffff||mode!==0||
   typeof linearPosition!=='boolean'||typeof twoPosition!=='boolean')throw new RangeError('Supported model/preset source configuration required');
  const m=new DataView(model.buffer,model.byteOffset,model.byteLength),p=new DataView(preset.buffer,preset.byteOffset,preset.byteLength);
- if(m.getUint32(0x98,true)!==0)throw new RangeError('Alternate model geometry family not verified');
+ const family=m.getUint32(0x98,true);
+ if(![0,1].includes(family)||(family===1&&familyPolicy?.modelFamily!==1)||
+  (familyPolicy&&familyPolicy.modelFamily!==family))throw new RangeError('Explicit supported model geometry family policy required');
  const output=new Uint8Array(0x220),v=new DataView(output.buffer),computedOffsets=[];
  const setWord=(offset,word)=>{v.setUint32(offset,word,true);computedOffsets.push(offset);};
  const setFloat=(offset,value)=>{value=f(value);if(!Number.isFinite(value))throw new RangeError('Non-finite configuration scalar');
@@ -27,7 +29,8 @@ export function constructSoundboardModelConfig({model,preset,bridge,propagationM
  const height=m.getFloat32(0x50,true),stringLength=p.getFloat32(0xf98,true);
  setFloat(0x38,height<0?Math.abs(f(height*stringLength)):height);
  if(!(v.getFloat32(0x38,true)>0&&v.getFloat32(0x38,true)<100))throw new RangeError('Native soundboard height bounds exceeded');
- setFloat(0x34,m.getFloat32(0x58,true));
+ const planeShift=familyPolicy?.uprightRoot?Math.max(new Float32Array(new Uint32Array([0x3a83126f]).buffer)[0],familyPolicy.verticalOffset):0;
+ setFloat(0x34,f(m.getFloat32(0x58,true)+planeShift));
  let lidEnabled=p.getUint32(0x1024,true)!==0;
  if(!lidEnabled){if(typeof rootLidEnabled!=='boolean')throw new RangeError('Explicit root lid enable flag required');lidEnabled=rootLidEnabled;}
  setFloat(0x40,lidEnabled?p.getFloat32(0x1020,true):1);
@@ -43,7 +46,7 @@ export function constructSoundboardModelConfig({model,preset,bridge,propagationM
  // Mode-zero construction always chooses this inspected float32 separation.
  setWord(0x1c8,0x3c0b4396);
  output[0x1cc]=1;
- output[0x1cf]=0;
+ output[0x1cf]=Number(family===1);
  output[0x1d0]=Number(m.getUint32(0x9c,true)!==0);
  return {config:output,initializationConfig:output.slice(0,0x130),bridge:bridge.slice(),
   computedOffsets:computedOffsets.sort((a,b)=>a-b),computedBytes:[0x13c,0x13d,0x1cc,0x1cf,0x1d0],

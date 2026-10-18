@@ -1,6 +1,6 @@
 // Ordinary output kind 3; special binaural/line-output identities are rejected.
 import {nativeScalarSinCos} from './native-scalar-sincos.mjs';
-export function constructSoundboardMicrophoneSources(inputs, model) {
+export function constructSoundboardMicrophoneSources(inputs, model, familyPolicy=null) {
   const output=inputs?.output;
   if(inputs?.schema!==1||output?.version!==3||output.kind!==3||output.matrix_version!==2||
     !Array.isArray(output.records)||!output.records.length||output.records.length>64||
@@ -12,12 +12,17 @@ export function constructSoundboardMicrophoneSources(inputs, model) {
   if(registry.size!==inputs.registry.length)throw new RangeError('Duplicate microphone registry identity');
   const active=output.records.map((r,index)=>({...r,index})).filter(r=>r.type===1);
   if(!active.length)throw new RangeError('Active microphone required');
-  if(new DataView(model.buffer,model.byteOffset,model.byteLength).getUint32(0x98,true)!==0)
-    throw new RangeError('Ordinary family-zero microphone coordinates required');
+  const family=new DataView(model.buffer,model.byteOffset,model.byteLength).getUint32(0x98,true);
+  if(![0,1].includes(family)||(family===1&&familyPolicy?.modelFamily!==1)||
+    (familyPolicy&&familyPolicy.modelFamily!==family))
+    throw new RangeError('Explicit ordinary microphone geometry policy required');
   const primary=active.map(record=>{
     if(!Array.isArray(record.position)||record.position.length!==3||
       record.position.some(v=>!Number.isFinite(v)||!Number.isFinite(Math.fround(v))))throw new RangeError('Finite microphone position required');
-    return Float32Array.from(record.position);
+    const point=Float32Array.from(record.position);
+    if(family===1){const y=point[1];point[1]=point[2];point[2]=-y;
+      if(familyPolicy.uprightRoot)point[2]=Math.fround(familyPolicy.verticalOffset+point[2]);}
+    return point;
   });
   const defaultAmount=new DataView(model.buffer,model.byteOffset,model.byteLength).getFloat32(0x1d4,true);
   if(!Number.isFinite(defaultAmount))throw new RangeError('Finite default whitening amount required');
@@ -46,7 +51,9 @@ export function constructSoundboardMicrophoneSources(inputs, model) {
     const azimuth=Math.fround((Math.fround(record.angles[0])*Math.PI)/180+Math.PI/2);
     const elevation=Math.fround((Math.fround(record.angles[1])*Math.PI)/180);
     const vertical=nativeScalarSinCos(elevation),horizontal=nativeScalarSinCos(azimuth);
-    return Float32Array.of(Math.fround(vertical.cos*horizontal.cos),Math.fround(vertical.cos*horizontal.sin),vertical.sin);
+    const point=Float32Array.of(Math.fround(vertical.cos*horizontal.cos),Math.fround(vertical.cos*horizontal.sin),vertical.sin);
+    if(family===1){const y=point[1];point[1]=point[2];point[2]=-y;}
+    return point;
   });
   const parents=Uint32Array.from(active,(_,i)=>i);
   return {amounts,flags,mixes,curves,primary,offsets,parents,indices:active.map(r=>r.index),identities:active.map(r=>r.control),

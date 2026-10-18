@@ -14,7 +14,7 @@ assert.equal(own.nativeProcessingConfigurationUsedForConstruction,false);
 const reject=change=>{const a=fixture();change(a);assert.throws(()=>construct(a),RangeError);};
 reject(a=>a.mode=1);
 reject(a=>a.archive.modelFeatures.leadingSilencePresetOverride=1);
-reject(a=>a.archive.soundboards.filters[0].mode=1);
+reject(a=>a.archive.soundboards.filters[0].mode=2);
 reject(a=>a.microphones.mixes[0]=NaN);
 reject(a=>a.geometry.splice(2,1));
 console.log('processing configuration: paired channel metadata, blend policy and rejection checks passed');

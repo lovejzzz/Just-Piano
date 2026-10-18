@@ -21,7 +21,7 @@ export function constructSoundboardArchiveSources(archive){
   return {x,y,dimensions,mode:0,logX:0};
  };
  const components=archive.soundboards.filters.map((record,index)=>{
-  if(record.version!==9||record.flag100!==1||record.child108?.version!==5||record.mode!==0||
+  if(record.version!==9||record.flag100!==1||record.child108?.version!==5||![0,1].includes(record.mode)||
     !Number.isInteger(record.mode9c)||record.mode9c<0||record.mode9c>0xffffffff||record.curves?.length!==3)throw new RangeError('Supported direct soundboard component required');
   const child=record.child108,scalars=array(record.scalars,6,'component geometry'),primary=array(child.scalars20,13,'propagation scalars');
   const tail=array(child.scalars70,4,'child controls'),shaping=array(child.scalarsd4,3,'shaping scalars');

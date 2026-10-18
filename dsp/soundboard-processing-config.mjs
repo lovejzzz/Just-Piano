@@ -1,7 +1,7 @@
-// Mode-zero/family-zero producer policy. Numerical views contain no pointers.
+// Ordinary mode-zero producer policy. Numerical views contain no pointers.
 export function constructSoundboardProcessingConfig({archive,microphones,geometry,mode=0}){
   if(mode!==0||archive?.modelFeatures?.leadingSilencePresetOverride!==0||
-    archive.soundboards?.filters?.[0]?.mode!==0||!microphones||!Array.isArray(microphones.primary)||
+    ![0,1].includes(archive.soundboards?.filters?.[0]?.mode)||!microphones||!Array.isArray(microphones.primary)||
     !(microphones.mixes instanceof Float32Array)||!Array.isArray(geometry))
     throw new RangeError('Supported ordinary model processing policy required');
   const mainCount=microphones.primary.length;

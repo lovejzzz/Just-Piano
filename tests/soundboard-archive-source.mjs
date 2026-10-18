@@ -35,7 +35,7 @@ rejects(a=>a.presetFields.push({...a.presetFields[0]}));
 rejects(a=>a.presetFields.pop());
 rejects(a=>a.presetFields[0].value=1e100);
 rejects(a=>a.presetFields[3].value=2);
-rejects(a=>a.soundboards.filters[0].mode=1);
+rejects(a=>a.soundboards.filters[0].mode=2);
 rejects(a=>a.soundboards.filters[0].child108.scalars70.pop());
 rejects(a=>a.soundboards.filters[0].child108.curve78.version=3);
 rejects(a=>a.soundboards.filters[0].curves[2].indices=[0]);

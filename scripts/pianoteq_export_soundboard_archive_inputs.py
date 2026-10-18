@@ -35,7 +35,9 @@ def main():
     selected=[f for f in preset['decoded_tail']['fields'] if f['object_offset'] in (0xf98,0x1018,0x1020,0x1024)]
     if len(selected)!=4:raise ValueError('Complete preset scalar source fields required')
     result={'schema':1,'identity':args.identity,'baseVersion':base['version'],'soundboards':fields[0]['value'],
-        'modelFeatures':{'leadingSilencePresetOverride':features[0]['value']},
+        'modelFeatures':{'leadingSilencePresetOverride':features[0]['value'],
+            'rootType':base['metadata_type'],
+            'rootLidEnabled':next(f['value'] for f in base['fields'] if f['object_offset']==0x18c8)!=0},
         'presetFields':selected,'sources':{'resourceSha256':inventory['sha256'],'verifiedMemberCount':inventory['verified_member_md5_count'],
             'bank':args.bank,'bankMd5':member['md5'],'modelArchiveOffset':model['offset'],'modelArchiveBytes':model['bytes'],
             'presetSha256':preset['sha256']},'commercialInputsPrivate':True}

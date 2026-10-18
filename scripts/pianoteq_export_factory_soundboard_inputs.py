@@ -50,7 +50,8 @@ def export_factory_soundboard(resource, bank_name, preset_name, binary, render_r
     state = decoded[preset['state_start']:preset['end_offset']]
     return {'schema': 1, 'identity': preset['model_identity'], 'baseVersion': base['version'],
         'soundboards': fields[0x3d68]['value'],
-        'modelFeatures': {'leadingSilencePresetOverride': fields[0x3f90]['value']},
+        'modelFeatures': {'leadingSilencePresetOverride': fields[0x3f90]['value'],
+            'rootType': base['metadata_type'], 'rootLidEnabled': fields[0x18c8]['value'] != 0},
         'presetFields': selected,
         'sources': {'resourceSha256': RESOURCE_SHA256, 'bank': bank_name, 'bankMd5': member['md5'],
             'verifiedMemberCount': inventory['verified_member_md5_count'],
