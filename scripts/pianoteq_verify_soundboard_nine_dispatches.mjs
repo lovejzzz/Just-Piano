@@ -39,6 +39,10 @@ for (let group = 0; group < 3; group++) {
       replay.sourceObservationGroupsUsedForPrediction !== false || replay.observationComparisons?.length !== 6)) {
     throw new Error('Independent observation construction not used');
   }
+  if (runtime.receiverConstructionInputs && (!replay.receiverGeometryComputed || replay.finalReceiverCoordinatesUsedForPrediction !== false ||
+      replay.receiverComparisons?.length !== runtime.observationConstructionInputs.geometry.length)) {
+    throw new Error('Receiver geometry construction not used');
+  }
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -47,6 +51,9 @@ for (let group = 0; group < 3; group++) {
     observationComparisons: replay.observationComparisons,
     observationGroupsConstructedFromGeometry: replay.observationGroupsConstructedFromGeometry,
     sourceObservationGroupsUsedForPrediction: replay.sourceObservationGroupsUsedForPrediction,
+    receiverGeometryComputed: replay.receiverGeometryComputed,
+    finalReceiverCoordinatesUsedForPrediction: replay.finalReceiverCoordinatesUsedForPrediction,
+    receiverComparisons: replay.receiverComparisons,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
   for (let channel = 0; channel < 3; channel++) {
@@ -68,7 +75,9 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   sourceMatricesUsedForPrediction: groupReports.some((g) => g.sourceMatricesUsedForPrediction),
   observationGroupsConstructedFromGeometry: groupReports.every((g) => g.observationGroupsConstructedFromGeometry),
   sourceObservationGroupsUsedForPrediction: groupReports.some((g) => g.sourceObservationGroupsUsedForPrediction),
-  observationGeometryStillCaptured: true,
+  receiverGeometryComputed: groupReports.every((g) => g.receiverGeometryComputed),
+  finalReceiverCoordinatesUsedForPrediction: groupReports.some((g) => g.finalReceiverCoordinatesUsedForPrediction),
+  primaryReceiverConfigurationStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
   completeVoiceVerified: false, finalStereoAudioVerified: false}, null, 2));
 if (!passed) process.exitCode = 1;

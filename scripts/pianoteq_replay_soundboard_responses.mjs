@@ -21,6 +21,7 @@ import {finalizeSoundboardDispatch} from '../dsp/soundboard-dispatch-output.mjs'
 import {initializeSoundboardFromConfig} from '../dsp/soundboard-initialization.mjs';
 import {constructSoundboardMatrices} from '../dsp/soundboard-matrix-construction.mjs';
 import {constructSoundboardObservationGroups} from '../dsp/soundboard-observation-groups.mjs';
+import {constructSoundboardReceiverGeometry} from '../dsp/soundboard-receiver-geometry.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -106,15 +107,41 @@ if (runtime.initializationInputs) {
   }
 }
 const controls = soundboardScalarControls(propagationControls);
+const capturedMatrices = {
+  matrixA: normalizeSoundboardRows(JSON.parse(read(source.matrixA)).rows, stateSize),
+  matrixC: normalizeSoundboardRows(JSON.parse(read(source.matrixC)).rows, stateSize),
+};
+const constructedMatrices = initialization && constructSoundboardMatrices(initialization.grid, initialization.matrixControls);
+const floats = (d) => new Float32Array(Uint8Array.from(readDescriptor(d)).buffer);
+let constructedReceivers = null;
+const receiverComparisons = [];
+if (runtime.receiverConstructionInputs) {
+  const input = runtime.receiverConstructionInputs, target = runtime.observationConstructionInputs;
+  if (!initialization || !constructedMatrices || !target || input.state !== runtime.capturedSource?.state ||
+      input.state !== target.state) throw new Error('Same-run receiver configuration required');
+  constructedReceivers = constructSoundboardReceiverGeometry({grid: initialization.grid, shape: constructedMatrices.shape,
+    ...initialization.receiverControls, primary: input.primary.map(floats), offsets: input.offsets.map(floats),
+    parents: new Uint32Array(Uint8Array.from(readDescriptor(input.parents)).buffer),
+    offsetScale: input.offsetScale, mirror: input.mirror});
+  if (constructedReceivers.geometry.length !== target.geometry.length) throw new Error('Final receiver count differs');
+  constructedReceivers.geometry.forEach((g, i) => {
+    const oracle = target.geometry[i], coordinates = floats(oracle.coordinates);
+    let coordinateMismatches = 0, metadataMismatches = 0;
+    for (let j = 0; j < 3; j++) coordinateMismatches += Number(!Object.is(g.coordinates[j], coordinates[j]));
+    for (const key of ['amplitude', 'identity', 'channel', 'kind']) metadataMismatches += Number(!Object.is(g[key], oracle[key]));
+    receiverComparisons.push({receiver: i, coordinateMismatches, metadataMismatches,
+      predictedSha256: crypto.createHash('sha256').update(new Uint8Array(g.coordinates.buffer)).digest('hex')});
+  });
+}
+const receiverMismatchCount = receiverComparisons.reduce((sum, c) => sum + c.coordinateMismatches + c.metadataMismatches, 0);
 let constructedObservations = null;
 if (runtime.observationConstructionInputs) {
   const input = runtime.observationConstructionInputs;
   if (!initialization || input.state !== runtime.capturedSource?.state || ![0, 1].includes(input.phaseMode)) {
     throw new Error('Same-run initialized observation inputs required');
   }
-  const floats = (d) => new Float32Array(Uint8Array.from(readDescriptor(d)).buffer);
   constructedObservations = constructSoundboardObservationGroups({grid: initialization.grid,
-    geometry: input.geometry.map((g) => ({...g, coordinates: floats(g.coordinates)})), gains: floats(input.gains),
+    geometry: constructedReceivers?.geometry ?? input.geometry.map((g) => ({...g, coordinates: floats(g.coordinates)})), gains: floats(input.gains),
     ...initialization.observationControls, steps: controls.steps, phaseMode: Boolean(input.phaseMode)});
 }
 const observations = constructedObservations?.observations ?? capturedObservations;
@@ -143,11 +170,6 @@ const observationComparisons = constructedObservations ? observations.map((obser
 }) : [];
 const observationMismatchCount = observationComparisons.reduce((sum, c) => sum + Number(!c.lengthMatches) +
   c.arrays.reduce((n, a) => n + a.mismatches, 0), 0);
-const capturedMatrices = {
-  matrixA: normalizeSoundboardRows(JSON.parse(read(source.matrixA)).rows, stateSize),
-  matrixC: normalizeSoundboardRows(JSON.parse(read(source.matrixC)).rows, stateSize),
-};
-const constructedMatrices = initialization && constructSoundboardMatrices(initialization.grid, initialization.matrixControls);
 const matrixComparisons = constructedMatrices ? ['matrixA', 'matrixC'].map((name) => {
   const rows = constructedMatrices[name], target = capturedMatrices[name];
   let structureMismatches = 0, coefficientMismatches = 0, compared = 0;
@@ -414,10 +436,13 @@ const sameRunSource = Boolean(provenance &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
 const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons, ...dispatchComparisons];
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length + initializationControlMismatches.length;
-console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount,
+console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
+  receiverComparisons, receiverGeometryComputed: Boolean(constructedReceivers),
+  finalReceiverCoordinatesUsedForPrediction: !constructedReceivers,
+  primaryReceiverConfigurationStillCaptured: Boolean(constructedReceivers),
   observationComparisons, observationGroupsConstructedFromGeometry: Boolean(constructedObservations),
   sourceObservationGroupsUsedForPrediction: !constructedObservations,
-  observationGeometryStillCaptured: Boolean(constructedObservations),
+  observationGeometryStillCaptured: Boolean(constructedObservations) && !constructedReceivers,
   matrixComparisons, sourceMatricesConstructedFromConfiguration: Boolean(constructedMatrices),
   sourceMatricesUsedForPrediction: !constructedMatrices,
   matrixSolverIterations: constructedMatrices?.solve.iterations ?? null,
@@ -463,4 +488,4 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   nativeBlockCacheUsedForPrediction: false, observationGroupsStillCaptured: !constructedObservations,
   sameRunCapturedSourceBound: sameRunSource,
   sourceMatricesConstructedFromModel: false, fullIrNodesGenerated: false}, null, 2));
-if (allComparisons.some((c) => c.mismatches) || controlMismatchCount || matrixMismatchCount || observationMismatchCount) process.exitCode = 1;
+if (allComparisons.some((c) => c.mismatches) || controlMismatchCount || matrixMismatchCount || observationMismatchCount || receiverMismatchCount) process.exitCode = 1;
