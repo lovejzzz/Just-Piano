@@ -11,6 +11,7 @@ import {archiveExcitationDecayControls, excitationDecayFromControls, scaleExcita
 import {archiveFrequencyVariationControls, secondaryFrequencySeed, varyExcitationFrequencies} from './excitation-frequency-variation.mjs';
 import {archiveExcitationBlend} from './archive-excitation-blend.mjs';
 import {archiveExcitationHistory} from './archive-excitation-history.mjs';
+import {archiveExcitationSpectrum} from './archive-excitation-spectrum.mjs';
 
 export function createArchiveExcitationProducer({baseFields, presetFields, runtime, events}) {
   if (runtime?.note !== 69 || runtime.instrumentMode !== 1 || runtime.hostMode !== 0 ||
@@ -25,6 +26,7 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
   const historyModel = archiveExcitationHistory({baseFields: base.fields, note: 69,
     sampleRate: runtime.sourceOptions[0].sampleRate, noteBranch: runtime.noteBranch});
   const hardnessControls = {...historyModel.hardnessControls, fallbackFrequency: archiveTunedNote(context, {note: 69}).frequency};
+  const spectrumModel = archiveExcitationSpectrum({baseFields: base.fields, note: 69, noteBranch: runtime.noteBranch});
   const sources = new Map([0, 1].map(mode => {
     const options = structuredClone(runtime.sourceOptions[mode]);
     if (options.instrumentMode !== runtime.instrumentMode || options.impedanceRuntime?.mode !== mode ||
@@ -67,6 +69,7 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     registryAndCurveModesStillObserved: true, blendControlsStillObserved: false,
     blendControlsFromArchiveAndOwnVelocity: true, blendFloorHostConditionStillExplicit: true,
     hardnessControlsFromArchive: true, supportHistoryControlsFromArchive: true, directionBranchStillExplicit: true,
+    spectrumBaseControlsFromArchive: true, spectrumExpressionAndNonzeroSlopeCoverageStillIncomplete: true,
     sameRunModelGenerationVerified: false, wholeEngineEquivalent: false});
   return {
     metadata,
@@ -137,12 +140,16 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
       if (!used.has(`${record.epoch}:${record.input.mode}`)) throw new Error('Consumed source required');
       return structuredClone(historyModel);
     },
+    spectrumControls(record) {
+      if (!used.has(`${record.epoch}:${record.input.mode}`)) throw new Error('Consumed source required');
+      return structuredClone(spectrumModel);
+    },
     verifyComplete() {
       if (velocities.size !== 5 || used.size !== 10 || manager.starts !== 5 || manager.draws !== 10)
         throw new Error('Complete five-start two-mode source computation required');
       return used.size;
     },
-    audit() { return {traces: structuredClone(traces), managerDraws: manager.draws, historyModel: structuredClone(historyModel),
+    audit() { return {traces: structuredClone(traces), managerDraws: manager.draws, historyModel: structuredClone(historyModel), spectrumModel: structuredClone(spectrumModel),
       hardnessControls: {...hardnessControls}, sourceBuilds: [...sources].map(([mode, s]) =>
       ({mode, rows: s.rows, columns: s.columns, referenceIndex: s.referenceIndex, coupledRows: s.coupledPoleTraces.length}))}; },
   };

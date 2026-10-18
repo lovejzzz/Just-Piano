@@ -22,7 +22,7 @@ try {
 } finally { fs.readFileSync = read; }
 const floats = new DataView(new ArrayBuffer(4));
 const bits = v => { if (!Number.isFinite(v)) throw new Error('Finite target required'); floats.setFloat32(0, v); return floats.getUint32(0); };
-let sourceValues = 0, velocityValues = 0, randomWords = 0, hardnessValues = 0, blendValues = 0, historyValues = 0, hardnessControlValues = 0, deniedAccesses = 0;
+let sourceValues = 0, velocityValues = 0, randomWords = 0, hardnessValues = 0, blendValues = 0, historyValues = 0, hardnessControlValues = 0, spectrumValues = 0, deniedAccesses = 0;
 function deny(object, key) { Object.defineProperty(object, key, {get() { deniedAccesses++; throw new Error('Forbidden captured input: ' + key); }}); }
 for (const r of capture.records) {
   if (r.stage === 'before') {
@@ -49,6 +49,10 @@ for (const r of capture.records) {
     blend.sharedBlendCoefficients.forEach((v, i) => {assert.equal(bits(v), bits(r.input.controls.sharedBlendCoefficients[i])); blendValues++;});
     for (const [key, value] of Object.entries(own.hardnessControls(record))) {assert.equal(bits(value), bits(r.input.controls[key])); hardnessControlValues++;}
     const support = own.supportHistoryControls(record);
+    for (const [key, value] of Object.entries(own.spectrumControls(record))) {
+      const values = Array.isArray(value) ? value : [value], targets = Array.isArray(value) ? r.controls[key] : [r.controls[key]];
+      values.forEach((v, i) => {assert.equal(bits(v), bits(targets[i])); spectrumValues++;});
+    }
     assert.equal(bits(support.randomScale), bits(r.randomScale)); historyValues++;
     for (const [key, value] of Object.entries(support.historyControls)) {assert.equal(bits(value), bits(r.historyControls[key])); historyValues++;}
     for (const key of ['x', 'y']) support.historyCurve[key].forEach((v, i) => {assert.equal(bits(v), bits(r.historyCurve[key][i])); historyValues++;});
@@ -62,8 +66,9 @@ assert.equal(originalObservationFileReads, 0);
 assert.equal(sourceValues, 2160); assert.equal(velocityValues, 5); assert.equal(randomWords, 20); assert.equal(hardnessValues, 200);
 assert.equal(blendValues, 40);
 assert.equal(hardnessControlValues, 50); assert.equal(historyValues, 160);
+assert.equal(spectrumValues, 80);
 assert.throws(() => own.beginVelocity({stage: 'before', epoch: 0, note: 69}), /Chronological/);
-const result = {passed: true, sourceValues, velocityValues, randomWords, hardnessValues, blendValues, historyValues, hardnessControlValues, deniedAccesses, originalObservationFileReads,
+const result = {passed: true, sourceValues, velocityValues, randomWords, hardnessValues, blendValues, historyValues, hardnessControlValues, spectrumValues, deniedAccesses, originalObservationFileReads,
   duplicateModeRejections: 10, duplicateStartRejected: true,
   nativeSourceArraysUsedAsInput: false, nativeVelocityAttenuationHardnessAndRandomStateUsedAsInput: false,
   repeatAttenuationFromBoundOwnContinuousReport: true, blendTargetsUsedAsInput: false, hostExpressionAndRuntimeConditionsStillExplicit: true,

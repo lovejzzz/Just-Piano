@@ -240,6 +240,17 @@ for(const [recordIndex,r] of d.records.entries()){
   for(const k of ['age','attenuation'])check('hardness-input:'+k,p[k],input.controls[k]);
   if(r.controls.repeatFlag!==p.repeatFlag)throw new Error('Spectrum repeat flag mismatch');
   const extraControls={...r.extraControls},spectrumControls={...r.controls};
+  let append=r.append;
+  if(preparedSources?.metadata.spectrumBaseControlsFromArchive){
+   const own=preparedSources.spectrumControls(r);
+   for(const [key,value] of Object.entries(own)){
+    if(Array.isArray(value))value.forEach((v,i)=>check('archive-spectrum:'+key+':'+i,v,r.controls[key][i]));
+    else check('archive-spectrum:'+key,value,r.controls[key]);
+    spectrumControls[key]=value;
+   }
+   check('archive-append:scale',own.scale,r.append.controls.scale);
+   append={...r.append,controls:{...r.append.controls,scale:own.scale}};
+  }
   if(ownBlend){
    for(const [key,value] of Object.entries({floor:ownBlend.blendFloor,blend:ownBlend.inputBlend})){check('archive-extra:'+key,value,r.extraControls[key]);extraControls[key]=value;}
    const referenceBlend=Math.max(ownBlend.blendFloor,ownBlend.inputBlend);check('archive-spectrum:referenceBlend',referenceBlend,r.controls.referenceBlend);spectrumControls.referenceBlend=referenceBlend;
@@ -268,7 +279,7 @@ for(const [recordIndex,r] of d.records.entries()){
    const first=invocation.modes.get(0);if(!first||!seed||first.supported.randomState.some((v,i)=>v!==seed[i]))throw new Error('Uncomputed primary-to-secondary random bridge');
    seed=[...first.supported.randomState];modeSeedBridges++;
   }
-  const supported=buildReleaseControlledSupport({...r,input,extraControls,randomState:seed,repeat:p,spectrum:built,history,secondFamilyEnabled:r.append.secondIndices.length>0,...(supportHistory?{randomScale:supportHistory.randomScale,historyCurve:supportHistory.historyCurve,historyControls:supportHistory.historyControls}:{})},math);
+  const supported=buildReleaseControlledSupport({...r,input,append,extraControls,randomState:seed,repeat:p,spectrum:built,history,secondFamilyEnabled:r.append.secondIndices.length>0,...(supportHistory?{randomScale:supportHistory.randomScale,historyCurve:supportHistory.historyCurve,historyControls:supportHistory.historyControls}:{})},math);
   for(const k of ['indices','logAmplitudes','secondIndices','secondLogAmplitudes']){
    if(supported[k].length!==r.append[k].length)throw new Error('Support vector shape differs: '+JSON.stringify({epoch:r.epoch,mode:input.mode,vector:k,predictedLength:supported[k].length,actualLength:r.append[k].length,checks,mismatches,comparedOutputBlocks,outputSamples,mismatchesByName}));
    supported[k].forEach((v,i)=>{if(k.includes('Indices')||k==='indices'){if(v!==r.append[k][i])throw new Error('Support index differs');}else check('support:'+k,v,r.append[k][i]);});
