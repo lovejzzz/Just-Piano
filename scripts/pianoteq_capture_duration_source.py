@@ -1,8 +1,10 @@
-import json,traceback
+import json,traceback,os
 import pianoteq_capture_soundboard_responses as base
 from pianoteq_damper_runtime_capture import scalar,unpack
 records=[]
 errors=[]
+NOTE=int(os.environ.get('PIANOTEQ_DURATION_NOTE','69'))
+if not 0<=NOTE<=127:raise ValueError('Integer MIDI observation note required')
 original_save=base.save
 
 def save():
@@ -20,20 +22,20 @@ def observed(frame,bp,_):
   pc=frame.GetPCAddress().GetFileAddress()
   if pc==0x10041e7a0:
    note=fl('s8')
-   if note!=69:return False
+   if note!=NOTE:return False
    interface=reg('x19');table=scalar(frame,interface,'Q')
    row={'stage':'getter','note':note,'duration':fl('s0'),'interface':hex(interface),'getterB':hex(scalar(frame,table,'Q')),'getterA':hex(scalar(frame,table+8,'Q'))}
   elif pc==0x1001c5b6c:
    g=reg('x19');note=scalar(frame,g+0x14)
-   if note!=69:return False
+   if note!=NOTE:return False
    r=scalar(frame,g+0x1240,'Q');row={'stage':'floor','note':note,'G':hex(g),'duration':fl('s0'),'minimumFrequencyControl':scalar(frame,g+0x78),'specialInstrument':scalar(frame,r+0x4c0,'B')}
   elif pc==0x10071869c:
    g=reg('x25');note=scalar(frame,g+0x14)
-   if note!=69:return False
+   if note!=NOTE:return False
    r=scalar(frame,g+0x1240,'Q');h=reg('x28');row={'stage':'voice','note':note,'G':hex(g),'H':hex(h),'duration':fl('s0'),'sourceDuration':scalar(frame,g+0xfac),'minimumFrequencyControl':scalar(frame,g+0x78),'specialInstrument':scalar(frame,r+0x4c0,'B'),'randomConfig':{'enabled':scalar(frame,r+0x2e4,'I'),'mode':scalar(frame,r+0x2e8,'I'),'low':scalar(frame,r+0x2ec),'high':scalar(frame,r+0x2f0)},'randomStateAfter':list(unpack(frame,h+0x30d0,'IIII'))}
   else:
    v=reg('x19');g=reg('x23');note=scalar(frame,g+0x14)
-   if note!=69:return False
+   if note!=NOTE:return False
    row={'stage':'initialized','note':note,'G':hex(g),'H':hex(v-0x168),'duration':scalar(frame,v+0x914)}
   if len(records)>=64:raise RuntimeError('Duration observation bound exceeded')
   records.append(row);save();return False

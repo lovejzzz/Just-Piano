@@ -3,16 +3,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {archiveDampingDuration} from '../dsp/archive-damping-duration.mjs';
+import {constructArchiveDurationTuning, archiveReleaseDuration} from '../dsp/archive-release-duration.mjs';
+import {bindDurationSource} from './pianoteq_bind_duration_source.mjs';
 
 const [sourceFile, directory, reportFile, ...extra] = process.argv.slice(2);
 if (!sourceFile || !directory || !reportFile || extra.length)
   throw new Error('Usage: private-duration-source.json private-native-directory fresh-report.json');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const sourceBytes = fs.readFileSync(sourceFile), source = JSON.parse(sourceBytes);
+const computedFrequency = source.schema === 'pianoteq-duration-archive-inputs-v2';
+const ownTuning = computedFrequency ? constructArchiveDurationTuning(bindDurationSource(sourceBytes)) : undefined;
 const captureBytes = fs.readFileSync(path.join(directory, 'runtime.json')), capture = JSON.parse(captureBytes);
 const launchBytes = fs.readFileSync(path.join(directory, 'launch.json')), launch = JSON.parse(launchBytes);
 const log = fs.readFileSync(path.join(directory, 'lldb.log'));
-if (source.schema !== 'pianoteq-duration-archive-inputs-v1' ||
+if ((!computedFrequency && source.schema !== 'pianoteq-duration-archive-inputs-v1') ||
     sha(fs.readFileSync(source.presetPath)) !== source.presetSha256 ||
     sha(fs.readFileSync(source.resourcePath)) !== source.resourceSha256 ||
     launch.presetSha256 !== source.presetSha256 || launch.presetPath !== source.presetPath ||
@@ -36,6 +40,7 @@ if (!stages.getter.length || stages.getter.length !== stages.floor.length ||
 const notes = new Set(records.map(r => r.note));
 if (notes.size !== 1 || !Number.isFinite([...notes][0])) throw new Error('Single explicit observed note required');
 const prediction = archiveDampingDuration({...source, note: [...notes][0]});
+const ownDuration = computedFrequency ? archiveReleaseDuration(source, ownTuning, prediction.note) : undefined;
 if (prediction.conditionActive) throw new Error('Active condition branch requires a separate native validation');
 const f = Math.fround, failures = [], words = new DataView(new ArrayBuffer(4));
 const bits = v => {
@@ -51,7 +56,9 @@ for (const [i, r] of stages.getter.entries()) check(`getter:${i}`, prediction.du
 function floored(r) {
   if (r.specialInstrument !== 0 || !Number.isFinite(r.minimumFrequencyControl))
     throw new Error('Only the explicitly observed normal-instrument branch is supported');
-  return Math.max(prediction.duration, r.minimumFrequencyControl > 0 ? f(2 / r.minimumFrequencyControl) : 0);
+  if (ownDuration) check('own-frequency', ownDuration.frequency, r.minimumFrequencyControl);
+  const frequency = ownDuration ? ownDuration.frequency : r.minimumFrequencyControl;
+  return Math.max(prediction.duration, frequency > 0 ? f(2 / frequency) : 0);
 }
 for (const [i, r] of stages.floor.entries()) check(`floor:${i}`, floored(r), r.duration);
 for (const [i, r] of stages.voice.entries()) {
@@ -64,17 +71,19 @@ for (const [i, r] of stages.voice.entries()) {
   check(`initialized:${i}`, voiceDuration, target.duration);
 }
 const report = {
-  schema: 'pianoteq-duration-boundaries-pass249', passed: failures.length === 0,
+  schema: computedFrequency ? 'pianoteq-duration-boundaries-pass250' : 'pianoteq-duration-boundaries-pass249', passed: failures.length === 0,
   checks, mismatches: failures.length, failures, note: prediction.note, voices: 5,
   predictedGetterDuration: prediction.duration,
-  predictionSha256: sha(Buffer.from(JSON.stringify(prediction))),
+  predictionSha256: sha(Buffer.from(JSON.stringify(computedFrequency ? {prediction, ownDuration} : prediction))),
   archiveSourceSha256: sha(sourceBytes), nativeCaptureSha256: sha(captureBytes),
   nativeLaunchSha256: sha(launchBytes), nativeLogSha256: sha(log),
   resourceSha256: source.resourceSha256, presetSha256: source.presetSha256,
   nativeProcessTerminal: true, durationStageCoverageVerified: true,
   parentSoundboardCaptureComplete: capture.completed === true,
   runtimeCurveModeStillAssumed: source.runtimeCurveModeStillAssumed,
-  frequencyInputStillObserved: true, activeFrequencyFloorVerified: false,
+  frequencyInputStillObserved: !computedFrequency, ownDuration,
+  registryAndCurveModesStillObserved: computedFrequency,
+  activeFrequencyFloorVerified: computedFrequency && ownDuration.minimum > ownDuration.getterDuration,
   specialInstrumentBranchVerified: false, enabledVoiceVariationVerified: false,
   activeConditionBranchVerified: false, continuousChainDurationReplaced: false,
   audioSamplesCompared: 0, finalStereoAudioVerified: false,
