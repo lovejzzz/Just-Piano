@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {whitenSoundboardSpectrum} from '../dsp/soundboard-spectrum-whitening.mjs';
+import {prepareSoundboardSpectralPrefix} from '../dsp/soundboard-spectral-prefix.mjs';
+const controls = {amount: 0, width: 500, binSpacing: 4, flags: 1};
+const input = Float32Array.from({length: 2049}, (_, i) => 1 + i / 2048);
+const copy = input.slice();
+const result = whitenSoundboardSpectrum(input, controls);
+assert.deepEqual(input, copy);
+assert.equal(result.lower, 625); assert.equal(result.upper, 875);
+assert.equal(result.output.length, input.length);
+assert.ok(result.output.every((v) => Number.isFinite(v) && v > 0));
+const fractional = whitenSoundboardSpectrum(input, {...controls, width: 500.25});
+assert.equal(fractional.lower, 625); // ceil(2499.75) before division.
+assert.notDeepEqual(result.output, whitenSoundboardSpectrum(input, {...controls, amount: 1}).output);
+const limited = whitenSoundboardSpectrum(input, {...controls, amount: 1, flags: 0});
+assert.ok(limited.output.every((v) => Number.isFinite(v) && v > 0));
+assert.throws(() => whitenSoundboardSpectrum(new Float32Array(2049), controls), /Nonzero/);
+assert.throws(() => whitenSoundboardSpectrum(Float32Array.of(-1), controls), /magnitude/);
+assert.throws(() => whitenSoundboardSpectrum(input, {...controls, width: 0}), /controls/);
+assert.throws(() => whitenSoundboardSpectrum(input, {...controls, binSpacing: 0.01}), /band/);
+const impulse = new Float32Array(5000); impulse[3] = 1; impulse[4500] = 0.25;
+const original = impulse.slice();
+const prefix = prepareSoundboardSpectralPrefix(impulse, {tau: 1 / 44100, amount: 0, width: 500, flags: 1});
+assert.deepEqual(impulse, original);
+assert.equal(prefix.start, 3); assert.equal(prefix.end, 4501); assert.equal(prefix.length, 16384);
+assert.equal(prefix.packed[1], 0); assert.equal(prefix.packed[16385], 0);
+assert.equal(prefix.magnitude.length, 8193);
+assert.throws(() => prepareSoundboardSpectralPrefix(Float32Array.of(1),
+  {tau: 1 / 44100, amount: 0, width: 500, flags: 1}), /FFT16384/);
+console.log('PASS whitening controls, bounds, limiter branch and spectral prefix guards (synthetic)');

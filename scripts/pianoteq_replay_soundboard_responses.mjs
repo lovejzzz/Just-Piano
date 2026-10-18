@@ -11,6 +11,7 @@ import {trimSoundboardResponses} from '../dsp/soundboard-response-trim.mjs';
 import {filterSoundboardResponses} from '../dsp/soundboard-response-filter.mjs';
 import {blendSoundboardResponses} from '../dsp/soundboard-response-blend.mjs';
 import {processSoundboardLeadingSilence} from '../dsp/soundboard-leading-silence.mjs';
+import {prepareSoundboardSpectralPrefix} from '../dsp/soundboard-spectral-prefix.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -154,14 +155,39 @@ if (needLeading) {
   leading = processSoundboardLeadingSilence(blend.outputs, runtime.processing.blend.leadingSilenceMode);
   leadingComparisons = leading.outputs.map((output, channel) => compare(output, leadingTargets[channel], channel));
 }
+const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMismatches = [];
+if (runtime.whiteningRecords?.length) {
+  if (!leading || runtime.whiteningErrors?.length || runtime.whiteningPending ||
+      runtime.whiteningRecords.length !== leading.outputs.length) throw new Error('Complete whitening chain required');
+  const amounts = readDescriptor(runtime.shaping.floatVector);
+  const flags = readDescriptor(runtime.shaping.intVector);
+  if (amounts.length !== leading.outputs.length * 4 || flags.length !== amounts.length) {
+    throw new Error('Shaping control vector length differs');
+  }
+  for (let channel = 0; channel < leading.outputs.length; channel++) {
+    const amount = amounts.readFloatLE(channel * 4), flag = Number(flags.readUInt32LE(channel * 4) !== 0);
+    const width = runtime.shaping.scalars[1];
+    const prefix = prepareSoundboardSpectralPrefix(leading.outputs[channel],
+      {tau: source.controls.tau, amount, width, flags: flag});
+    const target = runtime.whiteningRecords[channel];
+    const predictedParameters = [amount, width, prefix.binSpacing];
+    if (target.number !== channel || target.length !== prefix.magnitude.length || target.flags !== flag ||
+        predictedParameters.some((value, i) => !Object.is(value, target.parameters[i]))) {
+      spectralControlMismatches.push({channel, predictedParameters, predictedFlags: flag,
+        observedParameters: target.parameters, observedFlags: target.flags});
+    }
+    magnitudeComparisons.push(compare(prefix.magnitude, target.input, channel));
+    whiteningComparisons.push(compare(prefix.whitening.output, target.output, channel));
+  }
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons];
-console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches),
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons];
+console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !spectralControlMismatches.length,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
   conversionMode: conversion?.mode ?? null,
@@ -179,9 +205,13 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches),
   leadingComparisons, leadingShifts: leading?.shifts ?? null,
   leadingMode: leading?.mode ?? null,
   leadingNativeTargetVerified: leadingComparisons.length > 0 && leadingComparisons.every((c) => !c.mismatches),
+  magnitudeComparisons, whiteningComparisons, spectralControlMismatches,
+  spectralPrefixComputed: magnitudeComparisons.length > 0,
+  spectralNativeTargetsUsedForPrediction: false,
+  shapingComputed: false,
   firstBlockHashMatchesCapture: runtime.records.every((r) => r.cache?.sha256) ?
     runtime.records.every((r) => r.cache.sha256 === cacheHash) : null,
   nativeBlockCacheUsedForPrediction: false, sourceMatricesAndObservationGroupsStillCaptured: true,
   sameRunCapturedSourceBound: sameRunSource,
   sourceMatricesConstructedFromModel: false, fullIrNodesGenerated: false}, null, 2));
-if (allComparisons.some((c) => c.mismatches)) process.exitCode = 1;
+if (allComparisons.some((c) => c.mismatches) || spectralControlMismatches.length) process.exitCode = 1;

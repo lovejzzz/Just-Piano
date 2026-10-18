@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {smoothSoundboardSpectrum, soundboardSmoothingCoefficients} from '../dsp/soundboard-spectrum-smoothing.mjs';
+const input = Float32Array.of(0, 1, 0);
+const result = smoothSoundboardSpectrum(input, 0.5);
+assert.deepEqual(Array.from(result.output), [0.25, 0.5, 0.25]);
+assert.deepEqual(Array.from(input), [0, 1, 0]);
+assert.equal(result.coefficients.b0, 0.5);
+assert.equal(result.coefficients.b1, 0.5);
+assert.deepEqual(soundboardSmoothingCoefficients(2), soundboardSmoothingCoefficients(0.5));
+assert.deepEqual(Array.from(smoothSoundboardSpectrum(new Float32Array(3), 0.05).output), [0, 0, 0]);
+assert.equal(smoothSoundboardSpectrum(new Float32Array(0), 0.05).output.length, 0);
+assert.throws(() => smoothSoundboardSpectrum(input, 0), /frequency/);
+assert.throws(() => smoothSoundboardSpectrum(Float32Array.of(NaN), 0.05), /spectrum/);
+console.log('PASS reflected bidirectional spectrum smoothing, cutoff cap and input guards');
