@@ -6,6 +6,7 @@ conversion, trim and filter completion. No target writes or expressions.
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import struct
 import traceback
@@ -13,6 +14,7 @@ import traceback
 from pianoteq_damper_runtime_capture import verify_text
 
 ROOT = Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
+BLEND_CAPTURE = os.environ.get('PIANOTEQ_CAPTURE_BLEND') == '1'
 hooks = []
 records = []
 errors = []
@@ -22,6 +24,8 @@ converted = []
 trimmed = []
 filtered = []
 processing = None
+blended = []
+run_status = None
 
 
 def memory(frame, address, size):
@@ -50,6 +54,8 @@ def save():
         'converted': converted,
         'trimmed': trimmed,
         'filtered': filtered, 'processing': processing,
+        'blended': blended, 'blendCapture': BLEND_CAPTURE,
+        'runStatus': run_status,
         'targetMutation': False,
     }, indent=2, allow_nan=False))
     os.chmod(ROOT / 'runtime.json', 0o600)
@@ -203,7 +209,7 @@ def after_conversion(frame, breakpoint, _):
 def after_trim(frame, breakpoint, _):
     global processing
     try:
-        if not converted or not captured_source:
+        if not completed or not captured_source:
             return False
         state = frame.FindRegister('x0').GetValueAsUnsigned()
         if state != captured_source['state']:
@@ -232,7 +238,7 @@ def after_trim(frame, breakpoint, _):
             processing['channels'].append({'identity': identity, 'kind': kind, 'flag': flag})
             pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
             trimmed.append(dump(f'trimmed-{len(trimmed)}.bin', memory(frame, pointer, length * 4)))
-        for hook in hooks[:5]:
+        for hook in hooks[:4 if BLEND_CAPTURE else 5]:
             hook.SetEnabled(False)
         save()
         return False
@@ -255,6 +261,44 @@ def after_filter(frame, breakpoint, _):
         for offset in range(0, end - begin, 0x68):
             pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
             filtered.append(dump(f'filtered-{len(filtered)}.bin', memory(frame, pointer, length * 4)))
+        if BLEND_CAPTURE:
+            vector = frame.FindRegister('x1').GetValueAsUnsigned()
+            first, last = struct.unpack('<2Q', memory(frame, vector, 16))
+            if last < first or (last - first) % 4 or last - first > 4096:
+                raise RuntimeError('Invalid blend coefficients')
+            kernel = frame.FindRegister('x4').GetValueAsUnsigned()
+            kernel_length = struct.unpack('<Q', memory(frame, kernel + 8, 8))[0]
+            processing['blend'] = {
+                'coefficients': list(struct.unpack('<' + 'f' * ((last - first) // 4),
+                                                  memory(frame, first, last - first))),
+                'kernelLength': kernel_length,
+                'mainCount': struct.unpack('<Q', memory(frame, state + 0x128, 8))[0],
+                'flags': frame.FindRegister('w2').GetValueAsUnsigned(),
+            }
+        for hook in hooks[:5 if BLEND_CAPTURE else 6]:
+            hook.SetEnabled(False)
+        save()
+        return False
+    except Exception:
+        errors.append(traceback.format_exc())
+        save()
+        return True
+
+
+def after_blend(frame, breakpoint, _):
+    try:
+        if not filtered or not processing or not BLEND_CAPTURE:
+            return False
+        state = frame.FindRegister('x0').GetValueAsUnsigned()
+        if state != captured_source['state']:
+            raise RuntimeError('Blended state differs from captured source')
+        begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
+        if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
+            raise RuntimeError('Invalid blended record vector')
+        processing['blend']['leadingSilenceMode'] = frame.FindRegister('w1').GetValueAsUnsigned()
+        for offset in range(0, end - begin, 0x68):
+            pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
+            blended.append(dump(f'blended-{len(blended)}.bin', memory(frame, pointer, length * 4)))
         for hook in hooks:
             hook.SetEnabled(False)
         save()
@@ -265,6 +309,56 @@ def after_filter(frame, breakpoint, _):
         return True
 
 
+def launch_and_run(debugger, argv):
+    """Resume only initial launch and callback-owned breakpoint/trace stops."""
+    import lldb
+    global run_status
+    debugger.SetAsync(False)
+    target = debugger.GetSelectedTarget()
+    launch = lldb.SBLaunchInfo(argv)
+    launch.SetLaunchFlags(lldb.eLaunchFlagStopAtEntry | lldb.eLaunchFlagDisableASLR)
+    error = lldb.SBError()
+    process = target.Launch(launch, error)
+    if error.Fail():
+        raise RuntimeError(str(error))
+    owned_ids = {hook.GetID() for hook in hooks}
+    audit = []
+    initial = True
+    while process.GetState() == lldb.eStateStopped:
+        if len(audit) >= 128:
+            raise RuntimeError('Owned stop limit exceeded')
+        stops = []
+        for thread in process:
+            reason = thread.GetStopReason()
+            if reason in (lldb.eStopReasonNone, lldb.eStopReasonInvalid):
+                continue
+            detail = {'thread': thread.GetThreadID(), 'reason': reason,
+                      'description': thread.GetStopDescription(256)}
+            stops.append(detail)
+            owned = reason == lldb.eStopReasonTrace
+            if reason == lldb.eStopReasonBreakpoint:
+                ids = [thread.GetStopReasonDataAtIndex(i)
+                       for i in range(0, thread.GetStopReasonDataCount(), 2)]
+                owned = bool(ids) and all(value in owned_ids for value in ids)
+            launch_stop = initial and (reason == lldb.eStopReasonExec or
+                (reason == lldb.eStopReasonSignal and
+                 thread.GetStopReasonDataAtIndex(0) == signal.SIGSTOP))
+            if not owned and not launch_stop:
+                raise RuntimeError('Unowned stop: ' + json.dumps(detail))
+        audit.append({'initial': initial, 'threads': stops})
+        initial = False
+        run_status = {'pid': process.GetProcessID(), 'ownedResumes': audit, 'terminal': False}
+        save()
+        error = process.Continue()
+        if error.Fail():
+            raise RuntimeError(str(error))
+    run_status = {'pid': process.GetProcessID(), 'ownedResumes': audit,
+                  'state': process.GetState(), 'terminal': process.GetState() == lldb.eStateExited,
+                  'exitStatus': process.GetExitStatus()}
+    save()
+    return run_status
+
+
 def __lldb_init_module(debugger, _):
     import lldb
     target = debugger.GetSelectedTarget()
@@ -272,10 +366,14 @@ def __lldb_init_module(debugger, _):
     verify_text(Path(spec.GetDirectory()) / spec.GetFilename())
     ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
     assert not (ROOT / 'runtime.json').exists(), 'Fresh directory required'
-    for address, callback in [(0x1005a8874, 'source_entry'),
-                              (0x1005ab0e0, 'worker'), (0x1005a91c8, 'after_propagation'),
-                              (0x1005a9578, 'after_conversion'), (0x100817ab0, 'after_trim'),
-                              (0x1006c5ce8, 'after_filter')]:
+    sites = [(0x1005a8874, 'source_entry'), (0x1005ab0e0, 'worker'),
+             (0x1005a91c8, 'after_propagation')]
+    if not BLEND_CAPTURE:
+        sites.append((0x1005a9578, 'after_conversion'))
+    sites.extend([(0x100817ab0, 'after_trim'), (0x1006c5ce8, 'after_filter')])
+    if BLEND_CAPTURE:
+        sites.append((0x10019dfc4, 'after_blend'))
+    for address, callback in sites:
         result = lldb.SBCommandReturnObject()
         debugger.GetCommandInterpreter().HandleCommand(
             f'breakpoint set --hardware --address {address:#x} --shlib "Pianoteq 9"', result)
