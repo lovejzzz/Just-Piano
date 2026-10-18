@@ -10,7 +10,7 @@ export function midiBlockClock(bytes, {sampleRate, blockSize = 64}) {
   if (!text(0, 'MThd') || view.getUint32(4) !== 6 || view.getUint16(8) !== 0 || view.getUint16(10) !== 1 ||
       !ppq || ppq & 0x8000 || !text(14, 'MTrk') || view.getUint32(18) !== bytes.length - 22)
     throw new RangeError('Complete single-track PPQ format-zero MIDI required');
-  let position = 22, ticks = 0, running, tempo = 500000, numerator = 0n, ended = false;
+  let position = 22, ticks = 0, running, tempo = 500000, numerator = 0n, ended = false, systemExclusiveCount = 0;
   const denominator = BigInt(ppq) * 1000000n, events = [];
   const byte = () => { if (position >= bytes.length) throw new RangeError('Truncated MIDI'); return bytes[position++]; };
   const vlq = () => {
@@ -43,7 +43,7 @@ export function midiBlockClock(bytes, {sampleRate, blockSize = 64}) {
         ended = true; break;
       }
     } else if (status === 0xf0 || status === 0xf7) {
-      running = undefined; const length = vlq();
+      running = undefined; systemExclusiveCount++; const length = vlq();
       if (length > bytes.length - position) throw new RangeError('Truncated SysEx');
       position += length;
     } else if (status >= 0x80 && status <= 0xef) {
@@ -59,5 +59,5 @@ export function midiBlockClock(bytes, {sampleRate, blockSize = 64}) {
     } else throw new RangeError('Unsupported MIDI status');
   }
   if (!ended) throw new RangeError('Missing end-of-track');
-  return {sampleRate, blockSize, ppq, events, noteOns: events.filter(e => e.kind === 'noteOn'), endFrame: frame()};
+  return {sampleRate, blockSize, ppq, systemExclusiveCount, events, noteOns: events.filter(e => e.kind === 'noteOn'), endFrame: frame()};
 }

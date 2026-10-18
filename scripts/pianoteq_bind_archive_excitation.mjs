@@ -1,10 +1,11 @@
+import {archiveFixedVoiceHeaderRatios} from '../dsp/voice-header-ratios.mjs';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import {createArchiveExcitationProducer} from '../dsp/archive-excitation-producer.mjs';
 import {readFormatZeroNoteOns} from './pianoteq_note_on_velocity_source.mjs';
 import {midiBlockClock} from '../dsp/midi-block-clock.mjs';
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
-export function bindArchiveExcitation(bytes, captureSha256) {
+export function bindArchiveExcitation(bytes, captureSha256, {computedHeaderRatios = false} = {}) {
   const source = JSON.parse(bytes);
   if (source.schema !== 'pianoteq-excitation-archive-inputs-v1' ||
       sha(fs.readFileSync(source.resourcePath)) !== source.resourceSha256 ||
@@ -29,11 +30,11 @@ export function bindArchiveExcitation(bytes, captureSha256) {
       ['ticks', 'channel', 'note', 'velocity'].some(key => e[key] !== events[i][key])))
       throw new Error('Consistent source MIDI event parsers required');
     eventClock = {sampleRate: clock.sampleRate, blockSize: clock.blockSize,
-      noteOnFrames: clock.noteOns.map(e => e.frame), events: clock.events};
+      noteOnFrames: clock.noteOns.map(e => e.frame), events: clock.events, systemExclusiveCount: clock.systemExclusiveCount};
   }
   const own = createArchiveExcitationProducer({baseFields: source.baseFields, presetFields: source.presetFields,
     runtime: context.runtime, events, eventClock});
-  return {...own, renderConfiguration:eventClock?{sampleRate:eventClock.sampleRate,blockSize:eventClock.blockSize}:null, archiveIdentity: {presetSha256: source.presetSha256, resourceSha256: source.resourceSha256,
+  return {...own, fixedVoiceHeaderRatios:computedHeaderRatios ? archiveFixedVoiceHeaderRatios({presetFields:source.presetFields, events:eventClock?.events, systemExclusiveCount:eventClock?.systemExclusiveCount}):null, renderConfiguration:eventClock?{sampleRate:eventClock.sampleRate,blockSize:eventClock.blockSize}:null, archiveIdentity: {presetSha256: source.presetSha256, resourceSha256: source.resourceSha256,
     bank: source.bank, bankMd5: source.bankMd5, modelIdentity: source.modelIdentity},
     metadata: {...own.metadata, archiveSourceSha256: sha(bytes), contextSha256: sha(contextBytes), captureSha256,
       originalObservationFilesRequiredByProducer: false,

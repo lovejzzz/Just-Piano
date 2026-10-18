@@ -22,4 +22,8 @@ assert.equal(changed.events.at(-1).frame, 48000);
 assert.throws(() => midiBlockClock(changedTempo.subarray(0, changedTempo.length - 1), {sampleRate: 48000}), RangeError);
 assert.throws(() => midiBlockClock(changedTempo, {sampleRate: 48000, blockSize: 128}), RangeError);
 assert.throws(() => midiBlockClock(file([[0, [255, 81, 3, 0, 0, 0]], [0, [255, 47, 0]]]), {sampleRate: 48000}), RangeError);
+
+
+assert.equal(clock.systemExclusiveCount,0);
+assert.equal(midiBlockClock(file([[0,[240,2,1,247]],[0,[255,47,0]]]),{sampleRate:48000}).systemExclusiveCount,1);
 console.log('MIDI absolute block clocks, cross-boundary age, tempo integration, running status and guards passed');
