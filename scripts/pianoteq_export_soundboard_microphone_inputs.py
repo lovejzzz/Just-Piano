@@ -11,7 +11,20 @@ import struct
 
 EXPECTED = '8e375ff63fcb9056ae1eadd9770d28a0a61c7d79209f52a74f027c3bc13c2094'
 # Read-only static tables referenced by FUN_100850c08. No runtime capture input.
-PLANS = {4: (0x100b2667c, 0x100b41698), 5: (0x100acf95c, 0x100b416a0)}
+# None ordinates mean the constructor's explicit 200-word zero curve.
+# Identity 18 initializes its pair with movi.2s v0,#0x3f,lsl#24.
+PLANS = {
+    0: (None, 0x100b41680), 18: (None, 'half'), 1: (None, 0x100b41688),
+    2: (0x100ad49e8, 'zero'), 3: (0x100b2eb30, 0x100b41690),
+    4: (0x100b2667c, 0x100b41698), 5: (0x100acf95c, 0x100b416a0),
+    6: (0x100a90bc4, 0x100b416a8), 7: (0x100a6c2cc, 0x100b416b0),
+    8: (0x100ab75d8, 0x100b416b8), 9: (0x100b06c10, 0x100b416c0),
+    10: (0x100a97700, 0x100b416c8), 11: (0x100a53ba4, 0x100b416c8),
+    12: (None, 0x100b416c8), 13: (0x100a97a88, 0x100b416d0),
+    14: (0x100a5d310, 0x100b416c0), 16: (0x100a57ce0, 0x100b416c0),
+    17: (0x100aa43b4, 0x100b416c0), 19: (0x100a9af08, 'zero'),
+    20: (0x100a694e0, 0x100b416d8), 21: (0x100b2f6c0, 0x100b41688),
+}
 
 
 def main():
@@ -59,9 +72,10 @@ def main():
         raise ValueError('Supported microphone output state required')
     registry = []
     for identity, (ordinates, controls) in PLANS.items():
-        mix, amount = floats(controls, 2)
+        mix, amount = ((0.5, 0.5) if controls == 'half' else
+                       (0.0, 0.0) if controls == 'zero' else floats(controls, 2))
         registry.append({'id': identity, 'mix': mix, 'amount': amount,
-            'curve': {'x': floats(0x100a87150, 200), 'y': floats(ordinates, 200),
+            'curve': {'x': floats(0x100a87150, 200), 'y': floats(ordinates, 200) if ordinates is not None else [0.0] * 200,
                       'dimensions': 1, 'mode': 0, 'logX': 0}})
     archive['microphones'] = {'schema': 1, 'output': output[0], 'registry': registry,
         'soloMicrophone': 0, 'soloMicrophoneSource': 'no-prefs-default',
