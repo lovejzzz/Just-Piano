@@ -61,6 +61,7 @@ export function writeTerminalArtifact(directory, report, reportFile, args) {
   const manifest = {schema: 'pianoteq-calculated-terminal-v1', report: boundFile(reportFile), inputs,
     arguments: args, sourceClosure: closure(), audioSha256: sha(bytes), audioBytes: bytes.length, index,
     fixture: {midiSha256: archive.midiSha256, presetSha256: archive.presetSha256, resourceSha256: archive.resourceSha256},
+    nativeExtraGainUsedForPrediction: !report.computedExtraGain,
     nativeDampingShapeAndBandsUsedForPrediction: !report.computedDampingProfile,
     nativeHeaderRatiosUsedForPrediction: !report.computedHeaderRatios,
     nativeModalClockUsedForPrediction: !report.computedModalClock,
@@ -88,6 +89,7 @@ export function readTerminalArtifact(directory, fixture) {
   if (!report.passed || report.mismatches !== 0 || !report.tailEnvelopes?.passed ||
       report.captureSha256 !== m.inputs[0].sha256 || report.preparedSourceBridge?.historicalPredictionReportRequired !== false)
     throw Error('Passed archive-source producer required');
+  if(m.nativeExtraGainUsedForPrediction!==!report.computedExtraGain)throw Error('Explicit extra gain prediction boundary required');
   if(m.nativeDampingShapeAndBandsUsedForPrediction!==!report.computedDampingProfile)throw Error('Explicit damping profile prediction boundary required');
   if(m.nativeHeaderRatiosUsedForPrediction!==!report.computedHeaderRatios)throw Error('Explicit header ratio prediction boundary required');
   if(m.nativeModalClockUsedForPrediction!==!report.computedModalClock)throw Error('Explicit modal clock prediction boundary required');

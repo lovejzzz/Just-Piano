@@ -1,3 +1,4 @@
+import {archiveZeroExtraDamping} from '../dsp/zero-extra-damping.mjs';
 import {archiveModalDampingProfile} from '../dsp/modal-damping-profile.mjs';
 import {archiveFixedVoiceHeaderRatios} from '../dsp/voice-header-ratios.mjs';
 import fs from 'node:fs';
@@ -6,7 +7,7 @@ import {createArchiveExcitationProducer} from '../dsp/archive-excitation-produce
 import {readFormatZeroNoteOns} from './pianoteq_note_on_velocity_source.mjs';
 import {midiBlockClock} from '../dsp/midi-block-clock.mjs';
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
-export function bindArchiveExcitation(bytes, captureSha256, {computedHeaderRatios = false, computedDampingProfile = false} = {}) {
+export function bindArchiveExcitation(bytes, captureSha256, {computedHeaderRatios = false, computedDampingProfile = false, computedExtraGain = false} = {}) {
   const source = JSON.parse(bytes);
   if (source.schema !== 'pianoteq-excitation-archive-inputs-v1' ||
       sha(fs.readFileSync(source.resourcePath)) !== source.resourceSha256 ||
@@ -35,7 +36,7 @@ export function bindArchiveExcitation(bytes, captureSha256, {computedHeaderRatio
   }
   const own = createArchiveExcitationProducer({baseFields: source.baseFields, presetFields: source.presetFields,
     runtime: context.runtime, events, eventClock});
-  return {...own, modalDampingProfile:computedDampingProfile?archiveModalDampingProfile({baseFields:source.baseFields,note:69}):null, fixedVoiceHeaderRatios:computedHeaderRatios||computedDampingProfile ? archiveFixedVoiceHeaderRatios({presetFields:source.presetFields, events:eventClock?.events, systemExclusiveCount:eventClock?.systemExclusiveCount}):null, renderConfiguration:eventClock?{sampleRate:eventClock.sampleRate,blockSize:eventClock.blockSize}:null, archiveIdentity: {presetSha256: source.presetSha256, resourceSha256: source.resourceSha256,
+  return {...own, zeroExtraDamping:computedExtraGain?archiveZeroExtraDamping({baseFields:source.baseFields,presetFields:source.presetFields,note:69}):null, modalDampingProfile:computedDampingProfile?archiveModalDampingProfile({baseFields:source.baseFields,note:69}):null, fixedVoiceHeaderRatios:computedHeaderRatios||computedDampingProfile||computedExtraGain ? archiveFixedVoiceHeaderRatios({presetFields:source.presetFields, events:eventClock?.events, systemExclusiveCount:eventClock?.systemExclusiveCount}):null, renderConfiguration:eventClock?{sampleRate:eventClock.sampleRate,blockSize:eventClock.blockSize}:null, archiveIdentity: {presetSha256: source.presetSha256, resourceSha256: source.resourceSha256,
     bank: source.bank, bankMd5: source.bankMd5, modelIdentity: source.modelIdentity},
     metadata: {...own.metadata, archiveSourceSha256: sha(bytes), contextSha256: sha(contextBytes), captureSha256,
       originalObservationFilesRequiredByProducer: false,
