@@ -54,6 +54,14 @@ export function forwardRealCore256(input,twiddle){
  a=stage(a,16,4,4,twiddle,192);
  return stage(a,64,1,4,twiddle,0);
 }
+export function forwardRealCore4096(input,twiddle){
+ if(input.length!==16384||twiddle.length!==4096)throw new Error('FFT4096 core shape required');
+ let a=input;
+ for(const [ido,l1,offset] of [[1,1024,4092],[4,256,4080],[16,64,4032],[64,16,3840],[256,4,3072],[1024,1,0]]){
+  a=stage(a,ido,l1,4,twiddle,offset);
+ }
+ return a;
+}
 
 // Fixed-plan coefficients numerically checked against native setup; setup call path remains open.
 export function buildRealCoreTwiddles32(){
