@@ -87,22 +87,24 @@ const rawData = JSON.parse(fs.readFileSync(path.join(fixture.root, fixture.data.
 const cold = structuredClone(rawData.initial.rawKeys); for (const key of cold.keys) for (const node of key.nodes) { node.position = 0; node.intermediate = 0; }
 const rawLifecycle=midiRawVelocitySource?.lifecycle?midiRawVelocitySource.createLifecycle(rawData.initial.rawKeys,fixture.velocityKeyIndex):null;
 const rawVelocityDriver=!rawLifecycle?midiRawVelocitySource?.create(rawData.initial.rawKeys,fixture.velocityKeyIndex):null;
-const raw = new GlobalRawKeys(rawLifecycle?rawLifecycle.initialState(cold):cold), warmKeys = raw.process(rawLifecycle?rawLifecycle.before(rawData.warmups[0].rawBefore,0,{warmup:true}):rawData.warmups[0].rawBefore, { timeStep: 0,...(rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.warmups[0].rawBefore,0)}:{}) });
+const raw = new GlobalRawKeys(rawLifecycle?rawLifecycle.initialState():cold), warmKeys = raw.process(rawLifecycle?rawLifecycle.before(0,{warmup:true}):rawData.warmups[0].rawBefore, { timeStep: 0,...(rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.warmups[0].rawBefore,0)}:{}) });
 if(rawLifecycle)rawLifecycle.after(raw);
 let targetRaw=null,targetRawData=null,targetVelocityDriver=null,targetLifecycle=null;
 if(targetFixture!==fixture&&!compactTarget){
  targetRawData=JSON.parse(fs.readFileSync(path.join(targetFixture.root,targetFixture.data.driveLevelFile)));
  const cold=structuredClone(targetRawData.initial.rawKeys);for(const key of cold.keys)for(const node of key.nodes){node.position=0;node.intermediate=0;}
  targetLifecycle=midiRawVelocitySource?.lifecycle?midiRawVelocitySource.createLifecycle(targetRawData.initial.rawKeys,targetFixture.velocityKeyIndex):null;
- targetRaw=new GlobalRawKeys(targetLifecycle?targetLifecycle.initialState(cold):cold);targetVelocityDriver=!targetLifecycle?midiRawVelocitySource?.create(targetRawData.initial.rawKeys,targetFixture.velocityKeyIndex):null;
- if(numericalHash(warmKeys)!==numericalHash(targetRaw.process(targetLifecycle?targetLifecycle.before(targetRawData.warmups[0].rawBefore,0,{warmup:true}):targetRawData.warmups[0].rawBefore,{timeStep:0,...(targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.warmups[0].rawBefore,0)}:{})})))throw Error('Order-only premise rejected: warm raw keys differ');
+ targetRaw=new GlobalRawKeys(targetLifecycle?targetLifecycle.initialState():cold);targetVelocityDriver=!targetLifecycle?midiRawVelocitySource?.create(targetRawData.initial.rawKeys,targetFixture.velocityKeyIndex):null;
+ if(numericalHash(warmKeys)!==numericalHash(targetRaw.process(targetLifecycle?targetLifecycle.before(0,{warmup:true}):targetRawData.warmups[0].rawBefore,{timeStep:0,...(targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.warmups[0].rawBefore,0)}:{})})))throw Error('Order-only premise rejected: warm raw keys differ');
  if(targetLifecycle)targetLifecycle.after(targetRaw);
 }
 fixture.controls.forEach((control, block) => {
-  const keys = raw.process(rawLifecycle?rawLifecycle.before(rawData.records[block].rawBefore,block*64):rawData.records[block].rawBefore,rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.records[block].rawBefore,block*64)}:{}); if(rawLifecycle)rawLifecycle.after(raw);delete control.modalVersions;
-  control.globalCoefficientInput = { rawKeys: keys.values, flags: keys.flags, pedal: flags.includes('--alter-pedal-input') && block === 160 ? 1 : rawData.records[block].rawBefore.pedalControl, extraPedal: rawData.records[block].rawBefore.extraPedalControl };
+  const rawInput=rawLifecycle?rawLifecycle.before(block*64):rawData.records[block].rawBefore;
+  const keys = raw.process(rawInput,rawVelocityDriver?{nodeVelocities:rawVelocityDriver.velocitiesFor(rawData.records[block].rawBefore,block*64)}:{}); if(rawLifecycle)rawLifecycle.after(raw);delete control.modalVersions;
+  control.globalCoefficientInput = { rawKeys: keys.values, flags: keys.flags, pedal: flags.includes('--alter-pedal-input') && block === 160 ? 1 : rawInput.pedalControl, extraPedal: rawInput.extraPedalControl };
   if(targetRaw){
-   const keys=targetRaw.process(targetLifecycle?targetLifecycle.before(targetRawData.records[block].rawBefore,block*64):targetRawData.records[block].rawBefore,targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.records[block].rawBefore,block*64)}:{}),other={rawKeys:keys.values,flags:keys.flags,pedal:targetRawData.records[block].rawBefore.pedalControl,extraPedal:targetRawData.records[block].rawBefore.extraPedalControl};
+   const targetInput=targetLifecycle?targetLifecycle.before(block*64):targetRawData.records[block].rawBefore;
+   const keys=targetRaw.process(targetInput,targetVelocityDriver?{nodeVelocities:targetVelocityDriver.velocitiesFor(targetRawData.records[block].rawBefore,block*64)}:{}),other={rawKeys:keys.values,flags:keys.flags,pedal:targetInput.pedalControl,extraPedal:targetInput.extraPedalControl};
    if(targetLifecycle)targetLifecycle.after(targetRaw);
    if(numericalHash(control.globalCoefficientInput)!==numericalHash(other))throw Error('Order-only premise rejected: computed coefficient inputs differ at '+block);
   }
@@ -181,7 +183,7 @@ if (flags.includes('--poison-pcm-target')) target[0] ^= 1;
 if (pcm.length !== target.length) throw Error('Complete native PCM extent required');
 let pcmSampleDifferences = 0;
 for (let i = 0; i < pcm.length; i += 3) if (pcm.readUIntLE(i, 3) !== target.readUIntLE(i, 3)) pcmSampleDifferences++;
-const report = { schema: 1,nativeDynamicRawNodeVelocitiesUsedForPrediction:!midiRawVelocitySource,midiRawVelocitySource:midiRawVelocitySource?.metadata??null,midiRawVelocityLevels:fixture.midiRawVelocitySummary,midiRawVelocityCoefficients:(rawLifecycle??rawVelocityDriver)?.summary()??null,nativeDynamicRawNodeListsAndIdentitiesUsedForPrediction:!rawLifecycle, orderOnlyCounterfactual:targetFixture!==fixture, changedOrderBlocks, orderOnlyPremiseVerified:targetFixture!==fixture&&!compactTarget, compactOrderSufficiencyExperiment:compactTarget, targetGlobalControlsAndStatesObserved:!compactTarget, referenceControlsReusedForCompactTarget:compactTarget, targetWriterSpansObserved:!compactTarget, coefficientTargetsFromReference:compactTarget, coefficientTargetRuntimeSha256:compactTarget?fixture.runtimeSha256:targetFixture.runtimeSha256, computedCoefficientInputStreamsEqual:targetRaw?true:null,
+const report = { schema: 1,nativeDynamicRawNodeVelocitiesUsedForPrediction:!midiRawVelocitySource,midiRawVelocitySource:midiRawVelocitySource?.metadata??null,midiRawVelocityLevels:fixture.midiRawVelocitySummary,midiRawVelocityCoefficients:(rawLifecycle??rawVelocityDriver)?.summary()??null,nativeDynamicRawNodeListsAndIdentitiesUsedForPrediction:!rawLifecycle,nativeInitialRawNodeProfileUsedForPrediction:!rawLifecycle,nativePerBlockRawKeySnapshotsUsedForPrediction:!rawLifecycle, orderOnlyCounterfactual:targetFixture!==fixture, changedOrderBlocks, orderOnlyPremiseVerified:targetFixture!==fixture&&!compactTarget, compactOrderSufficiencyExperiment:compactTarget, targetGlobalControlsAndStatesObserved:!compactTarget, referenceControlsReusedForCompactTarget:compactTarget, targetWriterSpansObserved:!compactTarget, coefficientTargetsFromReference:compactTarget, coefficientTargetRuntimeSha256:compactTarget?fixture.runtimeSha256:targetFixture.runtimeSha256, computedCoefficientInputStreamsEqual:targetRaw?true:null,
   computedVoiceEndpointReportSha256: computedVoiceSource?.reportSha256 ?? null,
   computedVoiceEndpointAudioSha256: computedVoiceSource?.audioSha256 ?? null,
   computedVoiceEndpointSourceRuntimeSha256: computedVoiceSource?.captureRuntimeSha256 ?? null,

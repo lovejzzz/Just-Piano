@@ -49,7 +49,7 @@ function levels(data,midiRawVelocitySource,keyIndex) {
   }
   const lifecycle=midiRawVelocitySource?.lifecycle?midiRawVelocitySource.createLifecycle(initial.rawKeys,keyIndex):null;
   const velocities=!lifecycle?midiRawVelocitySource?.create(initial.rawKeys,keyIndex):null;
-  const raw = new GlobalRawKeys(lifecycle?lifecycle.initialState(cold):cold), sensor = new GlobalDriveLevel({ weights: initial.weights, sampleRate: 48000,
+  const raw = new GlobalRawKeys(lifecycle?lifecycle.initialState():cold), sensor = new GlobalDriveLevel({ weights: initial.weights, sampleRate: 48000,
     enabledGain: initial.enabledGain, initialReset: initial.reset });
   let checks = 0;
   const equal = (a, b) => { checks++; if (!Object.is(a, b)) throw Error('Independent raw-key/sensor calculation differs'); };
@@ -61,12 +61,12 @@ function levels(data,midiRawVelocitySource,keyIndex) {
     item.pairsBefore.forEach(([timer, previous], k) => { equal(sensor.timers[k], timer); equal(sensor.previous[k], previous); });
     const ownVelocities=velocities?.velocitiesFor(item.rawBefore,warmup?0:(i-1)*64);
     if(ownVelocities)for(const key of item.rawBefore.keys)for(const node of key.nodes)equal(ownVelocities.get(node.object),node.velocity);
-    const ownSnapshot=lifecycle?lifecycle.before(item.rawBefore,warmup?0:(i-1)*64,{warmup}):item.rawBefore;
+    const ownSnapshot=lifecycle?lifecycle.before(warmup?0:(i-1)*64,{warmup}):item.rawBefore;
     if(lifecycle)ownSnapshot.keys.forEach((key,k)=>{equal(key.nodes.length,item.rawBefore.keys[k].nodes.length);key.nodes.forEach((n,j)=>{const t=item.rawBefore.keys[k].nodes[j];for(const field of ['id','tag','position','intermediate','velocity'])equal(n[field],t[field]);});});
     const keys = raw.process(ownSnapshot, {...(warmup ? { timeStep: 0 } : {}),...(ownVelocities?{nodeVelocities:ownVelocities}:{})});
     if(lifecycle)lifecycle.after(raw);
     keys.values.forEach((value, k) => equal(value, item.input[k]));
-    const value = sensor.process(keys.values, Math.max(item.rawBefore.pedalControl, item.rawBefore.extraPedalControl));
+    const value = sensor.process(keys.values, Math.max(ownSnapshot.pedalControl, ownSnapshot.extraPedalControl));
     item.pairsAfter.forEach(([timer, previous], k) => { equal(sensor.timers[k], timer); equal(sensor.previous[k], previous); });
     equal(value, item.levelTarget);
     if (!warmup) output.push(value);

@@ -1,3 +1,4 @@
+import {archiveKeyReleaseControls} from './archive-key-release-controls.mjs';
 import {createMidiKeyReleaseTimeline} from './midi-key-release-timeline.mjs';
 const f=Math.fround;
 // 90cab4. Voice ownership is supplied explicitly; this does not retire voices.
@@ -7,22 +8,30 @@ export function rawNodeCanRetire(node,head,flag,voices){
  if(node===head||node.velocity>=0||node.position!==(flag^1)||node.position!==head.position||head.velocity>=0)return false;
  return !voices.some(v=>(node.id===0xfffe||v.id===node.id)&&(node.tag===0xfffe||v.tag===node.tag));
 }
-// Cold single-key fixture: native initial numeric/control profile remains input.
+// Cold single-key fixture: key flags/host controls remain observed inputs.
+// 573bf4..573c28 builds fallback nodes from archive baseTime and (7,0).
 // All subsequent node identities, births, reuse and cleanup are engine-owned.
 export class MidiRawNodeLifecycle {
- constructor(initial,{baseFields,presetFields,eventClock,keyIndex}){
+ constructor(initial,{baseFields,presetFields,eventClock,keyIndex,initialNoteBase=9}){
   if(!Number.isInteger(keyIndex)||keyIndex<0||keyIndex>=initial.keys.length||
-     initial.keys.some(k=>k.nodes.length!==1||k.nodes[0].id!==7||k.nodes[0].tag!==0||((k.flags[0]&1)&&k.nodes[0].position!==0)||k.nodes[0].intermediate!==0||!Number.isFinite(k.nodes[0].velocity)||k.nodes[0].velocity>=0)||
+     !Number.isInteger(initialNoteBase)||initialNoteBase<0||initialNoteBase+initial.keys.length>128||initialNoteBase+keyIndex!==69||
+     initial.keys.some(k=>![0,1].includes(k.flags[0]))||
      eventClock.events.some(e=>(e.kind==='noteOn'||e.kind==='noteOff')&&(e.channel!==0||e.note!==69||e.frame===0)))
    throw Error('Explicit cold supported single-key lifecycle required');
+  this.controls={samples:eventClock.blockSize,sampleRate:eventClock.sampleRate,
+   ...Object.fromEntries(['hostControl','hostBlend','softControl','pedalControl','extraPedalControl','binaryPedal','bypassFlags'].map(k=>[k,structuredClone(initial[k])])),
+   keys:initial.keys.map(k=>({flags:[k.flags[0],0,0],localControl:k.localControl,localSoftControl:k.localSoftControl}))};
   this.timeline=createMidiKeyReleaseTimeline({baseFields,presetFields,eventClock});
   this.events=eventClock.events.filter(e=>e.kind==='noteOn'||e.kind==='noteOff');
-  this.nodes=initial.keys.map((k,i)=>[{object:`owned-key-${i}-initial`,id:7,tag:0,velocity:f(k.nodes[0].velocity),position:(k.flags[0]&1)?0:1,intermediate:0}]);
+  this.nodes=initial.keys.map((k,i)=>{
+   const {baseTime}=archiveKeyReleaseControls({baseFields,note:initialNoteBase+i,runtimeCurveMode:'linear-clamp'});
+   return [{object:`owned-key-${i}-initial`,id:7,tag:0,velocity:f(-1/baseTime),position:k.flags[0]^1,intermediate:0}];
+  });
   this.keyIndex=keyIndex;this.eventIndex=0;this.lastFrame=-64;this.calls=0;this.births=0;this.reuses=0;this.retirements=0;this.pending=null;
  }
- initialState(snapshot){return {...snapshot,keys:snapshot.keys.map((key,i)=>({...key,nodes:this.nodes[i].map(n=>({...n}))}))};}
- before(snapshot,frame,{warmup=false}={}){
-  if(this.pending||!Number.isSafeInteger(frame)||frame<0||frame%64||snapshot.keys.length!==this.nodes.length||
+ initialState(){return {...structuredClone(this.controls),keys:this.controls.keys.map((key,i)=>({...structuredClone(key),nodes:this.nodes[i].map(n=>({...n}))}))};}
+ before(frame,{warmup=false}={}){
+  if(this.pending||!Number.isSafeInteger(frame)||frame<0||frame%64||
      (warmup?(this.calls!==0||frame!==0):frame!==this.lastFrame+64))throw Error('Sequential raw-node lifecycle clock required');
   if(!warmup){
    while(this.eventIndex<this.events.length&&this.events[this.eventIndex].frame===frame){
@@ -36,20 +45,21 @@ export class MidiRawNodeLifecycle {
    }
    this.lastFrame=frame;
   }
-  this.calls++;this.pending=snapshot;
-  return this.initialState(snapshot);
+  this.calls++;this.pending=true;
+  return this.initialState();
  }
  after(raw){
   if(!this.pending)throw Error('Raw-node lifecycle process must precede cleanup');
   this.nodes.forEach((nodes,i)=>{
    for(const node of nodes){const state=raw.nodes.get(node.object);if(!state)throw Error('Owned integrated node state required');node.position=state.position;node.intermediate=state.intermediate;}
    const head=nodes[0],voices=i===this.keyIndex&&this.births?[{id:0,tag:0}]:[];
-   this.nodes[i]=nodes.filter(node=>{const retire=rawNodeCanRetire(node,head,this.pending.keys[i].flags[0],voices);if(retire)this.retirements++;return !retire;});
+   this.nodes[i]=nodes.filter(node=>{const retire=rawNodeCanRetire(node,head,this.controls.keys[i].flags[0],voices);if(retire)this.retirements++;return !retire;});
   });
   this.pending=null;
  }
  summary(){return {calls:this.calls,births:this.births,reuses:this.reuses,retirements:this.retirements,
-  nativeDynamicNodeVelocitiesUsedForPrediction:false,nativeDynamicNodeListsAndIdentitiesUsedForPrediction:false,nativeInitialNodeLayoutStillObserved:true,
-  nativeInitialNumericProfileStillObserved:true,nativeFlagsAndHostKeyControlsStillObserved:true,
+  nativeDynamicNodeVelocitiesUsedForPrediction:false,nativeDynamicNodeListsAndIdentitiesUsedForPrediction:false,nativeInitialRawNodeProfileUsedForPrediction:false,
+  nativeKeyCountAndNoteMappingStillExplicit:true,nativePerBlockRawKeySnapshotsUsedForPrediction:false,
+  nativeInitialKeyFlagsAndHostControlProfileStillObserved:true,
   keyMappingStillExplicit:true,completeVoiceOwnershipOrRetirementImplemented:false};}
 }
