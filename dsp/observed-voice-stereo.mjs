@@ -1,7 +1,7 @@
 // A continuous diagnostic engine. Voice endpoints and numeric controls are
 // external inputs; every downstream audio signal/history is calculated here.
 import { accumulateKeyMono64 } from './key-mono-accumulation.mjs';
-import { KeyResonance64 } from './key-resonance.mjs';
+import { createColdKeyResonance64 } from './key-resonance.mjs';
 import { GlobalModalRecurrence64 } from './global-modal-recurrence.mjs';
 import { GlobalDriveCore64, DRIVE_STATIC_OFFSETS } from './global-drive-core.mjs';
 import { GlobalRoomExcitation64 } from './global-room-excitation.mjs';
@@ -28,7 +28,7 @@ const add = (destination, source, gain) => gain === 0 ? destination : Float32Arr
 export class ObservedVoiceStereo64 {
   constructor(profile, irPack, driveProfile) {
     this.profile = profile; this.block = 0;
-    this.keys = profile.keys.map(config => new KeyResonance64(config));
+    this.keys = profile.keys.map(createColdKeyResonance64);
     this.modal = profile.modal.map(config => new GlobalModalRecurrence64(config));
     const staticWords = new Uint32Array(68);
     if (JSON.stringify(driveProfile.words.map(x => x[0])) !== JSON.stringify(DRIVE_STATIC_OFFSETS)) throw Error('Complete drive profile required');

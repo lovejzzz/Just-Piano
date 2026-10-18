@@ -98,6 +98,8 @@ const report = { schema: 1, captureRuntimeSha256: fixture.runtimeSha256, irPackS
   mismatches: Object.values(stages).reduce((n, s) => n + s.mismatches, 0) + pcmSampleDifferences,
   computedPcmSha256: sha(pcm), targetPcmSha256: sha(target), pcmSampleDifferences, poisonedPcmTarget: flags.includes('--poison-pcm-target'),
   downstreamHistoriesOwned: true, nativeGlobalIntermediateAudioUsedForPrediction: false,
+  nativeInitialKeySleepFlagsUsedForPrediction: false, nativeInitialKeyHistoryGeometryUsedForPrediction: false,
+  keyColdInitialization: 'zero interleaved pairs padded to four floats; dormant; previous input zero',
   nativeVoiceAudioUsedForPrediction: true, nativeControlAndCoefficientProductionUsedForPrediction: true,
   captureFreeMidiToStereoVerified: false, nativeRepeatabilityExplained: false };
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });

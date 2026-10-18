@@ -153,8 +153,14 @@ export function loadOrderFixture(directory) {
   });
   const configList = Object.values(data.downstreamConfigurations);
   if (configList.length !== 1) throw Error('One fixed cabinet/post profile required');
-  const profile = { keys: keys.initial.map(k => ({ modeCount: k.modeCount, stateFloats: k.stateFloats,
-      sleeping: k.sleeping, previousInput: k.previousInput, stateAllPositiveZero: k.stateAllPositiveZero })),
+  const keyShapes = keys.initial.map(k => {
+    const table = keys.coefficientVersions[k.coefficientSha256];
+    if (!table || table.length !== k.modeCount || Math.ceil(table.length / 2) * 4 !== k.stateFloats ||
+        !Object.is(k.previousInput, 0) || !k.stateAllPositiveZero || sha(Buffer.alloc(k.stateFloats * 4)) !== k.stateSha256)
+      throw Error('Cold native key target does not match independent zero geometry');
+    return { modeCount: table.length };
+  });
+  const profile = { keys: keyShapes,
     keyCoefficients: keys.coefficientVersions, modal, sharedCaches: data.globalAudioRecords[0].cacheHeads.map(coldCache),
     lattice: lattice.observations[0].before.map(x => ({ length: x.length, write: x.write, read: x.read, taps: x.taps })),
     feedbackRoute: { cache: coldCache(lattice.observations[0].routeBefore.cache), mapping: {

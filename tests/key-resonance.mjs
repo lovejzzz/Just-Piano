@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { KeyResonance64 } from '../dsp/key-resonance.mjs';
+import { KeyResonance64, createColdKeyResonance64 } from '../dsp/key-resonance.mjs';
 
 const cold = (modes = 1) => ({ modeCount: modes, stateFloats: Math.ceil(modes / 2) * 4,
   sleeping: 1, previousInput: 0, stateAllPositiveZero: true });
@@ -28,4 +28,22 @@ assert.equal(grouped.process64(new Float32Array(64).fill(1), coefficients, 1, ne
 assert.equal(grouped.states[10], 0); assert.equal(grouped.states[11], 0);
 assert.throws(() => new KeyResonance64({ ...cold(), stateAllPositiveZero: false }));
 assert.throws(() => model.process64([NaN], [co], 1, baseline));
+// Only model size is available to the independent cold initializer.
+const denied = new Proxy({ modeCount: 5 }, { get(object, key) {
+  if (key !== 'modeCount') throw Error('Observed initial state read: ' + String(key));
+  return object[key];
+} });
+const ownCold = createColdKeyResonance64(denied);
+assert.equal(ownCold.states.length, 12);
+assert.equal(ownCold.sleeping, 1);
+assert.equal(ownCold.previousInput, 0);
+assert.ok(ownCold.states.every(x => Object.is(x, 0)));
+for (const input of [null, impulse]) {
+  const awake = new KeyResonance64({ ...cold(), sleeping: 0 });
+  const asleep = createColdKeyResonance64({ modeCount: 1 });
+  assert.deepEqual(awake.process64(input, [co], 1, baseline), asleep.process64(input, [co], 1, baseline));
+  assert.deepEqual(awake.states, asleep.states);
+  assert.equal(awake.sleeping, asleep.sleeping);
+  assert.equal(awake.previousInput, asleep.previousInput);
+}
 console.log('key recurrence: subtraction, four-lane grouping, null-input tail, sleep, wake, padding and bypass passed');

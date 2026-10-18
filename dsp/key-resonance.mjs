@@ -6,6 +6,13 @@ const sleepThreshold = constants.getFloat32(0, true);
 constants.setBigUint64(0, 0x3e45798ee2308c3an, true);
 const pairThreshold = constants.getFloat64(0, true);
 
+// Independent cold state: one interleaved pair per mode, padded to four floats.
+// No observed histories, previous input or native sleep flag is consumed.
+export function createColdKeyResonance64({ modeCount }) {
+  return new KeyResonance64({ modeCount, stateFloats: Math.ceil(modeCount / 2) * 4,
+    sleeping: 1, previousInput: 0, stateAllPositiveZero: true });
+}
+
 // 5f1e58: per-key modal subtraction, with independent histories and sleep state.
 // Coefficient/control production remains external to this recurrence.
 export class KeyResonance64 {
