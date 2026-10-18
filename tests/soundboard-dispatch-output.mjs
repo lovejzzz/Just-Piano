@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {finalizeSoundboardDispatch} from '../dsp/soundboard-dispatch-output.mjs';
+const input = Float32Array.of(1, -2, -0), copy = input.slice();
+const unity = finalizeSoundboardDispatch([input], 44100);
+assert.equal(unity.scale, 1); assert.deepEqual(unity.outputs[0], input);
+assert.notEqual(unity.outputs[0], input);
+const doubleRate = finalizeSoundboardDispatch([input], 88200);
+assert.equal(doubleRate.scale, 0.5); assert.deepEqual(doubleRate.outputs[0], Float32Array.of(0.5, -1, -0));
+assert.deepEqual(input, copy);
+assert.throws(() => finalizeSoundboardDispatch([input], 0), /rate/);
+assert.throws(() => finalizeSoundboardDispatch([input], 1e300), /rate/);
+assert.throws(() => finalizeSoundboardDispatch([Float32Array.of(NaN)], 44100), /response/);
+console.log('PASS dispatcher rate scaling, signed zero, ownership and guards');

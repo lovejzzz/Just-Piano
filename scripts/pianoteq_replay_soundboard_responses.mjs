@@ -17,6 +17,7 @@ import {computeSoundboardInverseSpectrum} from '../dsp/soundboard-inverse-spectr
 import {reconstructSoundboardTime} from '../dsp/soundboard-time-reconstruction.mjs';
 import {normalizeSoundboardResponses} from '../dsp/soundboard-response-normalization.mjs';
 import {createSoundboardResamplingPlan, resampleSoundboardResponse} from '../dsp/soundboard-resampling.mjs';
+import {finalizeSoundboardDispatch} from '../dsp/soundboard-dispatch-output.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -288,18 +289,36 @@ if (runtime.normalized?.length) {
   }
 }
 const resampledComparisons = [];
+const computedResampled = [], dispatchComparisons = [];
 let resamplingPlan = null;
-if (runtime.resampled?.length) {
+if (runtime.resampled?.length || runtime.dispatchOutputs?.length) {
   if (!normalization || runtime.resamplingPending || runtime.resampling?.length !== 2 ||
-      runtime.resampled.length !== normalization.outputs.length ||
-      runtime.resampledHeaders?.length !== normalization.outputs.length) throw new Error('Complete resampled chain required');
+      (runtime.resampled?.length && (runtime.resampled.length !== normalization.outputs.length ||
+      runtime.resampledHeaders?.length !== normalization.outputs.length))) throw new Error('Complete resampled chain required');
   const [outputRate, inputRate] = runtime.resampling;
   if (![outputRate, inputRate].every((v) => Number.isFinite(v) && v > 0)) throw new Error('Invalid resampling rates');
   resamplingPlan = createSoundboardResamplingPlan(Math.fround(outputRate / inputRate), 10);
   for (let channel = 0; channel < normalization.outputs.length; channel++) {
     const result = resampleSoundboardResponse(normalization.outputs[channel], resamplingPlan);
+    computedResampled.push(result.output);
+    if (!runtime.resampled?.length) continue;
     if (runtime.resampledHeaders[channel].length !== result.output.length) throw new Error('Resampled header length differs');
     resampledComparisons.push({...compare(result.output, runtime.resampled[channel], channel), frames: result.frames});
+  }
+}
+let dispatch = null;
+if (runtime.dispatchOutputs?.length) {
+  if (runtime.dispatchOutputs.length !== computedResampled.length ||
+      runtime.dispatchHeaders?.length !== computedResampled.length) throw new Error('Complete dispatcher targets required');
+  dispatch = finalizeSoundboardDispatch(computedResampled, runtime.resampling[0]);
+  const normalizations = new Uint32Array(Float32Array.from(normalization.normalizations).buffer);
+  for (let channel = 0; channel < dispatch.outputs.length; channel++) {
+    if (runtime.dispatchHeaders[channel].length !== dispatch.outputs[channel].length) throw new Error('Dispatcher length differs');
+    dispatchComparisons.push(compare(dispatch.outputs[channel], runtime.dispatchOutputs[channel], channel));
+    if (normalizations[channel] !== runtime.dispatchHeaders[channel].normalizationValueBits) {
+      normalizationControlMismatches.push({channel, stage: 'dispatcher', actualBits: normalizations[channel],
+        expectedBits: runtime.dispatchHeaders[channel].normalizationValueBits});
+    }
   }
 }
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
@@ -308,7 +327,7 @@ const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons];
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons, ...dispatchComparisons];
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
@@ -336,6 +355,7 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   shapedComparisons, normalizedComparisons, normalizationControlMismatches,
   normalizationComputed: Boolean(normalization), normalizationControlsStillCaptured: Boolean(normalization),
   resampledComparisons, resamplingComputed: Boolean(resamplingPlan),
+  dispatchComparisons, dispatchComputed: Boolean(dispatch), dispatchScale: dispatch?.scale ?? null,
   resamplingControlsStillCaptured: Boolean(resamplingPlan),
   resamplingPlan: resamplingPlan && {numerator: resamplingPlan.numerator, denominator: resamplingPlan.denominator,
     filterLength: resamplingPlan.filterLength, taps: resamplingPlan.taps,
