@@ -1,9 +1,10 @@
+import {archiveReleaseWaveform} from './pianoteq_archive_release_waveform.mjs';
 import fs from 'node:fs';import path from 'node:path';import crypto from 'node:crypto';
 import {VoiceReleaseCue64} from '../dsp/voice-release-cue.mjs';
 import {AuxiliarySourceEnvelope64} from '../dsp/auxiliary-source-envelope.mjs';
 import {midiBlockClock} from '../dsp/midi-block-clock.mjs';
 import {readPcm} from './pianoteq_order_fixture.mjs';
-export function produceAuxiliaryMidSource(directory,{poisonAudioTarget=false}={}) {
+export function produceAuxiliaryMidSource(directory,{poisonAudioTarget=false,archiveSourcePath,poisonReleaseWaveTarget=false}={}) {
 const flags=poisonAudioTarget?['--poison-audio-target']:[];
 const sha = b => crypto.createHash('sha256').update(b).digest('hex');
 const runtimeBytes = fs.readFileSync(path.join(directory, 'runtime.json')), d = JSON.parse(runtimeBytes);
@@ -22,6 +23,7 @@ for (const [file, digest] of Object.entries(launch.helperSha256))
   if (sha(fs.readFileSync(path.join(directory, '..', file))) !== digest) throw Error('Frozen source collector changed');
 for (const [file, digest] of [[launch.fixture.midiPath, launch.fixture.midiSha256], [launch.fixture.resourcePath, launch.fixture.resourceSha256],
   [launch.fixture.selection.path, launch.fixture.selection.sha256]]) if (sha(fs.readFileSync(file)) !== digest) throw Error('Fixture changed');
+const archiveWave=archiveSourcePath?archiveReleaseWaveform(archiveSourcePath,fixture):null;
 const tables = new Map();
 for (const [key, table] of Object.entries(d.tables)) {
   const raw = fs.readFileSync(path.join(directory, table.file));
@@ -37,12 +39,15 @@ const releaseAges = clock.noteOns.map(on => {
 });
 if(releaseAges.length!==5)throw Error('Five MIDI note events required');
 const models = new Map(Object.entries(d.profiles).map(([epoch,rows])=>[Number(epoch),new AuxiliarySourceEnvelope64(rows,tables,{sampleRate:48000,initialScale:d.inputs.find(r=>r.epoch===Number(epoch)).envelope.scale,releaseAge:releaseAges[Number(epoch)],quietLimit:d.inputs.find(r=>r.epoch===Number(epoch)).controls.quietLimit,quietThreshold:d.inputs.find(r=>r.epoch===Number(epoch)).controls.quietThreshold})]));
+let releaseWaveChecks=0,releaseWaveMismatches=0,releaseWaveTargetPoisoned=false;
 const predictions=[],midControls=new Map(),cues=new Map(),preMidVoices=new Map();
 const cancelAges=clock.noteOns.map((on,i)=>clock.noteOns.slice(i+1).filter(n=>n.note===on.note&&n.channel===on.channel).map(n=>n.frame-on.frame));
 for(let epoch=0;epoch<5;epoch++){
  const start=d.inputs.find(r=>r.epoch===epoch&&r.counter===releaseAges[epoch]);
  if(!start||start.directSource.counter!==0||start.directSource.quiet!==0)throw Error('MIDI-aligned initial release cue configuration required');
- cues.set(epoch,new VoiceReleaseCue64(start.directSource,tables));
+ let profile=start.directSource,cueTables=tables;
+ if(archiveWave){const target=tables.get(profile.primary);if(target.length!==archiveWave.output.length)throw Error('Archive release waveform extent differs');for(let i=0;i<target.length;i++){let t=target[i];if(poisonReleaseWaveTarget&&!releaseWaveTargetPoisoned&&i===1){t=Math.fround(t+0.125);releaseWaveTargetPoisoned=true;}releaseWaveChecks++;if(!Object.is(archiveWave.output[i],t))releaseWaveMismatches++;}cueTables=new Map(tables);cueTables.set('archive-release-primary',archiveWave.output);profile={...profile,primary:'archive-release-primary'};}
+ cues.set(epoch,new VoiceReleaseCue64(profile,cueTables));
 }
 const extraComputed=Buffer.alloc(3314*256);
 function cueState(model,target,context){
@@ -112,12 +117,12 @@ for (let ordinal = 0; ordinal < 3314; ordinal++) {
 if (flags.includes('--poison-audio-target') && !poisoned) throw Error('Negative target was not exercised');
 const report = {schema: 1, runtimeSha256: sha(runtimeBytes), nativeStatus: d.runStatus, blocks: 3314, samples: 3314*192, extraSamples:3314*64, computedExtraSha256:sha(extraComputed),
   nativePcmFrames: nativePcm.length / 6, nativePcmSha256: sha(nativePcm),
-  stages, failures, mismatches: Object.values(stages).reduce((n, s) => n + s.mismatches, 0), computedAudioSha256: sha(computed),
+  stages, failures, mismatches: releaseWaveMismatches+Object.values(stages).reduce((n, s) => n + s.mismatches, 0), computedAudioSha256: sha(computed),
   targetAudioSha256: sha(audio), historiesOwned: true, nativeAuxiliaryAudioUsedForPrediction: false, nativeExtraAudioUsedForPrediction:false, cueStartsFromMidi:true, cueHistoriesOwned:true, cueConfigurationStillObserved:true, fadedSourceVerifiedInactiveOnly:true,
-  nativeSourceTablesStillObserved: true, initialSourceGainsDelayAndFilterCoefficientsStillObserved: true, initialEnvelopeScaleStillObserved:true, envelopeEnableFromMidi:true, envelopeDynamicStatesObserved:false, rawGainControlsStillObserved:true, quietCounterAndParentSkipOwned:true, initialQuietProfileStillObserved:true, releaseAges, predictions,
+  releaseCuePrimaryWaveformStillObserved:!archiveWave,archiveReleaseWaveform:archiveWave?.metadata,releaseWaveChecks,releaseWaveMismatches,releaseWaveTargetPoisoned,nativeSourceTablesStillObserved: true, initialSourceGainsDelayAndFilterCoefficientsStillObserved: true, initialEnvelopeScaleStillObserved:true, envelopeEnableFromMidi:true, envelopeDynamicStatesObserved:false, rawGainControlsStillObserved:true, quietCounterAndParentSkipOwned:true, initialQuietProfileStillObserved:true, releaseAges, predictions,
   independentMidiToStereoVerified: false, poisonedTarget: poisoned};
 const voices=new Map(predictions.map(item=>[item.epoch+':'+item.counter,Array.from({length:3},(_,r)=>Float32Array.from({length:64},(_,i)=>computed.readFloatLE(item.offset+(r*64+i)*4)))]));
 const files=[path.join(directory,'runtime.json'),path.join(directory,'launch.json'),path.join(directory,'observed.wav'),path.join(directory,'auxiliary.bin'),fixture.midiPath,fixture.resourcePath,fixture.selection.path,
- ...Object.keys(launch.helperSha256).map(f=>path.join(directory,'..',f)),...Object.values(d.tables).map(t=>path.join(directory,t.file))];
+ ...(archiveWave?.dependencies??[]),...(archiveSourcePath?[archiveSourcePath]:[]),...Object.keys(launch.helperSha256).map(f=>path.join(directory,'..',f)),...Object.values(d.tables).map(t=>path.join(directory,t.file))];
 return {report,computed,voices,preMidVoices,midControls,fixture,inputFiles:files.map(f=>({path:path.resolve(f),sha256:sha(fs.readFileSync(f))}))};
 }
