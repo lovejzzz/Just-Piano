@@ -22,7 +22,7 @@ try {
 } finally { fs.readFileSync = read; }
 const floats = new DataView(new ArrayBuffer(4));
 const bits = v => { if (!Number.isFinite(v)) throw new Error('Finite target required'); floats.setFloat32(0, v); return floats.getUint32(0); };
-let sourceValues = 0, velocityValues = 0, randomWords = 0, hardnessValues = 0, deniedAccesses = 0;
+let sourceValues = 0, velocityValues = 0, randomWords = 0, hardnessValues = 0, blendValues = 0, deniedAccesses = 0;
 function deny(object, key) { Object.defineProperty(object, key, {get() { deniedAccesses++; throw new Error('Forbidden captured input: ' + key); }}); }
 for (const r of capture.records) {
   if (r.stage === 'before') {
@@ -31,11 +31,11 @@ for (const r of capture.records) {
   } else if (r.stage === 'weights') {
     const input = {...r.input, controls: {...r.input.controls}}, record = {...r, input};
     for (const key of ['source', 'curves']) deny(input, key);
-    for (const key of ['velocity', 'attenuation']) deny(input.controls, key);
+    for (const key of ['velocity', 'attenuation', 'blendFloor', 'inputBlend', 'sharedBlendCoefficients']) deny(input.controls, key);
     deny(record, 'randomState');
     const trace = provenance.runtimeAudit.traces.find(t => t.epoch === r.epoch && t.mode === r.input.mode);
     if (!trace) throw new Error('Own same-replay repeated-strike trace required');
-    const source = own.consume(record, {repeat: {attenuation: trace.attenuation}});
+    const source = own.consume(record, {repeat: {attenuation: trace.attenuation}, velocityRuntime: provenance.blendHostRuntime});
     for (const name of ['frequency', 'decay', 'amplitude', 'phase']) {
       assert.equal(source[name].length, r.input.source[name].length);
       source[name].forEach((v, i) => {assert.equal(bits(v), bits(r.input.source[name][i])); sourceValues++;});
@@ -44,6 +44,9 @@ for (const r of capture.records) {
     const curves = own.hardnessCurves(record);
     for (const family of ['primary', 'secondary']) for (const key of ['knots', 'values'])
       curves[family][key].forEach((v, i) => {assert.equal(bits(v), bits(r.input.curves[family][key][i])); hardnessValues++;});
+    const blend = own.blendControls(record);
+    for (const key of ['blendFloor', 'inputBlend']) {assert.equal(bits(blend[key]), bits(r.input.controls[key])); blendValues++;}
+    blend.sharedBlendCoefficients.forEach((v, i) => {assert.equal(bits(v), bits(r.input.controls.sharedBlendCoefficients[i])); blendValues++;});
     assert.throws(() => own.consume(record, {repeat: {attenuation: trace.attenuation}}), /matching source mode/);
   }
 }
@@ -51,11 +54,12 @@ assert.equal(own.verifyComplete(), 10);
 assert.equal(deniedAccesses, 0);
 assert.equal(originalObservationFileReads, 0);
 assert.equal(sourceValues, 2160); assert.equal(velocityValues, 5); assert.equal(randomWords, 20); assert.equal(hardnessValues, 200);
+assert.equal(blendValues, 40);
 assert.throws(() => own.beginVelocity({stage: 'before', epoch: 0, note: 69}), /Chronological/);
-const result = {passed: true, sourceValues, velocityValues, randomWords, hardnessValues, deniedAccesses, originalObservationFileReads,
+const result = {passed: true, sourceValues, velocityValues, randomWords, hardnessValues, blendValues, deniedAccesses, originalObservationFileReads,
   duplicateModeRejections: 10, duplicateStartRejected: true,
   nativeSourceArraysUsedAsInput: false, nativeVelocityAttenuationHardnessAndRandomStateUsedAsInput: false,
-  repeatAttenuationFromBoundOwnContinuousReport: true, blendAndRuntimeControlsStillExplicit: true,
+  repeatAttenuationFromBoundOwnContinuousReport: true, blendTargetsUsedAsInput: false, hostExpressionAndRuntimeConditionsStillExplicit: true,
   sourceSha256: sha(sourceBytes), captureSha256: sha(captureBytes), reportSha256: sha(reportBytes),
   audioSamplesComparedHere: 0, finalStereoAudioVerified: false};
 fs.writeFileSync(output, JSON.stringify(result, null, 2) + '\n', {flag: 'wx', mode: 0o600});

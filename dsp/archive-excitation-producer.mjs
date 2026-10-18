@@ -9,6 +9,7 @@ import {archiveExcitationMixCoefficients, mixExcitationComponents} from './excit
 import {archiveNeighborControls, mixNeighborExcitation} from './excitation-neighbor-controls.mjs';
 import {archiveExcitationDecayControls, excitationDecayFromControls, scaleExcitationDecay} from './excitation-decay-controls.mjs';
 import {archiveFrequencyVariationControls, secondaryFrequencySeed, varyExcitationFrequencies} from './excitation-frequency-variation.mjs';
+import {archiveExcitationBlend} from './archive-excitation-blend.mjs';
 
 export function createArchiveExcitationProducer({baseFields, presetFields, runtime, events}) {
   if (runtime?.note !== 69 || runtime.instrumentMode !== 1 || runtime.hostMode !== 0 ||
@@ -52,13 +53,14 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
   const decayControls = archiveExcitationDecayControls(base, preset, 69, {runtimeCurveMode: 'linear-clamp'});
   const variationControls = archiveFrequencyVariationControls(base, 69, {instrumentMode: 1, runtimeCurveMode: 'linear-clamp'});
   const manager = new ExcitationManagerRandom({configurationSeed: 0, eventBranch: runtime.eventBranch});
-  const velocities = new Map(), primaryStates = new Map(), used = new Set(), traces = [];
+  const velocities = new Map(), blends = new Map(), primaryStates = new Map(), used = new Set(), traces = [];
   const metadata = Object.freeze({sourceTablesConstructedDuringReplay: true, historicalPredictionReportRequired: false,
     nativeSourceArraysUsedAsInput: false, candidateFromArchiveCoupledSource: true,
     candidateNativeRootAlgorithm: 'recovered-native-cubic-qr', candidateSourceRuntimeControlsComputed: true,
     primaryInitialRandomStateIndependentlyProduced: true, primaryRandomStateStillObserved: false,
     eventVelocityComputedFromMidiAndArchive: true, normalHardnessKnotsAndValuesComputedFromArchive: true,
-    registryAndCurveModesStillObserved: true, blendControlsStillObserved: true,
+    registryAndCurveModesStillObserved: true, blendControlsStillObserved: false,
+    blendControlsFromArchiveAndOwnVelocity: true, blendFloorHostConditionStillExplicit: true,
     sameRunModelGenerationVerified: false, wholeEngineEquivalent: false});
   return {
     metadata,
@@ -76,7 +78,7 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
       if (!velocities.has(epoch)) throw new Error('Started MIDI voice required');
       return velocities.get(epoch).velocity;
     },
-    consume(record, {repeat} = {}) {
+    consume(record, {repeat, velocityRuntime} = {}) {
       const {mode, note, header, size, controls} = record.input, key = `${record.epoch}:${mode}`;
       const event = velocities.get(record.epoch), source = sources.get(mode);
       if (!event || !source || note !== 69 || used.has(key) || header?.[0] !== source.columns ||
@@ -85,12 +87,18 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
           record.selectionSource?.sampleRate !== runtime.sourceOptions[mode].sampleRate)
         throw new Error('Own repeated-strike state and complete matching source mode required');
       if (mode === 1 && !used.has(`${record.epoch}:0`)) throw new Error('Primary source must precede secondary');
+      if (velocityRuntime?.hostMode !== runtime.hostMode) throw new Error('Consistent explicit host mode required');
+      const blend = archiveExcitationBlend({baseFields: base.fields, presetFields: preset.decoded_tail.fields,
+        velocity: event.velocity, velocityRuntime});
+      if (blends.has(record.epoch) && blends.get(record.epoch).blendFloor !== blend.blendFloor)
+        throw new Error('One expression condition per paired source required');
+      blends.set(record.epoch, blend);
       const mix = mixExcitationComponents({amplitude: source.normalizedAmplitude, columns: source.columns,
         ...mixControls, velocity: event.velocity, attenuation: repeat.attenuation,
-        blendFloor: controls.blendFloor, inputBlend: controls.inputBlend});
+        blendFloor: blend.blendFloor, inputBlend: blend.inputBlend});
       const neighbor = mixNeighborExcitation({amplitude: mix.amplitude, phase: source.phase, columns: source.columns},
-        {...neighborControls, floor: controls.blendFloor, blend: controls.inputBlend,
-          mix: Math.max(Math.fround(controls.blendFloor), Math.fround(controls.inputBlend))});
+        {...neighborControls, floor: blend.blendFloor, blend: blend.inputBlend,
+          mix: Math.max(blend.blendFloor, blend.inputBlend)});
       const decayModel = excitationDecayFromControls(decayControls, event.velocity, {hostMode: 0, noteBranch: 'ordinary'});
       const variation = varyExcitationFrequencies({frequency: source.frequency, columns: source.columns,
         spread: mode === 0 ? variationControls.primarySpread : variationControls.secondarySpread,
@@ -99,7 +107,7 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
       if (mode === 0) primaryStates.set(record.epoch, [...variation.randomState]);
       used.add(key); traces.push({epoch: record.epoch, mode, attenuation: repeat.attenuation,
         velocity: event.velocity, randomDraws: variation.randomDraws, randomState: [...variation.randomState],
-        decayGain: decayModel.gain, blendFloor: controls.blendFloor, inputBlend: controls.inputBlend});
+        decayGain: decayModel.gain, ...structuredClone(blend)});
       return {frequency: Array.from(variation.frequency), decay: Array.from(scaleExcitationDecay(source.decay, decayModel.gain)),
         amplitude: Array.from(neighbor.amplitude), phase: Array.from(neighbor.phase)};
     },
@@ -110,6 +118,10 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     hardnessCurves(record) {
       if (!used.has(`${record.epoch}:${record.input.mode}`)) throw new Error('Consumed source required');
       return structuredClone(hardnessCurves);
+    },
+    blendControls(record) {
+      if (!used.has(`${record.epoch}:${record.input.mode}`)) throw new Error('Consumed source required');
+      return structuredClone(blends.get(record.epoch));
     },
     verifyComplete() {
       if (velocities.size !== 5 || used.size !== 10 || manager.starts !== 5 || manager.draws !== 10)
