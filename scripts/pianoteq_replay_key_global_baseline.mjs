@@ -25,6 +25,7 @@ function verifyHelpers(sourceRoot, manifest) {
     'pianoteq_capture_soundboard_state.py', 'pianoteq_capture_source_amplitude.py', 'pianoteq_capture_worker_bank512.py', 'pianoteq_damper_runtime_capture.py'] :
     ['pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_soundboard_responses.py', 'pianoteq_damper_runtime_capture.py']);
   if (manifest.feedbackLatticeSameRun) expected.push('pianoteq_capture_feedback_allpass_continuous.py', 'pianoteq_capture_feedback_allpass_probe.py');
+  if (manifest.monoBodySameRun) expected.push('pianoteq_capture_mono_body_continuous.py', 'pianoteq_capture_global_recurrence.py');
   expected.sort();
   if (JSON.stringify(Object.keys(manifest.helperSha256).sort()) !== JSON.stringify(expected) ||
       manifest.collectorSha256 !== manifest.helperSha256[isStereo ? 'pianoteq_capture_key_stereo_baseline.py' : 'pianoteq_capture_key_audio_baseline.py']) throw new Error('Complete bound collector closure required');
@@ -54,7 +55,7 @@ const extended = launch.sites.includes('0x1000ef37c'), withWriter = launch.sites
 const postFeedback = data.globalAudioBoundary === 'post-feedback';
 const expectedSites = postFeedback ? ['0x10051fad4'] : ['0x10051fad4', '0x1006c2ac4'];
 if (extended) {
-  expectedSites.push(data.feedbackLatticeSameRun ? '0x1006ca950' : '0x1002a4334', '0x1006c2fd4', '0x1000ef37c');
+  expectedSites.push(data.monoBodySameRun ? '0x100829d48' : data.feedbackLatticeSameRun ? '0x1006ca950' : '0x1002a4334', '0x1006c2fd4', '0x1000ef37c');
   if (!data.writerOnlyStereoTarget) expectedSites.push('0x1001bc114');
 }
 if (withWriter) expectedSites.push('0x10091baa4');
@@ -275,7 +276,8 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeCacheGeometryStillObserved: true,
   nativeFeedbackAudioStillObserved: postFeedback && !ownFeedback,
   computedFeedbackReportSha256: ownFeedback?.reportSha256 ?? null, computedFeedbackAudioSha256: ownFeedback?.audioSha256 ?? null,
-  nativeMonoFeedbackSourceStillObserved: !!ownFeedback,
+  nativeMonoFeedbackSourceStillObserved: ownFeedback ? !ownFeedback.usesComputedMono : false,
+  nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};
 fs.writeFileSync(output, JSON.stringify(report, null, 2), {flag: 'wx', mode: 0o600});

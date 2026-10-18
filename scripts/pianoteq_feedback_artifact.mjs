@@ -18,12 +18,37 @@ export function readComputedFeedback(root, capture, reportPath, audioPath) {
       audio.length !== blocks * 768 || sha(audio) !== report.computedFeedbackSha256)
     throw Error('Complete bound independently calculated same-run feedback required');
   observed.observations.forEach((item, i) => { if (item.globalOrdinal !== i) throw Error('Exact feedback/global chronology required'); });
-  return { reportSha256: sha(raw), audioSha256: sha(audio), rows(block) {
+  if (report.nativeMonoSourceUsedForPrediction === false && (!capture.monoBodySameRun ||
+      !/^[a-f0-9]{64}$/.test(report.computedMonoReportSha256) || !/^[a-f0-9]{64}$/.test(report.computedMonoAudioSha256)))
+    throw Error('Computed mono provenance required');
+  return { reportSha256: sha(raw), audioSha256: sha(audio), usesComputedMono: report.nativeMonoSourceUsedForPrediction === false, rows(block) {
     if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound feedback block required');
     return Array.from({ length: 3 }, (_, row) => Float32Array.from({ length: 64 }, (_, i) => {
       const value = audio.readFloatLE(block * 768 + (row * 64 + i) * 4);
       if (!Number.isFinite(value)) throw Error('Finite computed feedback required');
       return value;
     }));
+  } };
+}
+
+export function readComputedMono(root, capture, reportPath, audioPath) {
+  if (!reportPath || !audioPath || !capture.monoBodySameRun) throw Error('Paired same-run mono proof required');
+  const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+  const raw = fs.readFileSync(reportPath), report = JSON.parse(raw);
+  const source = fs.readFileSync(path.join(root, capture.monoBodyFile));
+  const data = JSON.parse(source), audio = fs.readFileSync(audioPath), blocks = capture.globalAudioRecords.length;
+  if (sha(source) !== capture.monoBodySha256 || report.inputSha256 !== sha(source) || !report.passed || report.mismatches !== 0 || report.blocks !== blocks ||
+      report.nativeBodyOutputUsedForPrediction !== false || report.nativePreLatticeMonoUsedForPrediction !== false ||
+      data.runStatus?.pid !== capture.runStatus.pid || !data.runStatus.terminal || data.runStatus.exitStatus !== 0 || data.pending || data.errors.length ||
+      data.observations.length !== blocks || audio.length !== blocks * 256 || sha(audio) !== report.computedMonoSha256)
+    throw Error('Complete bound computed mono required');
+  data.observations.forEach((item, i) => { if (item.ordinal !== i) throw Error('Exact mono chronology required'); });
+  return { reportSha256: sha(raw), audioSha256: sha(audio), row(block) {
+    if (!Number.isInteger(block) || block < 0 || block >= blocks) throw Error('Bound mono block required');
+    return Float32Array.from({ length: 64 }, (_, i) => {
+      const value = audio.readFloatLE(block * 256 + i * 4);
+      if (!Number.isFinite(value)) throw Error('Finite computed mono required');
+      return value;
+    });
   } };
 }

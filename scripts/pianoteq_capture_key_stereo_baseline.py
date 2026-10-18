@@ -20,6 +20,12 @@ stream = None
 pending = None
 WITH_WRITER = os.environ.get('PIANOTEQ_CAPTURE_WRITER') == '1'
 WITH_LATTICE = os.environ.get('PIANOTEQ_CAPTURE_LATTICE') == '1'
+WITH_MONO = os.environ.get('PIANOTEQ_CAPTURE_MONO') == '1'
+if WITH_MONO:
+    import pianoteq_capture_mono_body_continuous as mono
+    if not WITH_LATTICE: raise ValueError('Body mode requires lattice mode')
+mono_rows = []
+mono_pending = None
 if WITH_LATTICE:
     import pianoteq_capture_feedback_allpass_continuous as lattice
     if not WITH_WRITER: raise ValueError('Lattice mode requires actual writer observation')
@@ -30,6 +36,9 @@ sites = {(0x1006ca950 if WITH_LATTICE else 0x1002a4334): ('lattice' if WITH_LATT
          0x1000ef37c: 'cabinet', 0x1001bc114: 'pcm'}
 if WITH_WRITER: sites[0x10091baa4] = 'writer'
 if WITH_LATTICE: del sites[0x1001bc114]
+if WITH_MONO:
+    del sites[0x1006ca950]
+    sites = {0x100829d48: 'bodyDrive', **sites}
 
 
 def save():
@@ -47,11 +56,18 @@ def save():
     if WITH_LATTICE:
         lattice_bytes = json.dumps({'schema': 1, 'runStatus': base.run_status, 'errors': lattice_errors,
             'targetMutation': False, 'pending': lattice_pending is not None,
-            'sites': ['0x1006ca950', '0x1006c2fd4'], 'observations': lattice_rows}, separators=(',', ':'), allow_nan=False).encode()
+            'sites': ['0x100829d48' if WITH_MONO else '0x1006ca950', '0x1006c2fd4'], 'observations': lattice_rows}, separators=(',', ':'), allow_nan=False).encode()
         (base.ROOT / 'feedback-lattice.json').write_bytes(lattice_bytes)
         data.update(feedbackLatticeSameRun=True, feedbackLatticeFile='feedback-lattice.json',
             feedbackLatticeSha256=hashlib.sha256(lattice_bytes).hexdigest(),
             convolutionIrTimeInputsCaptured=False, writerOnlyStereoTarget=True)
+    if WITH_MONO:
+        mono_bytes = json.dumps({'schema': 1, 'runStatus': base.run_status, 'errors': errors,
+            'targetMutation': False, 'pending': mono_pending is not None,
+            'sites': ['0x100829d48', '0x1006c2fd4'], 'configs': mono.modal.configs,
+            'observations': mono_rows}, separators=(',', ':'), allow_nan=False).encode()
+        (base.ROOT / 'mono-body.json').write_bytes(mono_bytes)
+        data.update(monoBodySameRun=True, monoBodyFile='mono-body.json', monoBodySha256=hashlib.sha256(mono_bytes).hexdigest())
     if WITH_WRITER:
         key.global_stream.flush()
         data.update(keyGlobalSameRun=True, globalAudioBoundary='post-feedback', globalSnapshotSite='0x1006c2fd4',
@@ -83,7 +99,7 @@ def append_audio(frame, row, matrices):
 
 
 def observed(frame, location, internal):
-    global pending, lattice_pending
+    global pending, lattice_pending, mono_pending
     try:
         pc = frame.GetPCAddress().GetFileAddress()
         if pc != location.GetAddress().GetFileAddress() or frame.GetThread().GetIndexID() != 1:
@@ -111,6 +127,35 @@ def observed(frame, location, internal):
         if pc not in sites or len(records) >= 16000: raise ValueError('Bounded downstream point required')
         reg = lambda name: frame.FindRegister(name).GetValueAsUnsigned()
         name = sites[pc]
+        if name == 'bodyDrive':
+            if mono_pending is not None or lattice_pending is not None: raise ValueError('Unique body/lattice block required')
+            mono_pending = mono.begin_block(frame, len(key.global_rows))
+            state = scalar(frame, mono_pending['_root'] + 0x50, 'Q')
+            external = scalar(frame, mono_pending['_root'] + 0x68, 'Q')
+            begin, end = unpack(frame, external + 8, 'QQ')
+            if end < begin or (end - begin) % 56 or not 1 <= (end - begin) // 56 <= 64:
+                raise ValueError('Bounded compiled feedback program vector required')
+            active_begin, active_end = unpack(frame, external + 0x38, 'QQ')
+            if active_end - active_begin != 8: raise ValueError('One active feedback descriptor required')
+            descriptor_index = scalar(frame, active_begin, 'Q')
+            descriptor_begin, descriptor_end = unpack(frame, external + 0x20, 'QQ')
+            if descriptor_end < descriptor_begin or (descriptor_end - descriptor_begin) % 56 or descriptor_index >= (descriptor_end - descriptor_begin) // 56:
+                raise ValueError('Bounded actual feedback descriptor required')
+            descriptor = descriptor_begin + descriptor_index * 56
+            program_index = scalar(frame, descriptor, 'Q')
+            if program_index >= (end - begin) // 56: raise ValueError('Bounded selected compiled feedback program required')
+            program = begin + program_index * 56
+            table, table_end = unpack(frame, program, 'QQ')
+            if table_end - table != 3 * 72: raise ValueError('Three compiled feedback filters required')
+            states = [lattice.probe.filter_state(frame, table + 72 * i) for i in range(3)]
+            if lattice_rows:
+                for item in states: del item['ring']
+            lattice_pending = {'globalOrdinal': len(key.global_rows), 'before': states,
+                'postFilterEnabled': scalar(frame, program + 0x18, 'B'),
+                'programSelection': {'descriptor': descriptor_index, 'program': program_index,
+                    'descriptorGains': list(unpack(frame, descriptor + 0x28, 'ff'))},
+                'routeBefore': lattice.route_config(frame, state), '_table': table, '_state': state}
+            return False
         if name == 'lattice':
             if lattice_pending is not None: raise ValueError('Unique feedback lattice call required')
             owners = [f for f in frame.GetThread() if f.GetPCAddress().GetFileAddress() == 0x1006c2c6c]
@@ -149,6 +194,12 @@ def observed(frame, location, internal):
             return False
         if name == 'feedbackRoute':
             state = reg('x21')
+            if WITH_MONO:
+                if mono_pending is None or mono_pending['ordinal'] != len(key.global_rows): raise ValueError('Same-block mono predecessor required')
+                mono.body_result(frame, mono_pending, include_output=False)
+                mono.finish_block(frame, mono_pending, state)
+                lattice_pending['source'] = mono_pending['monoTarget']
+                mono_rows.append(mono_pending); mono_pending = None
             if WITH_LATTICE:
                 if lattice_pending is None or lattice_pending.pop('_state') != state or lattice_pending['globalOrdinal'] != len(key.global_rows):
                     raise ValueError('Complete same-block lattice predecessor required')

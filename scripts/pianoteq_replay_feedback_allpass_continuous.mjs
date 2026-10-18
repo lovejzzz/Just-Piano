@@ -1,16 +1,27 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { readComputedMono } from './pianoteq_feedback_artifact.mjs';
 import { ScalarAllpass } from '../dsp/scalar-allpass.mjs';
 import { createRoutedDelayCache, routeConstantBlock, readRoutedBlock } from '../dsp/routed-delay-cache.mjs';
 
 const [input, destination, ...options] = process.argv.slice(2);
-if (!input || !destination || options.some(x => x !== '--poison-output-target' && !x.startsWith('--output-feedback='))) throw Error('Usage: replay INPUT REPORT [--poison-output-target] [--output-feedback=NEW_FILE]');
+if (!input || !destination || options.some(x => x !== '--poison-output-target' && !['--output-feedback=', '--mono-report=', '--mono-audio='].some(p => x.startsWith(p)))) throw Error('Usage: replay INPUT REPORT [--poison-output-target] [--output-feedback=NEW_FILE] [--mono-report=REPORT --mono-audio=AUDIO]');
 if (fs.existsSync(destination)) throw Error('Fresh report required');
 const feedbackPath = options.find(x => x.startsWith('--output-feedback='))?.slice('--output-feedback='.length);
 if (feedbackPath && fs.existsSync(feedbackPath)) throw Error('Fresh feedback artifact required');
 const raw = fs.readFileSync(input), capture = JSON.parse(raw);
 if (!capture.runStatus?.terminal || capture.runStatus.exitStatus !== 0 || capture.errors.length || capture.pending || capture.targetMutation !== false || !capture.observations.length) throw Error('Complete successful observation required');
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
+const monoReportPath = options.find(x => x.startsWith('--mono-report='))?.slice('--mono-report='.length);
+const monoAudioPath = options.find(x => x.startsWith('--mono-audio='))?.slice('--mono-audio='.length);
+if (!!monoReportPath !== !!monoAudioPath) throw Error('Paired mono inputs required');
+let ownMono = null;
+if (monoReportPath) {
+  const root = path.dirname(path.resolve(input)), full = JSON.parse(fs.readFileSync(path.join(root, 'runtime.json')));
+  if (full.feedbackLatticeSha256 !== sha(raw)) throw Error('Same-run lattice sidecar required');
+  ownMono = readComputedMono(root, full, monoReportPath, monoAudioPath);
+}
 let checks = 0, mismatches = 0, nonzero = 0, poisoned = false;
 const examples = [], outputs = [];
 function check(actual, expected, label) {
@@ -49,6 +60,8 @@ for (let block = 0; block < capture.observations.length; block++) {
   const item = capture.observations[block];
   if (!!item.routeBefore !== withRoute) throw Error('Incomplete route coverage');
   const blockOutput = [];
+  const source = ownMono ? ownMono.row(block) : Float32Array.from(item.source[0]);
+  if (ownMono) source.forEach((x, i) => check(x, item.source[0][i], `${block}.computedMono.${i}`));
   check(item.postFilterEnabled, 0, `postfilter.${block}`);
   if (item.source.length !== 1 || item.source[0].length !== 64 || item.output.length !== 3) throw Error('Unsupported matrix');
   for (let row = 0; row < 3; row++) {
@@ -59,7 +72,7 @@ for (let block = 0; block < capture.observations.length; block++) {
       check(sha(Buffer.from(filter.ring.buffer)), target.ringSha256, `${block}.${row}.${phase}.ring`);
       check(JSON.stringify(filter.taps), JSON.stringify(target.taps), `${block}.${row}.${phase}.taps`);
     }
-    const output = filter.process(Float32Array.from(item.source[0]));
+    const output = filter.process(source);
     blockOutput.push(output);
     outputs.push(Buffer.from(output.buffer));
     output.forEach((x, i) => {
@@ -89,7 +102,8 @@ for (let block = 0; block < capture.observations.length; block++) {
 }
 const report = { schema: 1, inputSha256: sha(raw), blocks: capture.observations.length,
   checks, mismatches, examples, nonzero, computedOutputSha256: sha(Buffer.concat(outputs)),
-  poisoned, nativeMonoSourceUsedForPrediction: true, observedInitialGeometryUsed: true,
+  poisoned, nativeMonoSourceUsedForPrediction: !ownMono, observedInitialGeometryUsed: true,
+  computedMonoReportSha256: ownMono?.reportSha256 ?? null, computedMonoAudioSha256: ownMono?.audioSha256 ?? null,
   feedbackRouteVerified: withRoute && mismatches === 0, computedFeedbackSha256: withRoute ? sha(Buffer.concat(feedback)) : null,
   nativeOutputOrRingHistoryUsedForPrediction: false, independentEngineStereoVerified: false };
 fs.writeFileSync(destination, JSON.stringify(report, null, 2), { flag: 'wx' });
