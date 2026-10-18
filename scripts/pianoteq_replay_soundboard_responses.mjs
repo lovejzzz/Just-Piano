@@ -22,6 +22,8 @@ import {initializeSoundboardFromConfig} from '../dsp/soundboard-initialization.m
 import {constructSoundboardMatrices} from '../dsp/soundboard-matrix-construction.mjs';
 import {constructSoundboardObservationGroups} from '../dsp/soundboard-observation-groups.mjs';
 import {constructSoundboardReceiverGeometry} from '../dsp/soundboard-receiver-geometry.mjs';
+import {constructSoundboardModelConfig} from '../dsp/soundboard-model-config.mjs';
+import {constructSoundboardLidGains} from '../dsp/soundboard-lid-gain.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -85,13 +87,53 @@ const capturedObservations = runtime.records.map((record) => {
   if (coefficient !== coeff.length) throw new Error('Unconsumed observation coefficients');
   return {length: record.length, groups};
 });
-let initialization = null;
+let initialization = null, modelConfiguration = null, modelLidGains = null;
+let modelConfigurationComparison = null;
+const modelControlMismatches = [];
+let processingControls = runtime.processing, shapingScalars = runtime.shaping?.scalars, normalizationControls = runtime.normalization;
+const modelFloat = (offset) => new DataView(modelConfiguration.config.buffer).getFloat32(offset, true);
+if (runtime.modelConfigurationInputs) {
+  const input = runtime.modelConfigurationInputs;
+  if (input.state !== runtime.capturedSource?.state || input.sourcePositionPolicy !== 'literal-model' ||
+      !runtime.initializationInputs || !runtime.observationConstructionInputs || !runtime.receiverConstructionInputs) {
+    throw new Error('Complete bound model configuration inputs required');
+  }
+  const floats = (d) => new Float32Array(Uint8Array.from(readDescriptor(d)).buffer);
+  const model = readDescriptor(input.model), preset = readDescriptor(input.preset);
+  modelConfiguration = constructSoundboardModelConfig({model, preset, bridge: floats(input.bridge),
+    propagationModes: floats(input.propagationModes), component: input.component});
+  modelLidGains = constructSoundboardLidGains({curve: {...input.lidCurve, x: floats(input.lidCurve.x), y: floats(input.lidCurve.y)},
+    preset, modelFamily: model.readUInt32LE(0x98)});
+  const target = readDescriptor(runtime.modelConfigurationTarget), actual = Buffer.from(modelConfiguration.config);
+  if (target.length !== 0x220) throw new Error('Complete scalar configuration target required');
+  let wordMismatches = 0, byteMismatches = 0, bridgeMismatches = 0, gainMismatches = 0;
+  for (const offset of modelConfiguration.computedOffsets) wordMismatches += Number(actual.readUInt32LE(offset) !== target.readUInt32LE(offset));
+  for (const offset of modelConfiguration.computedBytes) byteMismatches += Number(actual[offset] !== target[offset]);
+  const bridgeTarget = floats(runtime.initializationInputs.bridge), gainTarget = floats(runtime.observationConstructionInputs.gains);
+  if (bridgeTarget.length !== modelConfiguration.bridge.length || gainTarget.length !== modelLidGains.output.length) throw new Error('Model vector audit shape differs');
+  for (let i = 0; i < bridgeTarget.length; i++) bridgeMismatches += Number(!Object.is(modelConfiguration.bridge[i], bridgeTarget[i]));
+  for (let i = 0; i < gainTarget.length; i++) gainMismatches += Number(!Object.is(modelLidGains.output[i], gainTarget[i]));
+  modelConfigurationComparison = {wordCount: modelConfiguration.computedOffsets.length, byteCount: modelConfiguration.computedBytes.length,
+    wordMismatches, byteMismatches, bridgeMismatches, gainMismatches};
+  const audit = (name, actual, expected) => {if (!Object.is(actual, expected)) modelControlMismatches.push({name, actual, expected});};
+  shapingScalars = [modelFloat(0xe0), modelFloat(0x144), modelFloat(0x140)];
+  shapingScalars.forEach((v, i) => audit(`shaping.${i}`, v, runtime.shaping.scalars[i]));
+  normalizationControls = [modelFloat(0x148), modelFloat(0x24), 0];
+  normalizationControls.forEach((v, i) => audit(`normalization.${i}`, v, runtime.normalization[i]));
+  const processing = {sampleRate: modelFloat(0x24), cutoff: modelFloat(0x14c),
+    adjustmentNumerator: modelFloat(0x88), adjustmentDenominator: modelFloat(0x1c8)};
+  for (const [name, value] of Object.entries(processing)) audit(`processing.${name}`, value, runtime.processing[name]);
+  processingControls = {...runtime.processing, ...processing};
+  audit('receiver.offsetScale', modelFloat(0x1c8), runtime.receiverConstructionInputs.offsetScale);
+  audit('receiver.mirror', modelConfiguration.config[0x1d0], runtime.receiverConstructionInputs.mirror);
+  audit('observation.phaseMode', modelConfiguration.config[0x1cc], runtime.observationConstructionInputs.phaseMode);
+}
 const initializationControlMismatches = [];
 let propagationControls = source.controls, conversionControls = source.conversion;
 let excitation = Float32Array.from(source.excitation), excitationIndex = source.excitationIndex, stateSize = 1500;
 if (runtime.initializationInputs) {
-  const bridge = new Float32Array(Uint8Array.from(readDescriptor(runtime.initializationInputs.bridge)).buffer);
-  initialization = initializeSoundboardFromConfig(readDescriptor(runtime.initializationInputs.config), bridge);
+  const bridge = modelConfiguration?.bridge ?? new Float32Array(Uint8Array.from(readDescriptor(runtime.initializationInputs.bridge)).buffer);
+  initialization = initializeSoundboardFromConfig(modelConfiguration?.initializationConfig ?? readDescriptor(runtime.initializationInputs.config), bridge);
   propagationControls = initialization.propagationControls; conversionControls = initialization.conversion;
   excitation = initialization.excitation.output; excitationIndex = initialization.grid.excitationIndex;
   stateSize = initialization.grid.size;
@@ -122,7 +164,8 @@ if (runtime.receiverConstructionInputs) {
   constructedReceivers = constructSoundboardReceiverGeometry({grid: initialization.grid, shape: constructedMatrices.shape,
     ...initialization.receiverControls, primary: input.primary.map(floats), offsets: input.offsets.map(floats),
     parents: new Uint32Array(Uint8Array.from(readDescriptor(input.parents)).buffer),
-    offsetScale: input.offsetScale, mirror: input.mirror});
+    offsetScale: modelConfiguration ? modelFloat(0x1c8) : input.offsetScale,
+    mirror: modelConfiguration ? modelConfiguration.config[0x1d0] : input.mirror});
   if (constructedReceivers.geometry.length !== target.geometry.length) throw new Error('Final receiver count differs');
   constructedReceivers.geometry.forEach((g, i) => {
     const oracle = target.geometry[i], coordinates = floats(oracle.coordinates);
@@ -141,8 +184,9 @@ if (runtime.observationConstructionInputs) {
     throw new Error('Same-run initialized observation inputs required');
   }
   constructedObservations = constructSoundboardObservationGroups({grid: initialization.grid,
-    geometry: constructedReceivers?.geometry ?? input.geometry.map((g) => ({...g, coordinates: floats(g.coordinates)})), gains: floats(input.gains),
-    ...initialization.observationControls, steps: controls.steps, phaseMode: Boolean(input.phaseMode)});
+    geometry: constructedReceivers?.geometry ?? input.geometry.map((g) => ({...g, coordinates: floats(g.coordinates)})),
+    gains: modelLidGains?.output ?? floats(input.gains), ...initialization.observationControls, steps: controls.steps,
+    phaseMode: Boolean(modelConfiguration ? modelConfiguration.config[0x1cc] : input.phaseMode)});
 }
 const observations = constructedObservations?.observations ?? capturedObservations;
 function encodeObservation(observation) {
@@ -247,7 +291,7 @@ if (needTrim) {
 }
 if (needFilter) {
   if (!trim) throw new Error('Trimmed responses required before filtering');
-  filter = filterSoundboardResponses(trim.outputs, runtime.processing);
+  filter = filterSoundboardResponses(trim.outputs, processingControls);
   if (runtime.filtered?.length) {
     if (runtime.filtered.length !== trim.outputs.length) throw new Error('Filtered channel count differs');
     filteredComparisons = filter.outputs.map((output, channel) =>
@@ -273,7 +317,7 @@ const spectralPrefixes = [], curveGainComparisons = [];
 const inverseInputComparisons = [], inverseOutputComparisons = [], computedCurveGains = [];
 const inverseResults = [], reconstructionComparisons = [], reconstructionControlMismatches = [];
 const reconstructed = [], shapedComparisons = [], normalizedComparisons = [], normalizationControlMismatches = [];
-const needReconstruction = Boolean(runtime.reconstructionRecords?.length || runtime.shaped?.length);
+const needReconstruction = Boolean(runtime.reconstructionRecords?.length || runtime.shaped?.length || runtime.normalized?.length);
 const needInverse = Boolean(runtime.fftRecords?.length || needReconstruction);
 if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length || needInverse) {
   if (!leading) throw new Error('Generated leading responses required');
@@ -286,7 +330,7 @@ if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length || need
   }
   for (let channel = 0; channel < leading.outputs.length; channel++) {
     const amount = amounts.readFloatLE(channel * 4), flag = Number(flags.readUInt32LE(channel * 4) !== 0);
-    const width = runtime.shaping.scalars[1];
+    const width = shapingScalars[1];
     const prefix = prepareSoundboardSpectralPrefix(leading.outputs[channel],
       {tau: propagationControls.tau, amount, width, flags: flag});
     spectralPrefixes.push(prefix);
@@ -318,7 +362,7 @@ if (runtime.curveGainRecords?.length || needInverse) {
         if (!range) throw new Error('Required curve vector missing');
         return new Float32Array(Uint8Array.from(readDescriptor(range.data)).buffer);
       };
-      const width = kind ? 40 : runtime.shaping.scalars[2];
+      const width = kind ? 40 : shapingScalars[2];
       const mix = kind ? 0 : blend.readFloatLE(channel * 4);
       const parameters = [width, mix, spectralPrefixes[channel].binSpacing];
       const predicted = soundboardCurveGain({x: floats(24), y: floats(48), dimensions: header.readUInt32LE(72),
@@ -342,7 +386,7 @@ if (needInverse) {
   }
   for (let channel = 0; channel < spectralPrefixes.length; channel++) {
     const predicted = computeSoundboardInverseSpectrum(spectralPrefixes[channel],
-      {power: runtime.shaping.scalars[0], globalGain: computedCurveGains[channel][0],
+      {power: shapingScalars[0], globalGain: computedCurveGains[channel][0],
         channelGain: computedCurveGains[channel][1]});
     inverseResults.push(predicted);
     if (!runtime.fftRecords?.length) continue;
@@ -384,7 +428,7 @@ if (runtime.shaped?.length) {
 if (runtime.normalized?.length) {
   if (runtime.normalized.length !== reconstructed.length || runtime.normalization?.length !== 3 ||
       runtime.normalizedHeaders?.length !== reconstructed.length) throw new Error('Complete normalization capture required');
-  const [gain, sampleRate, impulseMix] = runtime.normalization;
+  const [gain, sampleRate, impulseMix] = normalizationControls;
   normalization = normalizeSoundboardResponses(reconstructed, {gain, sampleRate, impulseMix});
   const words = new Uint32Array(Float32Array.from(normalization.normalizations).buffer);
   for (let channel = 0; channel < normalization.outputs.length; channel++) {
@@ -435,8 +479,16 @@ const sameRunSource = Boolean(provenance &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
 const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons, ...dispatchComparisons];
-const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length + initializationControlMismatches.length;
+const modelMismatchCount = modelConfigurationComparison ? modelConfigurationComparison.wordMismatches + modelConfigurationComparison.byteMismatches +
+  modelConfigurationComparison.bridgeMismatches + modelConfigurationComparison.gainMismatches : 0;
+const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length +
+  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
+  modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
+  modelLidGainsComputed: Boolean(modelLidGains), dispatcherInitializationConfigurationUsedForPrediction: !modelConfiguration,
+  capturedGainVectorUsedForPrediction: !modelLidGains, shapingScalarsComputedFromModel: Boolean(modelConfiguration),
+  normalizationControlsComputedFromModel: Boolean(modelConfiguration), modelAndPresetSourcesStillCaptured: Boolean(modelConfiguration),
+  fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
   receiverComparisons, receiverGeometryComputed: Boolean(constructedReceivers),
   finalReceiverCoordinatesUsedForPrediction: !constructedReceivers,
   primaryReceiverConfigurationStillCaptured: Boolean(constructedReceivers),
@@ -447,7 +499,7 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   sourceMatricesUsedForPrediction: !constructedMatrices,
   matrixSolverIterations: constructedMatrices?.solve.iterations ?? null,
   initializationControlMismatches, initializationComputed: Boolean(initialization),
-  initializationConfigurationStillCaptured: Boolean(initialization),
+  initializationConfigurationStillCaptured: Boolean(initialization) && !modelConfiguration,
   sourceExcitationUsedForPrediction: !initialization, sourceGridScalarsUsedForPrediction: !initialization,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
@@ -472,7 +524,7 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   reconstructionComparisons, reconstructionControlMismatches,
   timeReconstructionComputed: reconstructed.length > 0,
   shapedComparisons, normalizedComparisons, normalizationControlMismatches,
-  normalizationComputed: Boolean(normalization), normalizationControlsStillCaptured: Boolean(normalization),
+  normalizationComputed: Boolean(normalization), normalizationControlsStillCaptured: Boolean(normalization) && !modelConfiguration,
   resampledComparisons, resamplingComputed: Boolean(resamplingPlan),
   dispatchComparisons, dispatchComputed: Boolean(dispatch), dispatchScale: dispatch?.scale ?? null,
   resamplingControlsStillCaptured: Boolean(resamplingPlan),

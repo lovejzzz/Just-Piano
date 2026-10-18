@@ -43,6 +43,12 @@ for (let group = 0; group < 3; group++) {
       replay.receiverComparisons?.length !== runtime.observationConstructionInputs.geometry.length)) {
     throw new Error('Receiver geometry construction not used');
   }
+  if (runtime.modelConfigurationInputs && (!replay.modelConfigurationComputed || !replay.modelLidGainsComputed ||
+      replay.dispatcherInitializationConfigurationUsedForPrediction !== false || replay.capturedGainVectorUsedForPrediction !== false ||
+      !replay.shapingScalarsComputedFromModel || !replay.normalizationControlsComputedFromModel ||
+      replay.modelConfigurationComparison?.wordCount !== 30 || replay.modelConfigurationComparison?.byteCount !== 5)) {
+    throw new Error('Upstream model/preset configuration not used');
+  }
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -54,6 +60,10 @@ for (let group = 0; group < 3; group++) {
     receiverGeometryComputed: replay.receiverGeometryComputed,
     finalReceiverCoordinatesUsedForPrediction: replay.finalReceiverCoordinatesUsedForPrediction,
     receiverComparisons: replay.receiverComparisons,
+    modelConfigurationComputed: replay.modelConfigurationComputed, modelLidGainsComputed: replay.modelLidGainsComputed,
+    dispatcherInitializationConfigurationUsedForPrediction: replay.dispatcherInitializationConfigurationUsedForPrediction,
+    capturedGainVectorUsedForPrediction: replay.capturedGainVectorUsedForPrediction,
+    modelConfigurationComparison: replay.modelConfigurationComparison,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
   for (let channel = 0; channel < 3; channel++) {
@@ -78,6 +88,12 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   receiverGeometryComputed: groupReports.every((g) => g.receiverGeometryComputed),
   finalReceiverCoordinatesUsedForPrediction: groupReports.some((g) => g.finalReceiverCoordinatesUsedForPrediction),
   primaryReceiverConfigurationStillCaptured: true,
+  modelConfigurationComputed: groupReports.every((g) => g.modelConfigurationComputed),
+  modelLidGainsComputed: groupReports.every((g) => g.modelLidGainsComputed),
+  dispatcherInitializationConfigurationUsedForPrediction: groupReports.some((g) => g.dispatcherInitializationConfigurationUsedForPrediction),
+  capturedGainVectorUsedForPrediction: groupReports.some((g) => g.capturedGainVectorUsedForPrediction),
+  modelAndPresetSourceRecordsStillCaptured: true,
+  fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
   completeVoiceVerified: false, finalStereoAudioVerified: false}, null, 2));
 if (!passed) process.exitCode = 1;
