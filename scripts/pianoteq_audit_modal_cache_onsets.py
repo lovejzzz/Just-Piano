@@ -18,7 +18,7 @@ HELPERS={**DISPATCH_HELPERS,'pianoteq_capture_modal_terminal_boundary.py':COLLEC
 FIELDS={'frequency','modalDecay','J','K','S','sinInverse','R','energy','positionWeight','P','Q','A','B'}
 KEYS=[(epoch,age) for epoch in range(5) for age in [0,64]]
 
-def validate_state(s):
+def validate_inventory(s):
     groups=s['groups'];require(0<len(groups)<=3,'Bounded modal groups required')
     expected=[];end=0
     for i,(start,padded,capacity,logical) in enumerate(groups):
@@ -28,6 +28,9 @@ def validate_state(s):
     for lane in s['lanes']:
         require(set(lane['words'])==FIELDS,'Exact modal field inventory required')
         require(all(type(v) is int and 0<=v<=0xffffffff for v in lane['words'].values()),'Raw uint32 modal words required')
+
+def validate_state(s):
+    validate_inventory(s)
     require(s['initialFlag']==0 and type(s['counter']) is int and s['counter']>=64 and s['counter']%64==0,'Cleared initialization flag and complete internal blocks required')
 
 def load(root):
