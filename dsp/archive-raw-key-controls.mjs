@@ -24,3 +24,11 @@ export function archiveRawKeyControls({baseFields,presetFields,note}){
   localControl:at(field(presetFields,0x1170,'curve'),'A1170 raw key'),
   localSoftControl:at(field(block.fields,0xc78,'c'),'B3b88 raw key')};
 }
+// 6d560c..6d5628: model/preset scalars copied to host +bc/+c0.
+export function archiveRawHostDamperControls({baseFields,presetFields}){
+ const block=field(baseFields,0x2f10,'mar_param');
+ const hostControl=field(presetFields,0x116c,'f32'),hostBlend=field(block.fields,0xc70,'f');
+ if(![hostControl,hostBlend].every(v=>Number.isFinite(v)&&Number.isFinite(f(v))))
+  throw Error('Finite float32 raw host damper controls required');
+ return {hostControl:f(hostControl),hostBlend:f(hostBlend)};
+}

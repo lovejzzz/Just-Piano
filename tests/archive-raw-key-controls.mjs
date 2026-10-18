@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {archiveRawKeyControls} from '../dsp/archive-raw-key-controls.mjs';
+import {archiveRawKeyControls,archiveRawHostDamperControls} from '../dsp/archive-raw-key-controls.mjs';
 const curve=(x,y)=>({version:32771,x,y});
 const baseFields=[{object_offset:0x2f10,kind:'mar_param',value:{fields:[
  {object_offset:0xe08,kind:'u',value:91},
@@ -22,3 +22,14 @@ assert.throws(()=>at(69,baseFields,[...presetFields,presetFields[0]]));
 const badLimit=structuredClone(baseFields);badLimit[0].value.fields[0].value=-1;
 assert.throws(()=>at(69,badLimit));
 console.log('Archive key damper boundary/override/fallback, ordinary local curves and invalid-source guards passed (synthetic).');
+
+const hostBase=structuredClone(baseFields),hostPreset=structuredClone(presetFields);
+hostBase[0].value.fields.push({object_offset:0xc70,kind:'f',value:.5});
+hostPreset.push({object_offset:0x116c,kind:'f32',value:0});
+assert.deepEqual(archiveRawHostDamperControls({baseFields:hostBase,presetFields:hostPreset}),{hostControl:0,hostBlend:.5});
+hostBase[0].value.fields.find(r=>r.object_offset===0xc70).value=.25;
+hostPreset.find(r=>r.object_offset===0x116c).value=.75;
+assert.deepEqual(archiveRawHostDamperControls({baseFields:hostBase,presetFields:hostPreset}),{hostControl:.75,hostBlend:.25});
+hostPreset.find(r=>r.object_offset===0x116c).value=NaN;
+assert.throws(()=>archiveRawHostDamperControls({baseFields:hostBase,presetFields:hostPreset}));
+console.log('Archive host damper controls, source changes and finite-input guards passed (synthetic).');

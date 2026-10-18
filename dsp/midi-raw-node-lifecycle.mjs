@@ -1,4 +1,4 @@
-import {archiveRawKeyControls} from './archive-raw-key-controls.mjs';
+import {archiveRawKeyControls,archiveRawHostDamperControls} from './archive-raw-key-controls.mjs';
 import {archiveKeyReleaseControls} from './archive-key-release-controls.mjs';
 import {createMidiKeyReleaseTimeline} from './midi-key-release-timeline.mjs';
 const f=Math.fround;
@@ -9,7 +9,8 @@ export function rawNodeCanRetire(node,head,flag,voices){
  if(node===head||node.velocity>=0||node.position!==(flag^1)||node.position!==head.position||head.velocity>=0)return false;
  return !voices.some(v=>(node.id===0xfffe||v.id===node.id)&&(node.tag===0xfffe||v.tag===node.tag));
 }
-// Cold single-key fixture: initial host controls remain observed inputs.
+// Cold single-key fixture: initial pedal modes/bypass still remain observed.
+// Host damper controls come from current base/preset archives.
 // Per-key flags/cap controls come from current base/preset archives.
 // 573bf4..573c28 builds fallback nodes from archive baseTime and (7,0).
 // All subsequent node identities, births, reuse and cleanup are engine-owned.
@@ -20,7 +21,8 @@ export class MidiRawNodeLifecycle {
      eventClock.events.some(e=>(e.kind==='noteOn'||e.kind==='noteOff')&&(e.channel!==0||e.note!==69||e.frame===0)))
    throw Error('Explicit cold supported single-key lifecycle required');
   this.controls={samples:eventClock.blockSize,sampleRate:eventClock.sampleRate,
-   ...Object.fromEntries(['hostControl','hostBlend','softControl','pedalControl','extraPedalControl','binaryPedal','bypassFlags'].map(k=>[k,structuredClone(initial[k])])),
+   ...archiveRawHostDamperControls({baseFields,presetFields}),
+   ...Object.fromEntries(['softControl','pedalControl','extraPedalControl','binaryPedal','bypassFlags'].map(k=>[k,structuredClone(initial[k])])),
    keys:initial.keys.map((_,i)=>archiveRawKeyControls({baseFields,presetFields,note:initialNoteBase+i}))};
   this.timeline=createMidiKeyReleaseTimeline({baseFields,presetFields,eventClock});
   this.events=eventClock.events.filter(e=>e.kind==='noteOn'||e.kind==='noteOff');
@@ -61,6 +63,6 @@ export class MidiRawNodeLifecycle {
  summary(){return {calls:this.calls,births:this.births,reuses:this.reuses,retirements:this.retirements,
   nativeDynamicNodeVelocitiesUsedForPrediction:false,nativeDynamicNodeListsAndIdentitiesUsedForPrediction:false,nativeInitialRawNodeProfileUsedForPrediction:false,
   nativeKeyCountAndNoteMappingStillExplicit:true,nativePerBlockRawKeySnapshotsUsedForPrediction:false,
-  nativeInitialKeyFlagAndLocalControlProfileUsedForPrediction:false,nativeInitialHostControlProfileStillObserved:true,
+  nativeInitialKeyFlagAndLocalControlProfileUsedForPrediction:false,nativeInitialHostDamperControlProfileUsedForPrediction:false,nativeInitialPedalModesAndBypassProfileStillObserved:true,
   keyMappingStillExplicit:true,completeVoiceOwnershipOrRetirementImplemented:false};}
 }
