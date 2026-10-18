@@ -74,8 +74,9 @@ def mapping(frame, pointer):
     return {'entries': entries, 'wrap': scalar(frame, pointer + 24, 'B')}
 
 
-def global_observed(frame):
-    workspace = frame.FindRegister('x2').GetValueAsUnsigned()
+def global_observed(frame, workspace=None):
+    # A caller may supply an actual workspace pointer read from its owned frame.
+    if workspace is None: workspace = frame.FindRegister('x2').GetValueAsUnsigned()
     begin, end = unpack(frame, workspace + 0x270, 'QQ')
     if end - begin != 312 or len(global_rows) >= 4096:
         raise ValueError('Bounded three-group global workspace required')

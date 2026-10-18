@@ -4,18 +4,26 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {createRoutedDelayCache, routeConstantBlock, readRoutedBlock} from '../dsp/routed-delay-cache.mjs';
 import {midiBlockClock} from '../dsp/midi-block-clock.mjs';
+import {injectWorkspaceFeedback} from '../dsp/workspace-feedback.mjs';
 
 const [directory, reportPath, ...flags] = process.argv.slice(2);
 const orderOptions = flags.filter(f => f.startsWith('--order-from='));
-if (!directory || !reportPath || orderOptions.length > 1 || orderOptions.length && flags.includes('--reverse-contributors') || flags.some(f => !['--reverse-contributors', '--poison-global-target', '--poison-head-target', '--poison-clock-target'].includes(f) && !f.startsWith('--order-from=')) || new Set(flags).size !== flags.length)
+const outputOptions = flags.filter(f => f.startsWith('--global-output='));
+const experimentFlags = flags.filter(f => !f.startsWith('--global-output='));
+if (!directory || !reportPath || orderOptions.length > 1 || outputOptions.length > 1 || orderOptions.length && flags.includes('--reverse-contributors') || flags.some(f => !['--reverse-contributors', '--poison-global-target', '--poison-head-target', '--poison-clock-target'].includes(f) && !f.startsWith('--order-from=') && !f.startsWith('--global-output=')) || new Set(flags).size !== flags.length)
   throw new Error('Usage: private-run-directory fresh-private-report [--reverse-contributors] [--poison-global-target] [--poison-head-target] [--poison-clock-target]');
 const root = path.resolve(directory), output = path.resolve(reportPath);
 if (fs.existsSync(output) || output.startsWith(path.resolve('.') + path.sep)) throw new Error('Fresh private report required');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function verifyHelpers(sourceRoot, manifest) {
-  const expected = ['pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_soundboard_responses.py', 'pianoteq_damper_runtime_capture.py'].sort();
+  const isStereo = manifest.sites.includes('0x1000ef37c');
+  const expected = (isStereo ? ['pianoteq_capture_convolution_scheduler.py', 'pianoteq_capture_feedback_stereo.py', 'pianoteq_capture_global_filters.py',
+    'pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_key_mix.py', 'pianoteq_capture_key_routes.py', 'pianoteq_capture_key_stereo_baseline.py',
+    'pianoteq_capture_modal_source.py', 'pianoteq_capture_recurrence.py', 'pianoteq_capture_room_mix.py', 'pianoteq_capture_soundboard_responses.py',
+    'pianoteq_capture_soundboard_state.py', 'pianoteq_capture_source_amplitude.py', 'pianoteq_capture_worker_bank512.py', 'pianoteq_damper_runtime_capture.py'] :
+    ['pianoteq_capture_key_audio_baseline.py', 'pianoteq_capture_soundboard_responses.py', 'pianoteq_damper_runtime_capture.py']).sort();
   if (JSON.stringify(Object.keys(manifest.helperSha256).sort()) !== JSON.stringify(expected) ||
-      manifest.collectorSha256 !== manifest.helperSha256['pianoteq_capture_key_audio_baseline.py']) throw new Error('Complete bound collector closure required');
+      manifest.collectorSha256 !== manifest.helperSha256[isStereo ? 'pianoteq_capture_key_stereo_baseline.py' : 'pianoteq_capture_key_audio_baseline.py']) throw new Error('Complete bound collector closure required');
   for (const [name, digest] of Object.entries(manifest.helperSha256))
     if (sha(fs.readFileSync(path.join(sourceRoot, '..', name))) !== digest) throw new Error('Frozen helper changed');
 }
@@ -38,9 +46,15 @@ function nativePcmAt(sourceRoot) {
 }
 const launch = JSON.parse(fs.readFileSync(path.join(root, 'launch.json')));
 const data = JSON.parse(fs.readFileSync(path.join(root, 'runtime.json')));
-if (JSON.stringify(launch.sites) !== JSON.stringify(['0x10051fad4', '0x1006c2ac4']) || !data.keyGlobalSameRun ||
+const extended = launch.sites.includes('0x1000ef37c'), withWriter = launch.sites.includes('0x10091baa4');
+const postFeedback = data.globalAudioBoundary === 'post-feedback';
+const expectedSites = postFeedback ? ['0x10051fad4'] : ['0x10051fad4', '0x1006c2ac4'];
+if (extended) expectedSites.push('0x1002a4334', '0x1006c2fd4', '0x1000ef37c', '0x1001bc114');
+if (withWriter) expectedSites.push('0x10091baa4');
+if (JSON.stringify(launch.sites) !== JSON.stringify(expectedSites) || !data.keyGlobalSameRun ||
     !data.runStatus?.terminal || data.runStatus.exitStatus !== 0 || data.errors.length || data.keyAudioErrors.length ||
-    data.targetMutation !== false || data.hardwareBreakpoints !== 2 || data.pendingGlobalContributors.length)
+    data.targetMutation !== false || data.hardwareBreakpoints !== expectedSites.length || data.pendingGlobalContributors.length ||
+    extended && (!data.keyStereoSameRun || data.downstreamErrors.length || data.downstreamPending !== null))
   throw new Error('Complete error-free terminal read-only paired capture required');
 verifyHelpers(root, launch);
 const fixture = launch.fixture;
@@ -77,6 +91,27 @@ function stream(name, sourceData = data, sourceRoot = root) {
   }));}};
 }
 const key = stream('key'), global = stream('global');
+const feedbackByGlobal = new Map();
+if (postFeedback) {
+  if (!extended || !withWriter || data.globalSnapshotSite !== '0x1006c2fd4') throw new Error('Explicit post-feedback snapshot identity required');
+  const raw = fs.readFileSync(path.join(root, data.downstreamFile));
+  if (raw.length !== data.downstreamBytes || sha(raw) !== data.downstreamSha256) throw new Error('Complete downstream audio extent required');
+  let offset = 0;
+  for (const [i, r] of data.downstreamRecords.entries()) {
+    const size = {feedbackRoute: 1280, cabinet: 3840, pcm: 512, writer: r.samples * 8}[r.stage];
+    if (r.ordinal !== i || r.offset !== offset || r.bytes !== size || sha(raw.subarray(offset, offset + size)) !== r.sha256)
+      throw new Error('Complete contiguous downstream byte coverage required');
+    if (r.stage === 'feedbackRoute') {
+      if (feedbackByGlobal.has(r.globalOrdinal)) throw new Error('Unique feedback source per block required');
+      feedbackByGlobal.set(r.globalOrdinal, Array.from({length: 3}, (_, row) => Float32Array.from({length: 64}, (_, j) => {
+        const value = raw.readFloatLE(offset + ((row + 2) * 64 + j) * 4);
+        if (!Number.isFinite(value)) throw new Error('Finite feedback source required'); return value;
+      })));
+    }
+    offset += size;
+  }
+  if (offset !== raw.length || feedbackByGlobal.size !== global.records.length) throw new Error('Complete same-run feedback coverage required');
+}
 const clock = midiBlockClock(fs.readFileSync(fixture.midiPath), {sampleRate: 48000});
 if (clock.noteOns.length !== 5) throw new Error('Five primary MIDI strikes required');
 const ownAges = new Map(), keyFrames = key.records.map(r => {
@@ -103,7 +138,8 @@ if (orderOptions.length) {
   const other = JSON.parse(fs.readFileSync(path.join(alternateRoot, 'runtime.json')));
   if (JSON.stringify(otherLaunch.fixture) !== JSON.stringify(fixture) || JSON.stringify(otherLaunch.sites) !== JSON.stringify(launch.sites) ||
       !other.keyGlobalSameRun || !other.runStatus?.terminal || other.runStatus.exitStatus !== 0 || other.errors.length || other.keyAudioErrors.length ||
-      other.targetMutation !== false || other.hardwareBreakpoints !== 2 || other.pendingGlobalContributors.length)
+      other.targetMutation !== false || other.hardwareBreakpoints !== expectedSites.length || other.pendingGlobalContributors.length ||
+      extended && (!other.keyStereoSameRun || other.downstreamErrors.length || other.downstreamPending !== null))
     throw new Error('Bound complete alternate native run required');
   verifyHelpers(alternateRoot, otherLaunch);
   const expectedOtherArguments = expectedArguments.map(a => a === path.join(root, 'observed.wav') ? path.join(alternateRoot, 'observed.wav') : a);
@@ -160,6 +196,9 @@ const entries = mapping => mapping.entries.map(e => {
 });
 let nextKey = 0;
 const resultHash = crypto.createHash('sha256');
+const audioOutput = outputOptions.length ? path.resolve(outputOptions[0].slice('--global-output='.length)) : null;
+if (audioOutput && (audioOutput === output || fs.existsSync(audioOutput) || audioOutput.startsWith(path.resolve('.') + path.sep))) throw new Error('Fresh distinct private audio output required');
+const audioDescriptor = audioOutput ? fs.openSync(audioOutput, 'wx', 0o600) : null;
 for (const g of global.records) {
   context = {globalBlock: g.ordinal, stage: 'key'};
   const contributors = [];
@@ -185,25 +224,35 @@ for (const g of global.records) {
     }
   }
   const outputs = caches.map(readRoutedBlock), predicted = [...outputs.slice(1).flat(), ...outputs[0]], actual = global.rows(g);
+  let compared = predicted;
+  if (postFeedback) {
+    if (g.feedbackPreRoute !== 0) throw new Error('Pre-route feedback branch not covered');
+    compared = [...injectWorkspaceFeedback(outputs.slice(1), feedbackByGlobal.get(g.ordinal), g.feedbackGain).flat, ...outputs[0]];
+  }
   context = {globalBlock: g.ordinal, stage: 'global'};
   metadata(g, true);
   const encoded = Buffer.alloc(3072);
   for (let row = 0; row < 12; row++) for (let i = 0; i < 64; i++) {
     let target = actual[row][i];
     if (flags.includes('--poison-global-target') && !poisoned && target !== 0) {target = fromBits(bits(target) ^ 1); poisoned = true;}
-    check('global-audio-bits', bits(predicted[row][i]), bits(target));
+    check('global-audio-bits', bits(compared[row][i]), bits(target));
     encoded.writeFloatLE(predicted[row][i], (row * 64 + i) * 4);
   }
   resultHash.update(encoded);
+  if (audioDescriptor !== null) fs.writeSync(audioDescriptor, encoded);
 }
+if (audioDescriptor !== null) fs.closeSync(audioDescriptor);
 if (nextKey !== key.records.length || flags.includes('--poison-global-target') && !poisoned) throw new Error('Complete contribution/negative-control coverage required');
 if (flags.includes('--poison-head-target') && !poisonedHead || flags.includes('--poison-clock-target') && !poisonedClock) throw new Error('Complete clock/head negative-control coverage required');
 const computedHash = resultHash.digest('hex');
 const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, nonAudioMismatches, failures,
   globalBlocks: global.records.length, voiceBlocks: key.records.length, order: alternateOrder ? 'alternate-native' : flags.includes('--reverse-contributors') ? 'reverse' : 'observed',
-  computedGlobalAudioSha256: computedHash, nativeAccumulationMathVerified: !flags.length && mismatches === 0,
+  computedGlobalAudioSha256: computedHash, computedGlobalAudioFile: audioOutput,
+  computedGlobalAudioBoundary: 'pre-feedback', nativeGlobalAudioBoundary: postFeedback ? 'post-feedback' : 'pre-feedback',
+  captureRuntimeSha256: sha(fs.readFileSync(path.join(root, 'runtime.json'))),
+  nativeAccumulationMathVerified: !experimentFlags.length && mismatches === 0,
   alternateNativeOrderReproducedExactGlobalAudio: alternateOrder ? computedHash === alternateGlobalHash : null,
-  sharedCacheOrderEffectVerified: !!alternateOrder && flags.length === 1 && !nonAudioMismatches &&
+  sharedCacheOrderEffectVerified: !!alternateOrder && experimentFlags.length === 1 && !nonAudioMismatches &&
     computedHash === alternateGlobalHash && alternateGlobalHash !== data.globalAudioSha256,
   alternateOrderSource: alternateRoot,
   nativePcm, alternateNativePcm,
@@ -211,6 +260,7 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeKeyAgesUsedForPrediction: false, nativeKeyGlobalOrdinalUsedForPrediction: false,
   nativeCacheHeadsUsedForPrediction: false, nativeContributionOrderStillObserved: true,
   nativeCacheGeometryStillObserved: true,
+  nativeFeedbackAudioStillObserved: postFeedback,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};
 fs.writeFileSync(output, JSON.stringify(report, null, 2), {flag: 'wx', mode: 0o600});
