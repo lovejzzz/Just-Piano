@@ -16,6 +16,7 @@ import {soundboardCurveGain} from '../dsp/soundboard-curve-gain.mjs';
 import {computeSoundboardInverseSpectrum} from '../dsp/soundboard-inverse-spectrum.mjs';
 import {reconstructSoundboardTime} from '../dsp/soundboard-time-reconstruction.mjs';
 import {normalizeSoundboardResponses} from '../dsp/soundboard-response-normalization.mjs';
+import {createSoundboardResamplingPlan, resampleSoundboardResponse} from '../dsp/soundboard-resampling.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -286,13 +287,28 @@ if (runtime.normalized?.length) {
     }
   }
 }
+const resampledComparisons = [];
+let resamplingPlan = null;
+if (runtime.resampled?.length) {
+  if (!normalization || runtime.resamplingPending || runtime.resampling?.length !== 2 ||
+      runtime.resampled.length !== normalization.outputs.length ||
+      runtime.resampledHeaders?.length !== normalization.outputs.length) throw new Error('Complete resampled chain required');
+  const [outputRate, inputRate] = runtime.resampling;
+  if (![outputRate, inputRate].every((v) => Number.isFinite(v) && v > 0)) throw new Error('Invalid resampling rates');
+  resamplingPlan = createSoundboardResamplingPlan(Math.fround(outputRate / inputRate), 10);
+  for (let channel = 0; channel < normalization.outputs.length; channel++) {
+    const result = resampleSoundboardResponse(normalization.outputs[channel], resamplingPlan);
+    if (runtime.resampledHeaders[channel].length !== result.output.length) throw new Error('Resampled header length differs');
+    resampledComparisons.push({...compare(result.output, runtime.resampled[channel], channel), frames: result.frames});
+  }
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons];
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons];
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount,
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
@@ -319,6 +335,11 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) &
   timeReconstructionComputed: reconstructed.length > 0,
   shapedComparisons, normalizedComparisons, normalizationControlMismatches,
   normalizationComputed: Boolean(normalization), normalizationControlsStillCaptured: Boolean(normalization),
+  resampledComparisons, resamplingComputed: Boolean(resamplingPlan),
+  resamplingControlsStillCaptured: Boolean(resamplingPlan),
+  resamplingPlan: resamplingPlan && {numerator: resamplingPlan.numerator, denominator: resamplingPlan.denominator,
+    filterLength: resamplingPlan.filterLength, taps: resamplingPlan.taps,
+    coefficientsComputed: true, capturedCoefficientsUsedForPrediction: false},
   spectralPrefixComputed: spectralPrefixes.length > 0,
   curveGainControlsFromShapingCapture: curveGainComparisons.length > 0,
   spectralNativeTargetsUsedForPrediction: false,
