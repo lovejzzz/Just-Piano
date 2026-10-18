@@ -10,11 +10,11 @@ soundboard calculation, actual complete native audio verification, then the same
 engine in AudioWorklet with audible parameter edit/save/reload and measured
 realtime performance. Retain the dark cinematic UI. **This goal is not complete.**
 
-Research commit **97dcd59ffc394d8220a1c5284ab3bacfd85c6a56** is pushed to
-`origin/codex/cinematic-piano`. The browser preview/handoff change containing this
-note follows that commit. Continue committing and pushing verified work to this
-branch. Do not merge or deploy before full acceptance. The current request only
-updates the local listening page; it does not authorize a public audio/model upload.
+Research commit **97dcd59ffc394d8220a1c5284ab3bacfd85c6a56** and audition/handoff
+commit **d7a78e6** are pushed to `origin/codex/cinematic-piano`. The current change
+adds actual realtime synthesis using a subset of the recovered modules, with an
+explicit experimental voice bridge. Continue pushing verified work to this branch.
+Do not merge/deploy before full acceptance or upload private model/audio data.
 
 ## Canonical workspace and preserved work
 
@@ -31,16 +31,34 @@ updates the local listening page; it does not authorize a public audio/model upl
 
 ## What the user can hear now
 
-The normal realtime keyboard still uses `piano-worklet.js`: the earlier independent
-modal synth with six original voicings. It is **not** the newly verified full
-research pipeline. Do not describe a preview-player update as AudioWorklet integration.
+With `--model-archive`, the realtime keyboard now uses
+`research-piano-worklet.mjs` and `dsp/realtime-research-engine.mjs` at 48 kHz.
+`research-model-worker.mjs` calculates all 88 note templates from base/preset
+fields using the source/coupled pole modules and builds 125 generated auxiliary
+waveforms. No native context/control snapshot, pointer, prediction file or
+rendered note WAV is an input. All playable inputs route to this worklet. Model
+preparation is off the audio thread; the worklet owns note state and synthesizes
+128-frame stereo quanta, with reusable modal scratch. Limits: 24 voices and
+2,048 lanes, quiet/released voice stealing. The optional offline WAV player is
+collapsed and not used by key events.
 
-The local page now optionally shows a Chinese **试听最新成果** panel. It plays the
-latest complete offline calculation from pass314: five repeated A4 strikes,
-release and tail. The bound native fixture assigns CC64 to **Rattle**, not Sustain.
-This short benchmark does not establish general sustain/pedal or musical coverage.
-The player is explicitly labelled as offline research and separate from live keys.
-No commercial WAV, model, preset or generated source table is committed.
+**Not the full latest offline engine:** native voice initialization/control laws,
+velocity-dependent physical source recalculation, hammer contact/feedback,
+continuous damper coupling, full spatial/convolution chain and factory presets
+remain unresolved. Explicit source runtime defaults, velocity spectrum/gain,
+release gate, scheduling and body/mix are experimental choices. The six UI
+voicings are edits of this one model, not six distinct instrument models. Static
+hosting without the private endpoint still runs the original `piano-worklet.js`.
+Do not describe local integration as public deployment or native equivalence.
+
+Pass315 regression regenerated source→spatial→stereo after the kernel scratch
+change: source 14,292,040 checks / zero mismatches; final WAV identical in its
+entirety to pass314. Private outputs are `pass315-live-regression-*`. This is
+regression of the observed offline fixture, not equivalence of the live adapter.
+Detailed verification: `docs/realtime-audioworklet-pass315.md`.
+Live private-model audit: `live-browser-model-audit.json`; synthetic live tests:
+`node tests/realtime-research-engine.mjs`. Initial preparation measured ~15 sec
+in Node; browser can be longer. Node 12-note chord measured ~713 ms CPU per sec; do not claim broad latency/performance acceptance.
 
 Start the local listening server from canonical:
 
@@ -49,12 +67,16 @@ PIANO_ANALYSIS="$HOME/.local/share/just-piano-analysis"
 python3 scripts/serve_local_preview.py \
   --wav "$PIANO_ANALYSIS/pass314-final-v4-stereo.json.wav" \
   --audit "$PIANO_ANALYSIS/pass314-final-v4-verification.json" \
-  --render-revision 97dcd59 --port 8000
+  --render-revision 97dcd59 \
+  --model-archive "$PIANO_ANALYSIS/pass265-excitation-current-inputs.json" --port 8000
 ```
 
 Open `http://localhost:8000/`. This server binds only 127.0.0.1. It verifies the
 complete PCM SHA against the audit before starting, serves no-cache public app
-assets and two fixed private audition endpoints, and supports WAV range requests.
+assets and fixed private model/audition endpoints, and supports WAV range requests.
+The model response projects only baseFields/presetFields; original resource and
+preset SHA bindings are checked at startup. No native context or private paths
+are returned.
 It does not expose the analysis directory. `verified-preview.js` is localhost-only;
 the service worker excludes private endpoints from caching. Normal `npm run serve`
 remains plain static hosting without the private audition. The server session may

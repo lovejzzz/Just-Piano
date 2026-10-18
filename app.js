@@ -58,6 +58,7 @@
     sustainMidi = new Set();
   const softMidi = new Set();
   let starting = null;
+  let researchLive = false;
 
   function makeImpulse(ac, seconds = 2.6) {
     const len = Math.floor(ac.sampleRate * seconds);
@@ -98,12 +99,35 @@
   async function initializeAudio() {
     ctx = new (window.AudioContext || window.webkitAudioContext)({
       latencyHint: "interactive",
+      sampleRate: 48000,
     });
-    await ctx.audioWorklet.addModule("piano-worklet.js");
-    node = new AudioWorkletNode(ctx, "just-piano", {
-      numberOfInputs: 0,
-      outputChannelCount: [2],
-    });
+    let localMetadata;
+    if (["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
+      const response = await fetch('/__local/verified-preview.json', {cache:'no-store'});
+      if (response.ok) localMetadata = await response.json();
+    }
+    if (localMetadata?.liveModelAvailable) {
+      const {createResearchNode} = await import('./research-audio-loader.mjs');
+      node = await createResearchNode(ctx, {
+        onProgress: progress => {
+          $("audioLabel").textContent = progress.stage === 'modal' ? `准备琴键 ${progress.completed}/88` : '计算琴槌起音…';
+          $("status").textContent = '正在从模型参数计算，请稍候…';
+        },
+        onError: error => {
+          $("status").textContent = `实时引擎错误：${error.message}，请刷新后重试。`;
+          $("researchDiagnostics").textContent = 'AudioWorklet 已停止，请刷新页面。';
+          node?.disconnect();
+        },
+        onStats: stats => {
+          $("researchDiagnostics").textContent = `已现场合成 ${stats.noteStarts} 次击键 · 活跃声部 ${stats.activeVoices} · 非有限输出 ${stats.nonfinite}`;
+          $("researchDiagnostics").dataset.stats = JSON.stringify(stats);
+        },
+      });
+      researchLive = true;
+    } else {
+      await ctx.audioWorklet.addModule("piano-worklet.js");
+      node = new AudioWorkletNode(ctx, "just-piano", {numberOfInputs: 0, outputChannelCount: [2]});
+    }
 
     // Soundboard/body colouring.
     const low = ctx.createBiquadFilter();
@@ -590,7 +614,7 @@
       $("audioDot").classList.add("on");
       $("audioLabel").textContent = "Audio enabled";
       $("status").textContent =
-        "Ready to play · " + Math.round(ctx.sampleRate / 1000) + " kHz";
+        (researchLive ? "NY 研究引擎 · 88 键实时合成 · " : "Ready to play · ") + Math.round(ctx.sampleRate / 1000) + " kHz";
       startMidi();
       return true;
     } catch (err) {

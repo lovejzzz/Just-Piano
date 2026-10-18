@@ -20,6 +20,16 @@
     audio.addEventListener("play", () => document.getElementById("panic").click());
     audio.addEventListener("error", () => {status.textContent = "本机验证音频加载失败，请重启本地试听服务。";});
     document.getElementById("panic").addEventListener("click", event => {if (event.isTrusted) audio.pause();});
-    document.getElementById("verifiedPreview").hidden = false;
+    if (metadata.liveModelAvailable) {
+      document.getElementById('researchLivePanel').hidden = false;
+      button.textContent = '播放离线对照';
+      document.getElementById('verifiedTitle').textContent = '离线验证对照 · NY Steinway D';
+      const caveat = document.querySelector('#verifiedPreview .preview-caveat');
+      caveat.textContent = '这是离线对照文件；上方实时琴键使用 AudioWorklet 现场合成。';
+      document.getElementById('toggleReference').addEventListener('click', event => {
+        const panel = document.getElementById('verifiedPreview');panel.hidden = !panel.hidden;
+        event.currentTarget.setAttribute('aria-expanded',String(!panel.hidden));
+      });
+    } else document.getElementById("verifiedPreview").hidden = false;
   } catch { /* Ordinary static hosting has no private audition endpoint. */ }
 })();

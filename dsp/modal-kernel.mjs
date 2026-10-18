@@ -61,14 +61,12 @@ function reduceFourGroups(values) {
 // Mirrors the observed 16-lane, four-sample-unrolled no-input path.
 // A/B are separate 16-lane arrays; P/Q are updated in place. The output may
 // already contain earlier modal groups and is accumulated in float32.
-export function renderSixteen(P, Q, A, B, output) {
+export function renderSixteen(P, Q, A, B, output, workspace) {
   if ([P, Q, A, B].some((array) => array.length !== 16) || output.length % 4) {
     throw new RangeError('Expected 16 lanes and a multiple of four output samples');
   }
-  const first = new Float32Array(16);
-  const second = new Float32Array(16);
-  const third = new Float32Array(16);
-  const fourth = new Float32Array(16);
+  const [first, second, third, fourth] = workspace ?? Array.from({length: 4}, () => new Float32Array(16));
+  if ([first, second, third, fourth].some(array => array?.length !== 16)) throw new RangeError('Four 16-lane scratch arrays required');
   for (let sample = 0; sample < output.length; sample += 4) {
     for (let lane = 0; lane < 16; lane++) {
       first[lane] = fma32(B[lane], Q[lane], f32(A[lane] * P[lane]));

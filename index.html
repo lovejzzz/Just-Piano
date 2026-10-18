@@ -26,6 +26,16 @@
           ><span id="audioLabel">Enable audio</span>
         </button>
       </header>
+      <section id="researchLivePanel" class="verified-preview" aria-labelledby="researchLiveTitle" hidden>
+        <div>
+          <div class="eyebrow">LIVE PHYSICAL MODEL · EXPERIMENTAL</div>
+          <h2 id="researchLiveTitle">NY Steinway D · 实时研究引擎</h2>
+          <p>开启音频后，88 个琴键使用模型模态、已复原的递推内核与生成式琴槌起音，现场合成声音。</p>
+          <p class="preview-caveat">琴槌力度、制音、声部调度及混音的实时桥接仍属实验实现，尚未通过完整原生声音等价验收。六个音色是编辑变体，并非工厂预设。</p>
+          <span id="researchDiagnostics" role="status">等待开启实时引擎</span>
+        </div>
+        <button id="toggleReference" type="button" aria-expanded="false">展开离线对照音频</button>
+      </section>
       <section id="verifiedPreview" class="verified-preview" aria-labelledby="verifiedTitle" hidden>
         <div>
           <div class="eyebrow">LOCAL RESEARCH PREVIEW · <span id="previewRevision"></span></div>
@@ -35,7 +45,7 @@
         </div>
         <div class="preview-player">
           <button id="playVerified" type="button">试听最新成果</button>
-          <audio id="verifiedAudio" controls preload="metadata" aria-label="最新 NY Steinway D 验证音频"></audio>
+          <audio id="verifiedAudio" controls preload="none" aria-label="最新 NY Steinway D 验证音频"></audio>
           <span id="previewStatus" role="status"></span>
         </div>
       </section>

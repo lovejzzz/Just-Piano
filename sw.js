@@ -1,5 +1,5 @@
 // Network-first cache so Just Piano also works offline after the first visit.
-const CACHE = "just-piano-v4";
+const CACHE = "just-piano-v5";
 const FILES = [
   "./",
   "index.html",

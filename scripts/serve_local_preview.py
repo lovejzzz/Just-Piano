@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve the public app plus one explicitly configured private verified WAV on loopback."""
+"""Serve the app, an optional private model, and a verified reference WAV on loopback."""
 import argparse
 import hashlib
 import json
@@ -12,7 +12,8 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = {'index.html', 'style.css', 'app.js', 'presets.js', 'piano-worklet.js',
-          'verified-preview.js', 'sw.js', 'icon.svg', 'manifest.webmanifest'}
+          'verified-preview.js', 'sw.js', 'icon.svg', 'manifest.webmanifest',
+          'research-model-worker.mjs', 'research-piano-worklet.mjs', 'research-audio-loader.mjs'}
 
 
 def verified_metadata(wav_path, audit_path, revision):
@@ -30,7 +31,7 @@ def verified_metadata(wav_path, audit_path, revision):
             'renderRevision': revision, 'audioUrl': '/__local/verified-preview.wav'}
 
 
-def handler_for(wav_path, metadata):
+def handler_for(wav_path, metadata, model_bytes=None):
     wav_bytes = wav_path.read_bytes()
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
@@ -52,13 +53,21 @@ def handler_for(wav_path, metadata):
             if target == '/__local/verified-preview.json':
                 revision = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], cwd=ROOT,
                                           capture_output=True, text=True, check=True).stdout.strip()
-                data = json.dumps({**metadata, 'uiRevision': revision}).encode()
+                data = json.dumps({**metadata, 'uiRevision': revision, 'liveModelAvailable': model_bytes is not None}).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
                 self.send_header('Content-Length', str(len(data)))
                 self.end_headers()
                 if not head:
                     self.wfile.write(data)
+                return
+            if target == '/__local/live-model.json' and model_bytes is not None:
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(model_bytes)))
+                self.end_headers()
+                if not head:
+                    self.wfile.write(model_bytes)
                 return
             if target == '/__local/verified-preview.wav':
                 size = len(wav_bytes)
@@ -100,15 +109,27 @@ def handler_for(wav_path, metadata):
     return Handler
 
 
+def live_model_bytes(path):
+    archive = json.loads(path.read_text())
+    for name in ['resource', 'preset']:
+        if hashlib.sha256(Path(archive[name + 'Path']).read_bytes()).hexdigest() != archive[name + 'Sha256']:
+            raise ValueError('Current model/preset archive binding differs')
+    return json.dumps({key: archive[key] for key in ['baseFields', 'presetFields']}).encode()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--wav', type=Path, required=True)
     parser.add_argument('--audit', type=Path, required=True)
     parser.add_argument('--render-revision', required=True)
     parser.add_argument('--port', type=int, default=8000)
+    parser.add_argument('--model-archive', type=Path)
     args = parser.parse_args()
     metadata = verified_metadata(args.wav, args.audit, args.render_revision)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(args.wav, metadata))
+    model_bytes = None
+    if args.model_archive:
+        model_bytes = live_model_bytes(args.model_archive)
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(args.wav, metadata, model_bytes))
     print(f'Local verified audition: http://localhost:{server.server_port}/', flush=True)
     try:
         server.serve_forever()
