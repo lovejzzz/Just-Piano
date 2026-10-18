@@ -24,8 +24,14 @@ import {constructSoundboardObservationGroups} from '../dsp/soundboard-observatio
 import {constructSoundboardReceiverGeometry} from '../dsp/soundboard-receiver-geometry.mjs';
 import {constructSoundboardModelConfig} from '../dsp/soundboard-model-config.mjs';
 import {constructSoundboardLidGains} from '../dsp/soundboard-lid-gain.mjs';
+import {constructSoundboardArchiveSources} from '../dsp/soundboard-archive-source.mjs';
 
-const [sourcePath, captureDirectory] = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+if (arguments_.length !== 2 && !(arguments_.length === 4 && arguments_[2] === '--archive-inputs')) {
+  throw new Error('Usage: source-config.json capture-directory [--archive-inputs private-archive.json]');
+}
+const [sourcePath, captureDirectory] = arguments_;
+const archiveInputsPath = arguments_[3] ?? null;
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
 const hashes = {};
 const read = (filename) => {
@@ -87,7 +93,9 @@ const capturedObservations = runtime.records.map((record) => {
   if (coefficient !== coeff.length) throw new Error('Unconsumed observation coefficients');
   return {length: record.length, groups};
 });
-let initialization = null, modelConfiguration = null, modelLidGains = null;
+const archiveSources = archiveInputsPath ? constructSoundboardArchiveSources(JSON.parse(read(archiveInputsPath))) : null;
+if (archiveSources && !runtime.modelConfigurationInputs) throw new Error('Upstream model capture required for archive validation');
+let initialization = null, modelConfiguration = null, modelLidGains = null, archiveSourceComparison = null;
 let modelConfigurationComparison = null;
 const modelControlMismatches = [];
 let processingControls = runtime.processing, shapingScalars = runtime.shaping?.scalars, normalizationControls = runtime.normalization;
@@ -99,11 +107,31 @@ if (runtime.modelConfigurationInputs) {
     throw new Error('Complete bound model configuration inputs required');
   }
   const floats = (d) => new Float32Array(Uint8Array.from(readDescriptor(d)).buffer);
-  const model = readDescriptor(input.model), preset = readDescriptor(input.preset);
-  modelConfiguration = constructSoundboardModelConfig({model, preset, bridge: floats(input.bridge),
-    propagationModes: floats(input.propagationModes), component: input.component});
-  modelLidGains = constructSoundboardLidGains({curve: {...input.lidCurve, x: floats(input.lidCurve.x), y: floats(input.lidCurve.y)},
-    preset, modelFamily: model.readUInt32LE(0x98)});
+  const modelTarget = readDescriptor(input.model), presetTarget = readDescriptor(input.preset);
+  const archiveComponent = archiveSources?.components[input.component];
+  if (archiveSources && !archiveComponent) throw new Error('Archive component missing');
+  const model = archiveComponent?.model ?? modelTarget, preset = archiveComponent?.preset ?? presetTarget;
+  const bridge = archiveComponent?.bridge ?? floats(input.bridge), propagationModes = archiveComponent?.propagationModes ?? floats(input.propagationModes);
+  const lidCurve = archiveComponent?.lidCurve ?? {...input.lidCurve, x: floats(input.lidCurve.x), y: floats(input.lidCurve.y)};
+  if (archiveComponent) {
+    let words = 0, bytes = 0, wordMismatches = 0, byteMismatches = 0, curveMetadataMismatches = 0;
+    for (const [actual, target, offsets] of [[model, modelTarget, archiveComponent.modelOffsets], [preset, presetTarget, archiveComponent.presetOffsets]]) {
+      const view = new DataView(actual.buffer, actual.byteOffset, actual.byteLength);
+      for (const offset of offsets) {words++; wordMismatches += Number(view.getUint32(offset, true) !== target.readUInt32LE(offset));}
+    }
+    for (const offset of archiveComponent.modelBytes) {bytes++; byteMismatches += Number(model[offset] !== modelTarget[offset]);}
+    for (const [actual, descriptor] of [[bridge, input.bridge], [propagationModes, input.propagationModes],
+      [lidCurve.x, input.lidCurve.x], [lidCurve.y, input.lidCurve.y]]) {
+      const target = floats(descriptor);
+      if (actual.length !== target.length) throw new Error('Archive/native vector extent differs');
+      for (let i = 0; i < actual.length; i++) {words++; wordMismatches += Number(!Object.is(actual[i], target[i]));}
+    }
+    for (const key of ['dimensions', 'mode', 'logX']) curveMetadataMismatches += Number(lidCurve[key] !== input.lidCurve[key]);
+    archiveSourceComparison = {words, bytes, wordMismatches, byteMismatches, curveMetadataMismatches};
+  }
+  modelConfiguration = constructSoundboardModelConfig({model, preset, bridge, propagationModes, component: input.component});
+  modelLidGains = constructSoundboardLidGains({curve: lidCurve,
+    preset, modelFamily: new DataView(model.buffer, model.byteOffset, model.byteLength).getUint32(0x98, true)});
   const target = readDescriptor(runtime.modelConfigurationTarget), actual = Buffer.from(modelConfiguration.config);
   if (target.length !== 0x220) throw new Error('Complete scalar configuration target required');
   let wordMismatches = 0, byteMismatches = 0, bridgeMismatches = 0, gainMismatches = 0;
@@ -481,10 +509,13 @@ const sameRunSource = Boolean(provenance &&
 const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons, ...magnitudeComparisons, ...whiteningComparisons, ...curveGainComparisons, ...inverseInputComparisons, ...inverseOutputComparisons, ...reconstructionComparisons, ...shapedComparisons, ...normalizedComparisons, ...resampledComparisons, ...dispatchComparisons];
 const modelMismatchCount = modelConfigurationComparison ? modelConfigurationComparison.wordMismatches + modelConfigurationComparison.byteMismatches +
   modelConfigurationComparison.bridgeMismatches + modelConfigurationComparison.gainMismatches : 0;
+const archiveMismatchCount = archiveSourceComparison ? archiveSourceComparison.wordMismatches + archiveSourceComparison.byteMismatches + archiveSourceComparison.curveMetadataMismatches : 0;
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length +
-  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount;
+  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
   modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
+  archiveSourceComparison, archiveSourcesUsed: Boolean(archiveSources),
+  nativeModelAndPresetSourceSnapshotsUsedForPrediction: Boolean(modelConfiguration) && !archiveSources,
   modelLidGainsComputed: Boolean(modelLidGains), dispatcherInitializationConfigurationUsedForPrediction: !modelConfiguration,
   capturedGainVectorUsedForPrediction: !modelLidGains, shapingScalarsComputedFromModel: Boolean(modelConfiguration),
   normalizationControlsComputedFromModel: Boolean(modelConfiguration), modelAndPresetSourcesStillCaptured: Boolean(modelConfiguration),

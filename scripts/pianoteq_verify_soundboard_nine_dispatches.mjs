@@ -4,7 +4,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-const [nodeDirectory, ...groups] = process.argv.slice(2);
+const arguments_ = process.argv.slice(2);
+let archiveInputsPath = null;
+if (arguments_.length === 6 && arguments_[4] === '--archive-inputs') archiveInputsPath = arguments_.splice(4, 2)[1];
+const [nodeDirectory, ...groups] = arguments_;
 if (!nodeDirectory || groups.length !== 3) throw new Error('Usage: private-node-capture source-capture-0 source-capture-1 source-capture-2');
 const script = (name) => fileURLToPath(new URL(name, import.meta.url));
 const run = (name, args) => JSON.parse(execFileSync(process.execPath, [script(name), ...args],
@@ -26,7 +29,8 @@ for (let group = 0; group < 3; group++) {
   if ((runtime.selectedDispatch ?? 0) !== group || (group && runtime.sourceEntriesSeen !== group + 1)) {
     throw new Error('Selected source group differs');
   }
-  const replay = run('pianoteq_replay_soundboard_responses.mjs', [path.join(directory, 'source.json'), directory]);
+  const replay = run('pianoteq_replay_soundboard_responses.mjs', [path.join(directory, 'source.json'), directory,
+    ...(archiveInputsPath ? ['--archive-inputs', archiveInputsPath] : [])]);
   if (!replay.passed || !replay.sameRunCapturedSourceBound || !replay.dispatchComputed ||
       replay.dispatchComparisons?.length !== 3 || replay.nativeBlockCacheUsedForPrediction !== false ||
       replay.spectralNativeTargetsUsedForPrediction !== false) throw new Error('Independent group replay incomplete');
@@ -49,6 +53,10 @@ for (let group = 0; group < 3; group++) {
       replay.modelConfigurationComparison?.wordCount !== 30 || replay.modelConfigurationComparison?.byteCount !== 5)) {
     throw new Error('Upstream model/preset configuration not used');
   }
+  if (archiveInputsPath && (!replay.archiveSourcesUsed || replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction !== false ||
+      !replay.archiveSourceComparison || replay.archiveSourceComparison.words < 42 || replay.archiveSourceComparison.bytes !== 2)) {
+    throw new Error('Archive-derived model/preset sources not used');
+  }
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -64,6 +72,8 @@ for (let group = 0; group < 3; group++) {
     dispatcherInitializationConfigurationUsedForPrediction: replay.dispatcherInitializationConfigurationUsedForPrediction,
     capturedGainVectorUsedForPrediction: replay.capturedGainVectorUsedForPrediction,
     modelConfigurationComparison: replay.modelConfigurationComparison,
+    archiveSourcesUsed: replay.archiveSourcesUsed, archiveSourceComparison: replay.archiveSourceComparison,
+    nativeModelAndPresetSourceSnapshotsUsedForPrediction: replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
   for (let channel = 0; channel < 3; channel++) {
@@ -93,6 +103,8 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   dispatcherInitializationConfigurationUsedForPrediction: groupReports.some((g) => g.dispatcherInitializationConfigurationUsedForPrediction),
   capturedGainVectorUsedForPrediction: groupReports.some((g) => g.capturedGainVectorUsedForPrediction),
   modelAndPresetSourceRecordsStillCaptured: true,
+  archiveSourcesUsed: groupReports.every((g) => g.archiveSourcesUsed),
+  nativeModelAndPresetSourceSnapshotsUsedForPrediction: groupReports.some((g) => g.nativeModelAndPresetSourceSnapshotsUsedForPrediction),
   fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
   completeVoiceVerified: false, finalStereoAudioVerified: false}, null, 2));
