@@ -14,7 +14,8 @@ import traceback
 from pianoteq_damper_runtime_capture import verify_text
 
 ROOT = Path(os.environ['PIANOTEQ_CAPTURE_DIR'])
-BLEND_CAPTURE = os.environ.get('PIANOTEQ_CAPTURE_BLEND') == '1'
+LEADING_CAPTURE = os.environ.get('PIANOTEQ_CAPTURE_LEADING') == '1'
+BLEND_CAPTURE = os.environ.get('PIANOTEQ_CAPTURE_BLEND') == '1' or LEADING_CAPTURE
 hooks = []
 records = []
 errors = []
@@ -25,6 +26,7 @@ trimmed = []
 filtered = []
 processing = None
 blended = []
+leading = []
 run_status = None
 
 
@@ -55,6 +57,7 @@ def save():
         'trimmed': trimmed,
         'filtered': filtered, 'processing': processing,
         'blended': blended, 'blendCapture': BLEND_CAPTURE,
+        'leading': leading, 'leadingCapture': LEADING_CAPTURE,
         'runStatus': run_status,
         'targetMutation': False,
     }, indent=2, allow_nan=False))
@@ -249,8 +252,9 @@ def after_trim(frame, breakpoint, _):
 
 
 def after_filter(frame, breakpoint, _):
+    global processing
     try:
-        if not trimmed or not processing:
+        if not completed or not captured_source:
             return False
         state = frame.FindRegister('x0').GetValueAsUnsigned()
         if state != captured_source['state']:
@@ -258,6 +262,20 @@ def after_filter(frame, breakpoint, _):
         begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
         if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
             raise RuntimeError('Invalid filtered record vector')
+        if processing is None:
+            if not LEADING_CAPTURE or frame.FindRegister('x20').GetValueAsUnsigned() != state:
+                raise RuntimeError('Missing processing configuration')
+            wrapper = frame.FindRegister('x19').GetValueAsUnsigned()
+            processing = {
+                'sampleRate': struct.unpack('<f', memory(frame, wrapper + 0x3c, 4))[0],
+                'cutoff': struct.unpack('<f', memory(frame, wrapper + 0x164, 4))[0],
+                'adjustmentNumerator': struct.unpack('<f', memory(frame, wrapper + 0xa0, 4))[0],
+                'adjustmentDenominator': struct.unpack('<f', memory(frame, wrapper + 0x1e0, 4))[0],
+                'channels': [],
+            }
+            for offset in range(0, end - begin, 0x68):
+                identity, kind, flag = struct.unpack('<Q8xII', memory(frame, begin + offset + 0x20, 24))
+                processing['channels'].append({'identity': identity, 'kind': kind, 'flag': flag})
         for offset in range(0, end - begin, 0x68):
             pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
             filtered.append(dump(f'filtered-{len(filtered)}.bin', memory(frame, pointer, length * 4)))
@@ -275,7 +293,7 @@ def after_filter(frame, breakpoint, _):
                 'mainCount': struct.unpack('<Q', memory(frame, state + 0x128, 8))[0],
                 'flags': frame.FindRegister('w2').GetValueAsUnsigned(),
             }
-        for hook in hooks[:5 if BLEND_CAPTURE else 6]:
+        for hook in hooks[:4 if LEADING_CAPTURE else 5 if BLEND_CAPTURE else 6]:
             hook.SetEnabled(False)
         save()
         return False
@@ -299,6 +317,29 @@ def after_blend(frame, breakpoint, _):
         for offset in range(0, end - begin, 0x68):
             pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
             blended.append(dump(f'blended-{len(blended)}.bin', memory(frame, pointer, length * 4)))
+        for hook in hooks[:5 if LEADING_CAPTURE else len(hooks)]:
+            hook.SetEnabled(False)
+        save()
+        return False
+    except Exception:
+        errors.append(traceback.format_exc())
+        save()
+        return True
+
+
+def after_leading(frame, breakpoint, _):
+    try:
+        if not blended or not processing or not LEADING_CAPTURE:
+            return False
+        state = frame.FindRegister('x0').GetValueAsUnsigned()
+        if state != captured_source['state']:
+            raise RuntimeError('Leading-silence state differs from captured source')
+        begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
+        if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
+            raise RuntimeError('Invalid leading-silence record vector')
+        for offset in range(0, end - begin, 0x68):
+            pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
+            leading.append(dump(f'leading-{len(leading)}.bin', memory(frame, pointer, length * 4)))
         for hook in hooks:
             hook.SetEnabled(False)
         save()
@@ -370,9 +411,13 @@ def __lldb_init_module(debugger, _):
              (0x1005a91c8, 'after_propagation')]
     if not BLEND_CAPTURE:
         sites.append((0x1005a9578, 'after_conversion'))
-    sites.extend([(0x100817ab0, 'after_trim'), (0x1006c5ce8, 'after_filter')])
+    if not LEADING_CAPTURE:
+        sites.append((0x100817ab0, 'after_trim'))
+    sites.append((0x1006c5ce8, 'after_filter'))
     if BLEND_CAPTURE:
         sites.append((0x10019dfc4, 'after_blend'))
+    if LEADING_CAPTURE:
+        sites.append((0x10069c084, 'after_leading'))
     for address, callback in sites:
         result = lldb.SBCommandReturnObject()
         debugger.GetCommandInterpreter().HandleCommand(

@@ -10,6 +10,7 @@ import {convertSoundboardResponses} from '../dsp/soundboard-response-conversion.
 import {trimSoundboardResponses} from '../dsp/soundboard-response-trim.mjs';
 import {filterSoundboardResponses} from '../dsp/soundboard-response-filter.mjs';
 import {blendSoundboardResponses} from '../dsp/soundboard-response-blend.mjs';
+import {processSoundboardLeadingSilence} from '../dsp/soundboard-leading-silence.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -101,6 +102,8 @@ let filter = null;
 let filteredComparisons = [];
 let blend = null;
 let blendedComparisons = [];
+let leading = null;
+let leadingComparisons = [];
 if (runtime.converted?.length || runtime.trimmed?.length || runtime.filtered?.length || runtime.blended?.length) {
   const lastDelay = Math.max(...observations.flatMap((observation) =>
     observation.groups.map((group) => group.offset)));
@@ -113,11 +116,14 @@ if (runtime.converted?.length || runtime.trimmed?.length || runtime.filtered?.le
       compare(output, runtime.converted[channel], channel));
   }
 }
-if (runtime.trimmed?.length) {
-  if (!conversion || runtime.trimmed.length !== conversion.outputs.length) throw new Error('Trimmed channel count differs');
+if (runtime.trimmed?.length || runtime.filtered?.length || runtime.blended?.length || runtime.leading?.length) {
+  if (!conversion) throw new Error('Conversion required before trimming');
   trim = trimSoundboardResponses(conversion.outputs, source.controls.tau);
-  trimmedComparisons = trim.outputs.map((output, channel) =>
-    compare(output, runtime.trimmed[channel], channel));
+  if (runtime.trimmed?.length) {
+    if (runtime.trimmed.length !== conversion.outputs.length) throw new Error('Trimmed channel count differs');
+    trimmedComparisons = trim.outputs.map((output, channel) =>
+      compare(output, runtime.trimmed[channel], channel));
+  }
 }
 if (runtime.filtered?.length) {
   if (!trim || runtime.filtered.length !== trim.outputs.length) throw new Error('Filtered channel count differs');
@@ -131,13 +137,18 @@ if (runtime.blended?.length) {
   blendedComparisons = blend.outputs.map((output, channel) =>
     compare(output, runtime.blended[channel], channel));
 }
+if (runtime.leading?.length) {
+  if (!blend || runtime.leading.length !== blend.outputs.length) throw new Error('Leading-silence channel count differs');
+  leading = processSoundboardLeadingSilence(blend.outputs, runtime.processing.blend.leadingSilenceMode);
+  leadingComparisons = leading.outputs.map((output, channel) => compare(output, runtime.leading[channel], channel));
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons];
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons, ...blendedComparisons, ...leadingComparisons];
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches),
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
@@ -153,6 +164,9 @@ console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches),
   filterControlsAndChannelMetadataFromCapture: Boolean(filter),
   blendedComparisons, blendCoefficientsFromCapture: Boolean(blend),
   blendNativeTargetVerified: blendedComparisons.length > 0 && blendedComparisons.every((c) => !c.mismatches),
+  leadingComparisons, leadingShifts: leading?.shifts ?? null,
+  leadingMode: leading?.mode ?? null,
+  leadingNativeTargetVerified: leadingComparisons.length > 0 && leadingComparisons.every((c) => !c.mismatches),
   firstBlockHashMatchesCapture: runtime.records.every((r) => r.cache.sha256 === cacheHash),
   nativeBlockCacheUsedForPrediction: false, sourceMatricesAndObservationGroupsStillCaptured: true,
   sameRunCapturedSourceBound: sameRunSource,
