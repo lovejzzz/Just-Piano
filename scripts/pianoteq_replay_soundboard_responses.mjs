@@ -25,6 +25,7 @@ import {constructSoundboardReceiverGeometry} from '../dsp/soundboard-receiver-ge
 import {constructSoundboardModelConfig} from '../dsp/soundboard-model-config.mjs';
 import {constructSoundboardLidGains} from '../dsp/soundboard-lid-gain.mjs';
 import {constructSoundboardArchiveSources} from '../dsp/soundboard-archive-source.mjs';
+import {constructSoundboardMicrophoneSources} from '../dsp/soundboard-microphone-source.mjs';
 
 const arguments_ = process.argv.slice(2);
 if (arguments_.length !== 2 && !(arguments_.length === 4 && arguments_[2] === '--archive-inputs')) {
@@ -93,10 +94,12 @@ const capturedObservations = runtime.records.map((record) => {
   if (coefficient !== coeff.length) throw new Error('Unconsumed observation coefficients');
   return {length: record.length, groups};
 });
-const archiveSources = archiveInputsPath ? constructSoundboardArchiveSources(JSON.parse(read(archiveInputsPath))) : null;
+const archiveData = archiveInputsPath ? JSON.parse(read(archiveInputsPath)) : null;
+const archiveSources = archiveData ? constructSoundboardArchiveSources(archiveData) : null;
 if (archiveSources && !runtime.modelConfigurationInputs) throw new Error('Upstream model capture required for archive validation');
 let initialization = null, modelConfiguration = null, modelLidGains = null, archiveSourceComparison = null;
 let archiveGlobalCurve = null;
+let microphoneSources = null;
 let modelConfigurationComparison = null;
 const modelControlMismatches = [];
 let processingControls = runtime.processing, shapingScalars = runtime.shaping?.scalars, normalizationControls = runtime.normalization;
@@ -112,6 +115,7 @@ if (runtime.modelConfigurationInputs) {
   const archiveComponent = archiveSources?.components[input.component];
   if (archiveSources && !archiveComponent) throw new Error('Archive component missing');
   archiveGlobalCurve = archiveComponent?.globalCurve ?? null;
+  if(archiveData?.microphones)microphoneSources=constructSoundboardMicrophoneSources(archiveData.microphones,archiveComponent.model);
   const model = archiveComponent?.model ?? modelTarget, preset = archiveComponent?.preset ?? presetTarget;
   const bridge = archiveComponent?.bridge ?? floats(input.bridge), propagationModes = archiveComponent?.propagationModes ?? floats(input.propagationModes);
   const lidCurve = archiveComponent?.lidCurve ?? {...input.lidCurve, x: floats(input.lidCurve.x), y: floats(input.lidCurve.y)};
@@ -186,13 +190,22 @@ const capturedMatrices = {
 const constructedMatrices = initialization && constructSoundboardMatrices(initialization.grid, initialization.matrixControls);
 const floats = (d) => new Float32Array(Uint8Array.from(readDescriptor(d)).buffer);
 let constructedReceivers = null;
+let primarySourceComparison = null;
 const receiverComparisons = [];
 if (runtime.receiverConstructionInputs) {
   const input = runtime.receiverConstructionInputs, target = runtime.observationConstructionInputs;
   if (!initialization || !constructedMatrices || !target || input.state !== runtime.capturedSource?.state ||
       input.state !== target.state) throw new Error('Same-run receiver configuration required');
+  const primaryTarget=input.primary.map(floats),primary=microphoneSources?.primary??primaryTarget;
+  if(microphoneSources){
+    if(primary.length!==primaryTarget.length)throw new Error('Archive primary receiver count differs');
+    let words=0,wordMismatches=0;
+    primary.forEach((point,i)=>{if(primaryTarget[i].length!==3)throw new Error('Primary target point extent differs');
+      point.forEach((v,j)=>{words++;wordMismatches+=Number(!Object.is(v,primaryTarget[i][j]));});});
+    primarySourceComparison={words,wordMismatches};
+  }
   constructedReceivers = constructSoundboardReceiverGeometry({grid: initialization.grid, shape: constructedMatrices.shape,
-    ...initialization.receiverControls, primary: input.primary.map(floats), offsets: input.offsets.map(floats),
+    ...initialization.receiverControls, primary, offsets: input.offsets.map(floats),
     parents: new Uint32Array(Uint8Array.from(readDescriptor(input.parents)).buffer),
     offsetScale: modelConfiguration ? modelFloat(0x1c8) : input.offsetScale,
     mirror: modelConfiguration ? modelConfiguration.config[0x1d0] : input.mirror});
@@ -345,6 +358,7 @@ if (needLeading) {
 const magnitudeComparisons = [], whiteningComparisons = [], spectralControlMismatches = [];
 const spectralPrefixes = [], curveGainComparisons = [];
 let archiveGlobalCurveComparison = null;
+const microphoneSourceComparison = microphoneSources ? {words:0,wordMismatches:0,metadataMismatches:0} : null;
 const inverseInputComparisons = [], inverseOutputComparisons = [], computedCurveGains = [];
 const inverseResults = [], reconstructionComparisons = [], reconstructionControlMismatches = [];
 const reconstructed = [], shapedComparisons = [], normalizedComparisons = [], normalizationControlMismatches = [];
@@ -359,8 +373,12 @@ if (runtime.whiteningRecords?.length || runtime.curveGainRecords?.length || need
   if (amounts.length !== leading.outputs.length * 4 || flags.length !== amounts.length) {
     throw new Error('Shaping control vector length differs');
   }
+  if(microphoneSources&&microphoneSources.amounts.length!==leading.outputs.length)throw new Error('Archive microphone channel extent differs');
   for (let channel = 0; channel < leading.outputs.length; channel++) {
-    const amount = amounts.readFloatLE(channel * 4), flag = Number(flags.readUInt32LE(channel * 4) !== 0);
+    const targetAmount=amounts.readFloatLE(channel*4),targetFlag=Number(flags.readUInt32LE(channel*4)!==0);
+    const amount = microphoneSources?.amounts[channel] ?? targetAmount, flag = microphoneSources?.flags[channel] ?? targetFlag;
+    if(microphoneSources){microphoneSourceComparison.words+=2;
+      microphoneSourceComparison.wordMismatches+=Number(!Object.is(amount,targetAmount))+Number(flag!==targetFlag);}
     const width = shapingScalars[1];
     const prefix = prepareSoundboardSpectralPrefix(leading.outputs[channel],
       {tau: propagationControls.tau, amount, width, flags: flag});
@@ -394,10 +412,21 @@ if (runtime.curveGainRecords?.length || needInverse) {
         return new Float32Array(Uint8Array.from(readDescriptor(range.data)).buffer);
       };
       const width = kind ? 40 : shapingScalars[2];
-      const mix = kind ? 0 : blend.readFloatLE(channel * 4);
+      const mix = kind ? 0 : microphoneSources?.mixes[channel] ?? blend.readFloatLE(channel * 4);
+      if(!kind&&microphoneSources){microphoneSourceComparison.words++;
+        microphoneSourceComparison.wordMismatches+=Number(!Object.is(mix,blend.readFloatLE(channel*4)));}
       const parameters = [width, mix, spectralPrefixes[channel].binSpacing];
       const targetCurve = {x: floats(24), y: floats(48), dimensions: header.readUInt32LE(72),
         mode: header[77], logX: header[76]};
+      if(kind&&microphoneSources){
+        const actual=microphoneSources.curves[channel];
+        for(const key of ['x','y']){
+          if(actual[key].length!==targetCurve[key].length)throw new Error('Archive microphone curve extent differs');
+          for(let i=0;i<actual[key].length;i++){microphoneSourceComparison.words++;
+            microphoneSourceComparison.wordMismatches+=Number(!Object.is(actual[key][i],targetCurve[key][i]));}
+        }
+        for(const key of ['dimensions','mode','logX'])microphoneSourceComparison.metadataMismatches+=Number(actual[key]!==targetCurve[key]);
+      }
       if (!kind && archiveGlobalCurve && !archiveGlobalCurveComparison) {
         let words = 0, wordMismatches = 0, metadataMismatches = 0;
         for (const key of ['x', 'y']) {
@@ -409,7 +438,8 @@ if (runtime.curveGainRecords?.length || needInverse) {
         for (const key of ['dimensions', 'mode', 'logX']) metadataMismatches += Number(archiveGlobalCurve[key] !== targetCurve[key]);
         archiveGlobalCurveComparison = {words, wordMismatches, metadataMismatches};
       }
-      const predicted = soundboardCurveGain(!kind && archiveGlobalCurve ? archiveGlobalCurve : targetCurve, {length: spectralPrefixes[channel].magnitude.length,
+      const sourceCurve=kind&&microphoneSources?microphoneSources.curves[channel]:!kind&&archiveGlobalCurve?archiveGlobalCurve:targetCurve;
+      const predicted = soundboardCurveGain(sourceCurve, {length: spectralPrefixes[channel].magnitude.length,
         smoothingWidth: width, mix, binSpacing: parameters[2]});
       computedCurveGains[channel].push(predicted.output);
       if (!runtime.curveGainRecords?.length) continue;
@@ -526,12 +556,18 @@ const modelMismatchCount = modelConfigurationComparison ? modelConfigurationComp
   modelConfigurationComparison.bridgeMismatches + modelConfigurationComparison.gainMismatches : 0;
 const archiveMismatchCount = archiveSourceComparison ? archiveSourceComparison.wordMismatches + archiveSourceComparison.byteMismatches + archiveSourceComparison.curveMetadataMismatches : 0;
 const archiveCurveMismatchCount = archiveGlobalCurveComparison ? archiveGlobalCurveComparison.wordMismatches + archiveGlobalCurveComparison.metadataMismatches : 0;
+const microphoneMismatchCount = microphoneSourceComparison ? microphoneSourceComparison.wordMismatches + microphoneSourceComparison.metadataMismatches : 0;
+const primaryMismatchCount=primarySourceComparison?.wordMismatches??0;
 const controlMismatchCount = spectralControlMismatches.length + reconstructionControlMismatches.length + normalizationControlMismatches.length +
-  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount;
+  initializationControlMismatches.length + modelControlMismatches.length + modelMismatchCount + archiveMismatchCount + archiveCurveMismatchCount + microphoneMismatchCount + primaryMismatchCount;
 console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches) && !controlMismatchCount && !matrixMismatchCount && !observationMismatchCount && !receiverMismatchCount,
   modelConfigurationComparison, modelControlMismatches, modelConfigurationComputed: Boolean(modelConfiguration),
   archiveSourceComparison, archiveSourcesUsed: Boolean(archiveSources),
   archiveGlobalCurveComparison, globalShapingCurveConstructedFromArchive: Boolean(archiveGlobalCurveComparison),
+  microphoneSourceComparison, microphoneSpectralSourcesConstructed:Boolean(microphoneSources),
+  primarySourceComparison,primaryReceiverPositionsConstructedFromPreset:Boolean(primarySourceComparison),
+  nativePrimaryReceiverPositionsUsedForPrediction:Boolean(runtime.receiverConstructionInputs)&&!microphoneSources,
+  nativeMicrophoneSpectralSourcesUsedForPrediction:spectralPrefixes.length>0&&!microphoneSources,
   nativeGlobalShapingCurveUsedForPrediction: spectralPrefixes.length > 0 && !archiveGlobalCurve,
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: Boolean(modelConfiguration) && !archiveSources,
   modelLidGainsComputed: Boolean(modelLidGains), dispatcherInitializationConfigurationUsedForPrediction: !modelConfiguration,

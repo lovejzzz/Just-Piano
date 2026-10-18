@@ -8,6 +8,7 @@ const arguments_ = process.argv.slice(2);
 let archiveInputsPath = null;
 if (arguments_.length === 6 && arguments_[4] === '--archive-inputs') archiveInputsPath = arguments_.splice(4, 2)[1];
 const [nodeDirectory, ...groups] = arguments_;
+const requireMicrophones=archiveInputsPath&&Boolean(JSON.parse(fs.readFileSync(archiveInputsPath)).microphones);
 if (!nodeDirectory || groups.length !== 3) throw new Error('Usage: private-node-capture source-capture-0 source-capture-1 source-capture-2');
 const script = (name) => fileURLToPath(new URL(name, import.meta.url));
 const run = (name, args) => JSON.parse(execFileSync(process.execPath, [script(name), ...args],
@@ -59,6 +60,9 @@ for (let group = 0; group < 3; group++) {
       !replay.archiveGlobalCurveComparison || replay.archiveGlobalCurveComparison.words < 2)) {
     throw new Error('Archive-derived model/preset sources not used');
   }
+  if(requireMicrophones&&(!replay.microphoneSpectralSourcesConstructed||replay.nativeMicrophoneSpectralSourcesUsedForPrediction!==false||
+    !replay.microphoneSourceComparison||replay.microphoneSourceComparison.words<3||!replay.primaryReceiverPositionsConstructedFromPreset||
+    replay.nativePrimaryReceiverPositionsUsedForPrediction!==false||!replay.primarySourceComparison))throw new Error('Independent microphone sources not used');
   groupReports.push({group, passed: replay.passed, sameRunCapturedSourceBound: replay.sameRunCapturedSourceBound,
     steps: replay.steps, sourceHashes: replay.sourceHashes, initializationComputed: replay.initializationComputed,
     matrixComparisons: replay.matrixComparisons,
@@ -78,6 +82,12 @@ for (let group = 0; group < 3; group++) {
     archiveGlobalCurveComparison: replay.archiveGlobalCurveComparison,
     globalShapingCurveConstructedFromArchive: replay.globalShapingCurveConstructedFromArchive,
     nativeGlobalShapingCurveUsedForPrediction: replay.nativeGlobalShapingCurveUsedForPrediction,
+    microphoneSourceComparison:replay.microphoneSourceComparison,
+    microphoneSpectralSourcesConstructed:replay.microphoneSpectralSourcesConstructed,
+    nativeMicrophoneSpectralSourcesUsedForPrediction:replay.nativeMicrophoneSpectralSourcesUsedForPrediction,
+    primarySourceComparison:replay.primarySourceComparison,
+    primaryReceiverPositionsConstructedFromPreset:replay.primaryReceiverPositionsConstructedFromPreset,
+    nativePrimaryReceiverPositionsUsedForPrediction:replay.nativePrimaryReceiverPositionsUsedForPrediction,
     nativeModelAndPresetSourceSnapshotsUsedForPrediction: replay.nativeModelAndPresetSourceSnapshotsUsedForPrediction,
     sourceExcitationUsedForPrediction: replay.sourceExcitationUsedForPrediction,
     sourceGridScalarsUsedForPrediction: replay.sourceGridScalarsUsedForPrediction});
@@ -102,7 +112,8 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   sourceObservationGroupsUsedForPrediction: groupReports.some((g) => g.sourceObservationGroupsUsedForPrediction),
   receiverGeometryComputed: groupReports.every((g) => g.receiverGeometryComputed),
   finalReceiverCoordinatesUsedForPrediction: groupReports.some((g) => g.finalReceiverCoordinatesUsedForPrediction),
-  primaryReceiverConfigurationStillCaptured: true,
+  primaryReceiverConfigurationStillCaptured: groupReports.some(g=>g.nativePrimaryReceiverPositionsUsedForPrediction),
+  relativeReceiverConfigurationStillCaptured:true,
   modelConfigurationComputed: groupReports.every((g) => g.modelConfigurationComputed),
   modelLidGainsComputed: groupReports.every((g) => g.modelLidGainsComputed),
   dispatcherInitializationConfigurationUsedForPrediction: groupReports.some((g) => g.dispatcherInitializationConfigurationUsedForPrediction),
@@ -111,6 +122,8 @@ console.log(JSON.stringify({passed, comparisons, groupReports,
   archiveSourcesUsed: groupReports.every((g) => g.archiveSourcesUsed),
   globalShapingCurveConstructedFromArchive: groupReports.every((g) => g.globalShapingCurveConstructedFromArchive),
   nativeGlobalShapingCurveUsedForPrediction: groupReports.some((g) => g.nativeGlobalShapingCurveUsedForPrediction),
+  microphoneSpectralSourcesConstructed:groupReports.every(g=>g.microphoneSpectralSourcesConstructed),
+  nativeMicrophoneSpectralSourcesUsedForPrediction:groupReports.some(g=>g.nativeMicrophoneSpectralSourcesUsedForPrediction),
   nativeModelAndPresetSourceSnapshotsUsedForPrediction: groupReports.some((g) => g.nativeModelAndPresetSourceSnapshotsUsedForPrediction),
   fullDispatcherConfigurationComputed: false, runtimeRateAndBlendControlsStillCaptured: true, shapingCurveDataStillCaptured: true,
   sourceMatricesConstructedFromModel: false, fullModelToIrGenerationVerified: false,
