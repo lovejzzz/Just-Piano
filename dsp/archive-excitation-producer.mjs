@@ -82,6 +82,7 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
     floorAndBlendSpectrumTablesFromArchive: true, otherSpectrumTablesStillObserved: true,
     control30SpectrumTableFromArchive: true, computedExtraSpectrumTables: ['floor', 'blend', 'control30'],
     oldVoiceCounterComputedFromMidi: Boolean(eventClock), repeatHostRateFromExplicitRender: Boolean(eventClock),
+    repeatDurationFromArchive: true,
     rattleSourceValuesFromMidi: Boolean(rattleTimeline), rattleConsumerClockStillObserved: true,
     keyReleaseTimelineFromMidiAndArchive: Boolean(keyTimeline),
     eventClockSampleRate: eventClock?.sampleRate, oldVoiceSelectionStillObserved: true,
@@ -126,6 +127,11 @@ export function createArchiveExcitationProducer({baseFields, presetFields, runti
       if (!eventClock || !Number.isInteger(epoch) || !Number.isInteger(oldEpoch) || oldEpoch < 0 || oldEpoch >= epoch ||
           !velocities.has(epoch) || !velocities.has(oldEpoch)) throw new Error('Started chronological voices and source MIDI clock required');
       return eventClock.noteOnFrames[epoch] - eventClock.noteOnFrames[oldEpoch];
+    },
+    repeatDurationForEpoch(epoch) {
+      if (!velocities.has(epoch) || !Number.isFinite(historyModel.repeatedFields['0x37c']))
+        throw new Error('Started voice and own archive repeat duration required');
+      return historyModel.repeatedFields['0x37c'];
     },
     consume(record, {repeat, velocityRuntime} = {}) {
       const {mode, note, header, size, controls} = record.input, key = `${record.epoch}:${mode}`;
