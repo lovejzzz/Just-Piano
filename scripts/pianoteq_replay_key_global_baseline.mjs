@@ -27,6 +27,7 @@ function verifyHelpers(sourceRoot, manifest) {
   if (manifest.feedbackLatticeSameRun) expected.push('pianoteq_capture_feedback_allpass_continuous.py', 'pianoteq_capture_feedback_allpass_probe.py');
   if (manifest.monoBodySameRun) expected.push('pianoteq_capture_mono_body_continuous.py', 'pianoteq_capture_global_recurrence.py');
   if (manifest.driveLevelSameRun) expected.push('pianoteq_capture_drive_level_phases.py', 'pianoteq_capture_drive_level_producer.py');
+  if (manifest.keyResonanceSameRun) expected.push('pianoteq_capture_key_resonance.py');
   expected.sort();
   if (JSON.stringify(Object.keys(manifest.helperSha256).sort()) !== JSON.stringify(expected) ||
       manifest.collectorSha256 !== manifest.helperSha256[isStereo ? 'pianoteq_capture_key_stereo_baseline.py' : 'pianoteq_capture_key_audio_baseline.py']) throw new Error('Complete bound collector closure required');
@@ -281,12 +282,13 @@ const report = {schema: 'pianoteq-key-global-replay-v1', checks, mismatches, non
   nativeMonoFeedbackSourceStillObserved: ownFeedback ? !ownFeedback.usesComputedMono : false,
   nativeModalInputsAndDriveScratchStillObserved: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
   nativeDriveScratchUsedForPrediction: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedDrive,
-  nativeModalInputsAndExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
+  nativeModalInputsAndExistingMonoStillObserved: !!ownFeedback?.usesComputedMono && (!ownFeedback?.usesComputedKeyInputs || !ownFeedback?.usesComputedBodyBefore),
   nativeDriveLevelGainStillObserved: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
   nativeDriveLevelUsedForPrediction: !!ownFeedback?.usesComputedDrive && !ownFeedback?.usesComputedLevels,
   nativeDriveGainStillObserved: !!ownFeedback?.usesComputedDrive, computedLevelsSource: !!ownFeedback?.usesComputedLevels,
   computedKeyInputsSource: !!ownFeedback?.usesComputedKeyInputs,
-  nativeModalInputAudioUsedForPrediction: !ownFeedback?.usesComputedKeyInputs, nativeExistingMonoStillObserved: !!ownFeedback?.usesComputedMono,
+  nativeModalInputAudioUsedForPrediction: !ownFeedback?.usesComputedKeyInputs, nativeExistingMonoStillObserved: !!ownFeedback?.usesComputedMono && !ownFeedback?.usesComputedBodyBefore,
+  computedBodyBeforeSource: !!ownFeedback?.usesComputedBodyBefore, nativePerKeyCoefficientTablesStillObserved: !!ownFeedback?.usesComputedBodyBefore,
   nativeDriveStaticProfileAndWindowStillObserved: !!ownFeedback?.usesComputedDrive,
   predictedCachesUpdatedFromNativeGlobalAudio: false, initialLogicalEmptyStateAssumedAndChecked: true,
   causalExplanationProven: false, independentStereoVerified: false, finalPcmVerified: false};

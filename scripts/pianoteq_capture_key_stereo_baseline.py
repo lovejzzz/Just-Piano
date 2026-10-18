@@ -30,6 +30,10 @@ WITH_LEVEL = os.environ.get('PIANOTEQ_CAPTURE_LEVEL') == '1'
 if WITH_LEVEL:
     if not WITH_MONO: raise ValueError('Level phases require mono mode')
     import pianoteq_capture_drive_level_phases as level
+WITH_KEY_RESONANCE = os.environ.get('PIANOTEQ_CAPTURE_KEY_RESONANCE') == '1'
+if WITH_KEY_RESONANCE:
+    if not WITH_KEY_MONO or not WITH_LEVEL: raise ValueError('Key recurrence requires complete mono/level capture')
+    import pianoteq_capture_key_resonance as key_resonance
 mono_rows = []
 mono_pending = None
 if WITH_LATTICE:
@@ -82,6 +86,10 @@ def save():
         (base.ROOT / 'drive-level.json').write_bytes(level_bytes)
         data.update(driveLevelSameRun=True, driveLevelFile='drive-level.json',
             driveLevelSha256=hashlib.sha256(level_bytes).hexdigest(), driveLevelPhaseTransitions=level.transitions)
+    if WITH_KEY_RESONANCE:
+        resonance_bytes = json.dumps(key_resonance.payload(base.run_status, errors), separators=(',', ':'), allow_nan=False).encode()
+        (base.ROOT / 'key-resonance.json').write_bytes(resonance_bytes)
+        data.update(keyResonanceSameRun=True, keyResonanceFile='key-resonance.json', keyResonanceSha256=hashlib.sha256(resonance_bytes).hexdigest())
     if WITH_WRITER:
         key.global_stream.flush()
         data.update(keyGlobalSameRun=True, globalAudioBoundary='post-feedback', globalSnapshotSite='0x1006c2fd4',
@@ -152,12 +160,14 @@ def observed(frame, location, internal):
         reg = lambda name: frame.FindRegister(name).GetValueAsUnsigned()
         name = sites[pc]
         if name == 'rawKeys':
+            if WITH_KEY_RESONANCE and key_resonance.initial is None: key_resonance.initialize(frame)
             level.begin(frame)
             return False
         if name == 'bodyDrive':
             if WITH_LEVEL: level.body(frame, len(key.global_rows))
             if mono_pending is not None or lattice_pending is not None: raise ValueError('Unique body/lattice block required')
             mono_pending = mono.begin_block(frame, len(key.global_rows))
+            if WITH_KEY_RESONANCE: key_resonance.observe(frame, mono_pending['_root'], len(key.global_rows))
             state = scalar(frame, mono_pending['_root'] + 0x50, 'Q')
             external = scalar(frame, mono_pending['_root'] + 0x68, 'Q')
             begin, end = unpack(frame, external + 8, 'QQ')
