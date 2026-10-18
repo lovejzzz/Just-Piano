@@ -264,7 +264,15 @@ for(const [recordIndex,r] of d.records.entries()){
     extraTables[key]=values;
    }
   }
-  const built=buildReleaseControlledSpectrum({...r,input,controls:spectrumControls,extraControls,extraTables,repeat:p});const c=built.controls;
+  let baseTables,coordinates=r.coordinates;
+  if(preparedSources?.metadata.baseSpectrumTablesFromArchiveAndOwnInitialSource){
+   baseTables=preparedSources.baseTables(r);coordinates=baseTables.coordinates;
+   if(coordinates.length!==r.coordinates.length)throw new Error('Complete own spectrum coordinates required');
+   coordinates.forEach((v,i)=>check('archive-spectrum-coordinate:'+i,v,r.coordinates[i]));
+  }
+  const built=buildReleaseControlledSpectrum({...r,input,controls:spectrumControls,extraControls,extraTables,coordinates,
+   ...(baseTables?{baseTables,baseTable:undefined}:{}),repeat:p});const c=built.controls;
+  if(baseTables)built.baseTable.forEach((v,i)=>check('archive-base-table:'+i,v,r.baseTable[i]));
   for(const k of ['slope','baseScale'])check('spectrum-control:'+k,c[k],r.actual[k]);
   if(!Number.isInteger(r.count)||r.count<1||r.count>4096||r.actual.extraTable.length!==r.count||r.expWeights.length!==r.count)throw new Error('Incomplete spectrum targets');
   const extra=built.extraTable,log=built.logSpectrum;
@@ -287,7 +295,7 @@ for(const [recordIndex,r] of d.records.entries()){
    const first=invocation.modes.get(0);if(!first||!seed||first.supported.randomState.some((v,i)=>v!==seed[i]))throw new Error('Uncomputed primary-to-secondary random bridge');
    seed=[...first.supported.randomState];modeSeedBridges++;
   }
-  const supported=buildReleaseControlledSupport({...r,input,append,extraControls,randomState:seed,repeat:p,spectrum:built,history,secondFamilyEnabled:r.append.secondIndices.length>0,...(supportHistory?{randomScale:supportHistory.randomScale,historyCurve:supportHistory.historyCurve,historyControls:supportHistory.historyControls}:{})},math);
+  const supported=buildReleaseControlledSupport({...r,input,append,coordinates,baseTable:built.baseTable,extraControls,randomState:seed,repeat:p,spectrum:built,history,secondFamilyEnabled:r.append.secondIndices.length>0,...(supportHistory?{randomScale:supportHistory.randomScale,historyCurve:supportHistory.historyCurve,historyControls:supportHistory.historyControls}:{})},math);
   for(const k of ['indices','logAmplitudes','secondIndices','secondLogAmplitudes']){
    if(supported[k].length!==r.append[k].length)throw new Error('Support vector shape differs: '+JSON.stringify({epoch:r.epoch,mode:input.mode,vector:k,predictedLength:supported[k].length,actualLength:r.append[k].length,checks,mismatches,comparedOutputBlocks,outputSamples,mismatchesByName}));
    supported[k].forEach((v,i)=>{if(k.includes('Indices')||k==='indices'){if(v!==r.append[k][i])throw new Error('Support index differs');}else check('support:'+k,v,r.append[k][i]);});
