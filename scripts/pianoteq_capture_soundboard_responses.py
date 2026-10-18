@@ -1,7 +1,7 @@
 """Read-only capture of first propagation's observation groups and raw responses.
 
-Five hardware breakpoints: propagation inputs, output worker, completed-block
-boundary, converted responses and trim completion. No target writes or expressions.
+Six hardware breakpoints: propagation inputs, worker, block completion,
+conversion, trim and filter completion. No target writes or expressions.
 """
 import hashlib
 import json
@@ -20,6 +20,8 @@ completed = False
 captured_source = None
 converted = []
 trimmed = []
+filtered = []
+processing = None
 
 
 def memory(frame, address, size):
@@ -47,6 +49,7 @@ def save():
         'capturedSource': captured_source,
         'converted': converted,
         'trimmed': trimmed,
+        'filtered': filtered, 'processing': processing,
         'targetMutation': False,
     }, indent=2, allow_nan=False))
     os.chmod(ROOT / 'runtime.json', 0o600)
@@ -198,18 +201,60 @@ def after_conversion(frame, breakpoint, _):
 
 
 def after_trim(frame, breakpoint, _):
+    global processing
     try:
         if not converted or not captured_source:
             return False
         state = frame.FindRegister('x0').GetValueAsUnsigned()
         if state != captured_source['state']:
             raise RuntimeError('Trimmed state differs from captured source')
+        if frame.FindRegister('x20').GetValueAsUnsigned() != state:
+            raise RuntimeError('Unexpected wrapper ABI')
+        wrapper = frame.FindRegister('x19').GetValueAsUnsigned()
+        import lldb
+        argument_values = []
+        for name in ['s0', 's1']:
+            error = lldb.SBError()
+            argument_values.append(frame.FindRegister(name).GetData().GetFloat(error, 0))
+            if error.Fail():
+                raise RuntimeError(str(error))
+        processing = {
+            'sampleRate': struct.unpack('<f', memory(frame, wrapper + 0x3c, 4))[0],
+            'cutoff': struct.unpack('<f', memory(frame, wrapper + 0x164, 4))[0],
+            'adjustmentNumerator': argument_values[0],
+            'adjustmentDenominator': argument_values[1], 'channels': [],
+        }
         begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
         if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
             raise RuntimeError('Invalid trimmed record vector')
         for offset in range(0, end - begin, 0x68):
+            identity, kind, flag = struct.unpack('<Q8xII', memory(frame, begin + offset + 0x20, 24))
+            processing['channels'].append({'identity': identity, 'kind': kind, 'flag': flag})
             pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
             trimmed.append(dump(f'trimmed-{len(trimmed)}.bin', memory(frame, pointer, length * 4)))
+        for hook in hooks[:5]:
+            hook.SetEnabled(False)
+        save()
+        return False
+    except Exception:
+        errors.append(traceback.format_exc())
+        save()
+        return True
+
+
+def after_filter(frame, breakpoint, _):
+    try:
+        if not trimmed or not processing:
+            return False
+        state = frame.FindRegister('x0').GetValueAsUnsigned()
+        if state != captured_source['state']:
+            raise RuntimeError('Filtered state differs from captured source')
+        begin, end = struct.unpack('<2Q', memory(frame, state + 0x110, 16))
+        if end < begin or (end - begin) % 0x68 or (end - begin) // 0x68 > 64:
+            raise RuntimeError('Invalid filtered record vector')
+        for offset in range(0, end - begin, 0x68):
+            pointer, length = struct.unpack('<2Q', memory(frame, begin + offset + 0x38, 16))
+            filtered.append(dump(f'filtered-{len(filtered)}.bin', memory(frame, pointer, length * 4)))
         for hook in hooks:
             hook.SetEnabled(False)
         save()
@@ -229,7 +274,8 @@ def __lldb_init_module(debugger, _):
     assert not (ROOT / 'runtime.json').exists(), 'Fresh directory required'
     for address, callback in [(0x1005a8874, 'source_entry'),
                               (0x1005ab0e0, 'worker'), (0x1005a91c8, 'after_propagation'),
-                              (0x1005a9578, 'after_conversion'), (0x100817ab0, 'after_trim')]:
+                              (0x1005a9578, 'after_conversion'), (0x100817ab0, 'after_trim'),
+                              (0x1006c5ce8, 'after_filter')]:
         result = lldb.SBCommandReturnObject()
         debugger.GetCommandInterpreter().HandleCommand(
             f'breakpoint set --hardware --address {address:#x} --shlib "Pianoteq 9"', result)

@@ -8,6 +8,7 @@ import {soundboardScalarControls} from '../dsp/soundboard-scalar.mjs';
 import {soundboardIrWeights} from '../dsp/soundboard-ir-window.mjs';
 import {convertSoundboardResponses} from '../dsp/soundboard-response-conversion.mjs';
 import {trimSoundboardResponses} from '../dsp/soundboard-response-trim.mjs';
+import {filterSoundboardResponses} from '../dsp/soundboard-response-filter.mjs';
 
 const [sourcePath, captureDirectory] = process.argv.slice(2);
 if (!captureDirectory) throw new Error('Usage: source-config.json capture-directory');
@@ -92,6 +93,8 @@ let conversion = null;
 let convertedComparisons = [];
 let trim = null;
 let trimmedComparisons = [];
+let filter = null;
+let filteredComparisons = [];
 if (runtime.converted?.length) {
   if (runtime.converted.length !== result.outputs.length) throw new Error('Converted channel count differs');
   const lastDelay = Math.max(...observations.flatMap((observation) =>
@@ -108,21 +111,34 @@ if (runtime.trimmed?.length) {
   trimmedComparisons = trim.outputs.map((output, channel) =>
     compare(output, runtime.trimmed[channel], channel));
 }
+if (runtime.filtered?.length) {
+  if (!trim || runtime.filtered.length !== trim.outputs.length) throw new Error('Filtered channel count differs');
+  filter = filterSoundboardResponses(trim.outputs, runtime.processing);
+  filteredComparisons = filter.outputs.map((output, channel) =>
+    compare(output, runtime.filtered[channel], channel));
+}
 const cacheHash = crypto.createHash('sha256').update(new Uint8Array(result.blocks[0].buffer)).digest('hex');
 const provenance = runtime.capturedSource;
 const sameRunSource = Boolean(provenance &&
   provenance.config.sha256 === hashes[sourcePath] &&
   provenance.arrays.some((array) => array.label === 'va0' && array.rowsPath === source.matrixA) &&
   provenance.arrays.some((array) => array.label === 'vc0' && array.rowsPath === source.matrixC));
-console.log(JSON.stringify({passed: [...comparisons, ...convertedComparisons, ...trimmedComparisons].every((c) => !c.mismatches),
+const allComparisons = [...comparisons, ...convertedComparisons, ...trimmedComparisons, ...filteredComparisons];
+console.log(JSON.stringify({passed: allComparisons.every((c) => !c.mismatches),
   steps: controls.steps, blocks: result.blockCount, comparisons, sourceHashes: hashes,
   convertedComparisons, conversionScale: conversion?.scale ?? null,
   conversionMode: conversion?.mode ?? null,
   conversionNativeTargetVerified: convertedComparisons.length > 0 && convertedComparisons.every((c) => !c.mismatches),
   trimmedComparisons, trimLength: trim?.length ?? null, taperCount: trim?.taperCount ?? null,
   trimNativeTargetVerified: trimmedComparisons.length > 0 && trimmedComparisons.every((c) => !c.mismatches),
+  filteredComparisons,
+  filterCoefficients: filter && {selectedCutoff: filter.selectedCutoff, tangent: filter.tangent,
+    feedback: filter.feedback, feed: filter.feed, adjustmentScale: filter.adjustmentScale,
+    referenceIndices: filter.referenceIndices},
+  filterNativeTargetVerified: filteredComparisons.length > 0 && filteredComparisons.every((c) => !c.mismatches),
+  filterControlsAndChannelMetadataFromCapture: Boolean(filter),
   firstBlockHashMatchesCapture: runtime.records.every((r) => r.cache.sha256 === cacheHash),
   nativeBlockCacheUsedForPrediction: false, sourceMatricesAndObservationGroupsStillCaptured: true,
   sameRunCapturedSourceBound: sameRunSource,
   sourceMatricesConstructedFromModel: false, fullIrNodesGenerated: false}, null, 2));
-if ([...comparisons, ...convertedComparisons, ...trimmedComparisons].some((c) => c.mismatches)) process.exitCode = 1;
+if (allComparisons.some((c) => c.mismatches)) process.exitCode = 1;
